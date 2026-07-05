@@ -1,0 +1,8 @@
+.zig-cache
+.vscode
+zig-out
+zig-pkg
+.VSCodeCounter
+private
+tasq
+test

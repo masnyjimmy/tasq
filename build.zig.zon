@@ -1,0 +1,12 @@
+.{
+    .name = .tsq,
+    .version = "0.16.0",
+    .dependencies = .{
+        .conzole = .{
+            .url = "git+https://github.com/masnyjimmy/conzole/?ref=HEAD#b8a85aaaf8724e9eb787eb56867c7abfa50e1e01",
+            .hash = "conzole-1.0.10-DmAtFKXQAACCAKxKTjSwROsn78bGdCxIj662REGn_Mp5",
+        },
+    },
+    .paths = .{""},
+    .fingerprint = 0x8fa97201d2ec7744,
+}
