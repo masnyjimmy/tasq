@@ -17,6 +17,7 @@ const ScopeState = struct {
     group_scope: ?*Scope,
     own_group_scope: bool,
     current_scope: *Scope,
+    arena: std.heap.ArenaAllocator,
 
     fn create(
         allocator: std.mem.Allocator,
@@ -31,6 +32,7 @@ const ScopeState = struct {
             .group_scope = group_scope,
             .own_group_scope = own_group_scope,
             .current_scope = current_scope,
+            .arena = .init(allocator),
         };
 
         return ptr;
@@ -98,6 +100,7 @@ pub fn deinit(self: *ScopeStack, allocator: std.mem.Allocator) void {
     self.root.deinit(allocator);
     allocator.destroy(self.root);
 }
+
 fn currentInnerScope(self: *ScopeStack) struct {
     scope: *Scope,
     is_group: bool,
@@ -185,6 +188,18 @@ pub fn pop(self: *ScopeStack, allocator: std.mem.Allocator) void {
     }
 
     self.current = self.stack.pop();
+}
+
+fn assertCurrentState(self: *ScopeStack) *ScopeState {
+    return self.current.?;
+}
+
+pub fn assertCurrentScope(self: *ScopeStack) *Scope {
+    return self.assertCurrentState().current_scope;
+}
+
+pub fn currentScopeAllocator(self: *ScopeStack) std.mem.Allocator {
+    return self.assertCurrentState().arena.allocator();
 }
 
 fn bindArgs(allocator: std.mem.Allocator, scope: *Scope, args: []*ir.Argument, name: []const u8, values: *std.array_hash_map.String(Value)) !void {
