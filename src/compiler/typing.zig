@@ -50,36 +50,16 @@ pub const Type = union(TypeTag) {
 };
 
 pub const Value = union(TypeTag) {
-    pub const String = struct {
-        data: []const u8,
-        owned: bool,
-    };
     pub const List = struct {
         items_type: *const Type,
         items: []const Value,
     };
 
-    string: String,
+    string: []const u8,
     char: u21,
     number: f64,
     bool: bool,
     list: List,
-
-    pub fn deinit(self: *const Value, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .string => |s| {
-                if (s.owned) {
-                    allocator.free(s.data);
-                }
-            },
-            .list => |l| {
-                for (l.items) |*item|
-                    item.deinit(allocator);
-                allocator.free(l.items);
-            },
-            else => {},
-        }
-    }
 
     pub fn typeOf(self: *const Value) Type {
         return switch (self.*) {

@@ -579,10 +579,7 @@ pub const Sema = struct {
             .bool => .{ .bool = expr.bool_lit.value },
             .number => .{ .number = expr.number_lit.value },
             .char => .{ .char = expr.char_lit.value },
-            .string => .{ .string = .{
-                .data = expr.string.value.lit,
-                .owned = false,
-            } },
+            .string => .{ .string = expr.string.value.lit },
             .list => |items_type| {
                 var out: std.ArrayList(typing.Value) = try .initCapacity(self.allocator, expr.list.value.len);
 
