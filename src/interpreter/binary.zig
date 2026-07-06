@@ -34,14 +34,9 @@ pub fn evalBinary(allocator: std.mem.Allocator, op: ir.BinaryOp, left: Value, ri
 fn evalConcat(allocator: std.mem.Allocator, left: Value, right: Value) !Value {
     std.debug.assert(left == .string and right == .string);
 
-    const buf = try allocator.alloc(u8, left.string.data.len + right.string.data.len);
+    const result = try std.mem.concat(allocator, u8, &.{ left.string, right.string });
 
-    var out = std.ArrayList(u8).initBuffer(buf);
-
-    out.appendSliceAssumeCapacity(left.string.data);
-    out.appendSliceAssumeCapacity(right.string.data);
-
-    return .{ .string = .{ .data = out.toOwnedSliceAssert(), .owned = true } };
+    return .{ .string = result };
 }
 
 fn evalArithmetic(op: ir.BinaryOp, left: Value, right: Value) Value {
