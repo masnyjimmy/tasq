@@ -56,11 +56,11 @@ fn RunTask(ctx: *const Context) !void {
     const args = ctx.args[1..];
 
     var task_ctx = ctx.app.getTaskContext();
-    task_ctx.runTask(task, args) catch |err| switch (err) {
+    task_ctx.runTask(task, args) catch |err| return switch (err) {
         error.TaskNotFound => {
             std.debug.panic("Task not found", .{});
         },
-        else => unreachable, //TODO: lol
+        else => err,
     };
 }
 
