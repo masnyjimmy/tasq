@@ -533,7 +533,19 @@ const TaskArgumentParser = struct {
         // translate to Value
 
         var values = try collector.collect(gpa);
-        defer values.deinit(gpa);
+        defer {
+            // Free lists as those must be dynamically allocated
+            var iter = values.iterator();
+            while (iter.next()) |kv| {
+                switch (kv.value_ptr.*) {
+                    .list_int => |v| gpa.free(v),
+                    .list_number => |v| gpa.free(v),
+                    .list_string => |v| gpa.free(v),
+                    else => {},
+                }
+            }
+            values.deinit(gpa);
+        }
 
         const ArgPayloadConverter = struct {
             fn convert(allocator: std.mem.Allocator, payload: conzole.args.Payload) !Value {
