@@ -368,6 +368,30 @@ const TaskArgumentParser = struct {
         self.args.deinit(gpa);
     }
 
+    const PrintableArgType = struct {
+        type: typing.ArgType,
+        int: bool,
+
+        pub fn format(self: PrintableArgType, w: *std.Io.Writer) !void {
+            const with_integer = switch (self.type) {
+                .list_number, .number => self.int,
+                else => false,
+            };
+
+            try self.type.format(w);
+
+            if (with_integer)
+                try w.writeAll(" (integer)");
+        }
+
+        fn make(arg: *ir.Argument) PrintableArgType {
+            return .{
+                .type = arg.type,
+                .int = arg.int,
+            };
+        }
+    };
+
     pub fn parseArguments(
         self: *TaskArgumentParser,
         gpa: std.mem.Allocator,
@@ -408,7 +432,7 @@ const TaskArgumentParser = struct {
             switch (tok.type) {
                 .value => {
                     if (positional_end) {
-                        try self.diagnostics.Err(.{ .argument = idx }, "positional arguments must be placed before named ones", .{});
+                        try self.diagnostics.Err(.{ .argument = reader.pos }, "positional arguments must be placed before named ones", .{});
                         return Error.ParsingFailed;
                     }
 
@@ -420,7 +444,7 @@ const TaskArgumentParser = struct {
                     // problems may appear somewhere else,
                     // i.e flag nor list can never be positional
                     if (arg.is_positional == false) {
-                        try self.diagnostics.Err(.{ .argument = idx }, "{s} is not positional", .{arg.name});
+                        try self.diagnostics.Err(.{ .argument = reader.pos }, "{s} is not positional", .{arg.name});
                         return Error.ParsingFailed;
                     }
 
@@ -436,7 +460,10 @@ const TaskArgumentParser = struct {
                     const value: Value = switch (arg.type) {
                         .number => NumberHandler.handle(tok.payload, arg.int) catch |err| return switch (err) {
                             error.InvalidType => {
-                                try self.diagnostics.Err(.{ .argument = idx }, "invalid argument type, got '{s}' expected '{f}'", .{ tok.lexeme, arg.type });
+                                try self.diagnostics.Err(.{ .argument = reader.pos }, "invalid argument type, got '{s}' expected '{f}'", .{
+                                    tok.lexeme,
+                                    PrintableArgType.make(arg),
+                                });
                                 return Error.ParsingFailed;
                             },
                             else => unreachable,
@@ -459,7 +486,7 @@ const TaskArgumentParser = struct {
                             const arg = self.args.items[arg_idx];
                             break :blk arg;
                         } else {
-                            try self.diagnostics.Err(.{ .argument = idx }, "unknown argument '--{s}'", .{tok.payload});
+                            try self.diagnostics.Err(.{ .argument = reader.pos }, "unknown argument '--{s}'", .{tok.payload});
                             return Error.ParsingFailed;
                         }
                     };
@@ -467,11 +494,11 @@ const TaskArgumentParser = struct {
 
                     CollectorAdapter.collect(gpa, &collector, &reader, arg) catch |err| return switch (err) {
                         error.InvalidType => {
-                            try self.diagnostics.Err(.{ .argument = idx }, "invalid '{s}' value type, got '{s}' expected '{f}'", .{ arg.name, reader.args[reader.pos], arg.type });
+                            try self.diagnostics.Err(.{ .argument = reader.pos }, "invalid '{s}' value type, got '{s}' expected '{f}'", .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) });
                             return Error.ParsingFailed;
                         },
                         error.UnexpectedEnd => {
-                            try self.diagnostics.Err(.{ .argument = null }, "unexpected end, '{s}' requires '{f}' value", .{ arg.name, arg.type });
+                            try self.diagnostics.Err(.{ .argument = null }, "unexpected end, '{s}' requires '{f}' value", .{ arg.name, PrintableArgType.make(arg) });
                             return Error.ParsingFailed;
                         },
                         else => unreachable,
@@ -490,7 +517,7 @@ const TaskArgumentParser = struct {
                                 const arg = self.args.items[arg_idx];
                                 break :blk arg;
                             } else {
-                                try self.diagnostics.Err(.{ .argument = idx }, "unknown argument '-{c}'", .{flag});
+                                try self.diagnostics.Err(.{ .argument = reader.pos }, "unknown argument '-{c}'", .{flag});
                                 return Error.ParsingFailed;
                             }
                         };
@@ -501,11 +528,11 @@ const TaskArgumentParser = struct {
 
                         CollectorAdapter.collect(gpa, &collector, &reader, arg) catch |err| return switch (err) {
                             error.InvalidType => {
-                                try self.diagnostics.Err(.{ .argument = idx }, "invalid '{s}' value type, got '{s}' expected '{f}'", .{ arg.name, reader.args[reader.pos], arg.type });
+                                try self.diagnostics.Err(.{ .argument = reader.pos }, "invalid '{s}' value type, got '{s}' expected '{f}'", .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) });
                                 return Error.ParsingFailed;
                             },
                             error.UnexpectedEnd => {
-                                try self.diagnostics.Err(.{ .argument = null }, "unexpected end, '{s}' requires '{f}' value", .{ arg.name, arg.type });
+                                try self.diagnostics.Err(.{ .argument = null }, "unexpected end, '{s}' requires '{f}' value", .{ arg.name, PrintableArgType.make(arg) });
                                 return Error.ParsingFailed;
                             },
                             else => unreachable,
@@ -517,18 +544,18 @@ const TaskArgumentParser = struct {
                             const arg = self.args.items[arg_idx];
                             break :blk arg;
                         } else {
-                            try self.diagnostics.Err(.{ .argument = idx }, "unknown argument '-{c}'", .{last});
+                            try self.diagnostics.Err(.{ .argument = reader.pos }, "unknown argument '-{c}'", .{last});
                             return Error.ParsingFailed;
                         }
                     };
 
                     CollectorAdapter.collect(gpa, &collector, &reader, arg) catch |err| return switch (err) {
                         error.InvalidType => {
-                            try self.diagnostics.Err(.{ .argument = idx }, "invalid '{s}' value type, got '{s}' expected '{f}'", .{ arg.name, reader.args[reader.pos], arg.type });
+                            try self.diagnostics.Err(.{ .argument = reader.pos }, "invalid '{s}' value type, got '{s}' expected '{f}'", .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) });
                             return Error.ParsingFailed;
                         },
                         error.UnexpectedEnd => {
-                            try self.diagnostics.Err(.{ .argument = null }, "unexpected end, '{s}' requires '{f}' value", .{ arg.name, arg.type });
+                            try self.diagnostics.Err(.{ .argument = null }, "unexpected end, '{s}' requires '{f}' value", .{ arg.name, PrintableArgType.make(arg) });
                             return Error.ParsingFailed;
                         },
                         else => unreachable,

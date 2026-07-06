@@ -78,6 +78,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
                     .{d.message},
                 );
             }
+            stdout_writer.flush() catch unreachable;
         }
 
         return err;

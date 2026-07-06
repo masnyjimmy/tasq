@@ -137,7 +137,12 @@ pub const ArgType = enum {
     }
 
     pub fn format(self: @This(), w: *std.Io.Writer) !void {
-        try w.print("{s}", .{@tagName(self)});
+        const string = switch (self) {
+            .list_string => "[]string",
+            .list_number => "[]number",
+            inline else => @tagName(self),
+        };
+        try w.writeAll(string);
     }
 
     pub fn isNamedOnly(self: @This()) bool {
