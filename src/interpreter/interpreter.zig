@@ -217,9 +217,20 @@ fn resolveExpr(self: *Interpreter, expr: *const ir.Expr) InterpreterError!Value 
 
             return .{ .bool = !operand.bool };
         },
-        .builtin_call => {
-            // TODO: implement
-            unreachable;
+        .builtin_call => |call| {
+            const args = try self.allocator.alloc(Value, call.args.len);
+            defer {
+                for (args) |arg| {
+                    arg.deinit(self.allocator);
+                }
+                self.allocator.free(args);
+            }
+
+            for (call.args, args) |in, *out| {
+                out.* = try self.resolveExpr(&in);
+            }
+            // should't ever error
+            return builtin.callFunction(self, call.id, args) catch unreachable;
         },
     };
 }

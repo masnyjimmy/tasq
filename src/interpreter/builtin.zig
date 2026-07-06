@@ -16,96 +16,84 @@ pub const Error = error{
     FunctionFailed,
 };
 
-pub const BuiltinHandler = struct {
-    const FunctionType = fn (*Interpreter, []const Value) Error!Value;
+const FunctionType = *const fn (*const Interpreter, []const Value) Error!Value;
 
-    const handlers: [functions_count]FunctionType = .{
-        handleEnv,
-        handleEnvWithDefault,
-        handleExists,
-        handleOs,
-        handleStatusCode,
+const handlers: [functions_count]FunctionType = .{
+    handleEnv,
+    handleEnvWithDefault,
+    handleExists,
+    handleOs,
+    handleStatusCode,
+};
+
+pub fn callFunction(
+    interpreter: *const Interpreter,
+    id: functions.FunctionId,
+    args: []const Value,
+) Error!Value {
+    const index = functions.getFunctionIndex(id, args.len) catch unreachable;
+    const handler = handlers[index];
+
+    return try handler(interpreter, args);
+}
+
+fn handleEnv(self: *const Interpreter, args: []const Value) Error!Value {
+    const key = args[0].string;
+
+    const value = if (self.environ.get(key.data)) |value|
+        value
+    else {
+        self.diagnostics.Err(.runtime, "'{s}' environment variable not found", .{key.data}) catch unreachable;
+        return Error.FunctionFailed;
     };
 
-    interpreter: *const Interpreter,
+    return .{
+        .string = .{
+            .data = value,
+            .owned = false,
+        },
+    };
+}
 
-    pub fn init(
-        interpreter: *const Interpreter,
-    ) BuiltinHandler {
-        return .{
-            .interpreter = interpreter,
-        };
-    }
+fn handleEnvWithDefault(self: *const Interpreter, args: []const Value) Error!Value {
+    const key = args[0].string;
+    const default = args[1].string;
 
-    pub fn callFunction(
-        self: *BuiltinHandler,
-        id: functions.FunctionId,
-        args: []const Value,
-    ) !Value {
-        const index = functions.getFunctionDefById(id, args.len) catch unreachable;
-        const handler = handlers[index];
+    return if (self.environ.get(key.data)) |value| .{
+        .string = .{
+            .data = value,
+            .owned = false,
+        },
+    } else .{ .string = .{
+        .data = self.allocator.dupe(u8, default.data) catch unreachable,
+        .owned = true,
+    } };
+}
 
-        return try handler(self.interpreter, args);
-    }
+fn handleExists(self: *const Interpreter, args: []const Value) Error!Value {
+    const path = args[0].string;
 
-    fn handleEnv(self: *const Interpreter, args: []const Value) !Value {
-        const key = args[0].string;
+    const cwd = std.Io.Dir.cwd();
 
-        const value = if (self.environ.get(key)) |value|
-            value
-        else {
-            self.diagnostics.Err(.runtime, "'{s}' environment variable not found", .{key}) catch unreachable;
-            return Error.FunctionFailed;
-        };
+    const access_result = cwd.access(self.io, path.data, .{ .read = true });
 
-        return .{
-            .string = .{
-                .data = value,
-                .owned = false,
-            },
-        };
-    }
+    const result: bool = if (access_result) |_|
+        true
+    else |_|
+        false;
 
-    fn handleEnvWithDefault(self: *const Interpreter, args: []const Value) !Value {
-        const key = args[0].string;
-        const default = args[1].string;
+    return .{ .bool = result };
+}
 
-        return if (self.environ.get(key)) |value| .{
-            .string = .{
-                .data = value,
-                .owned = false,
-            },
-        } else .{ .string = .{
-            .data = self.allocator.dupe(u8, default) catch unreachable,
-            .owned = true,
-        } };
-    }
+fn handleOs(_: *const Interpreter, _: []const Value) Error!Value {
+    return .{
+        .string = .{
+            .data = @tagName(platform.tag),
+            .owned = false,
+        },
+    };
+}
 
-    fn handleExists(self: *const Interpreter, args: []const Value) !Value {
-        const path = args[0].string;
-
-        const cwd = std.Io.Dir.cwd();
-
-        const access_result = cwd.access(self.io, path, .{ .read = true });
-
-        const result: bool = if (access_result) |_|
-            true
-        else |_|
-            false;
-
-        return .{ .bool = result };
-    }
-
-    fn handleOs(_: *const Interpreter, _: []const Value) !Value {
-        return .{
-            .string = .{
-                .data = @tagName(platform.tag),
-                .owned = false,
-            },
-        };
-    }
-
-    fn handleStatusCode(self: *const Interpreter, _: []const Value) !Value {
-        return .{ .number = @floatFromInt(self.status_code) };
-    }
-};
+fn handleStatusCode(self: *const Interpreter, _: []const Value) Error!Value {
+    return .{ .number = @floatFromInt(self.status_code) };
+}
