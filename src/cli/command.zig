@@ -89,6 +89,7 @@ pub fn buildCommand(allocator: std.mem.Allocator) !*Command {
         .brief = "task language cli",
         .persistent_pre_run = .set(GlobalPreHandler),
         .run = .set(RunTask),
+        .unknown_flag_behaviour = .as_positional,
     });
 
     try rootCmd.addFlag(.{

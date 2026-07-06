@@ -3,8 +3,8 @@
     .version = "0.16.0",
     .dependencies = .{
         .conzole = .{
-            .url = "git+https://github.com/masnyjimmy/conzole/?ref=HEAD#14de630800661c07c40d0b9eb0a7eedf8a324c2d",
-            .hash = "conzole-1.0.10-DmAtFGfVAACFWHndQe259m-AgEaFUUP3P4czdiuod3lR",
+            .url = "git+https://github.com/masnyjimmy/conzole/?ref=HEAD#8f2ee820f4bb96b0679749bdf37cb093af6c376d",
+            .hash = "conzole-1.0.10-DmAtFFnXAAB4OxoZ7jzcb3s9aA8G6niZImjtcG4YziiI",
         },
     },
     .paths = .{""},
