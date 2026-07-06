@@ -357,6 +357,7 @@ const TaskArgumentParser = struct {
 
         return out;
     }
+
     pub fn deinit(self: *TaskArgumentParser, gpa: std.mem.Allocator) void {
         self.long_alias.deinit(gpa);
         self.short_alias.deinit(gpa);

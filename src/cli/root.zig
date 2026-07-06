@@ -26,8 +26,8 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
 
     const cmd = try command.buildCommand(allocator);
     defer cmd.destroy();
-    lib.debug.dump(args, 4);
-    cmd.execute(allocator, args, &diag, .{
+    lib.debug.dump(.{ .@"Arguments list" = args }, 4);
+    cmd.execute(allocator, args[1..], &diag, .{
         .diagnostics = &diagnostics,
         .gpa = allocator,
         .io = io,
