@@ -685,7 +685,7 @@ pub fn runTask(ctx: *const Context, task_id: []const u8, args: []const []const u
         ctx.diagnostics,
         &call_stack,
         &scope_stack,
-        try ctx.environ.clone(ctx.gpa),
+        ctx.environ,
     );
 
     try interpreter.run();
