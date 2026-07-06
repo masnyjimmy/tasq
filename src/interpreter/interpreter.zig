@@ -1,5 +1,8 @@
 const std = @import("std");
 
+const lib = @import("lib");
+const Diagnostics = lib.Diagnostic.List;
+
 const compiler = @import("compiler");
 const ir = compiler.ir;
 const typing = compiler.typing;
@@ -29,30 +32,34 @@ allocator: std.mem.Allocator,
 io: std.Io,
 printer: *Printer,
 options: *const ir.Options,
+diagnostics: *Diagnostics,
 status_code: u8 = 0,
 
 call_stack: *CallStack,
 scope_stack: *ScopeStack,
-pub const RunOptions = struct {
-    task: []const u8,
-};
+environ: std.process.Environ.Map,
 
 pub fn init(
     allocator: std.mem.Allocator,
     io: std.Io,
     printer: *Printer,
     options: *const ir.Options,
+    diagnostics: *Diagnostics,
     call_stack: *CallStack,
     scope_stack: *ScopeStack,
+    environ: std.process.Environ.Map,
 ) Interpreter {
     return .{
         .allocator = allocator,
         .io = io,
         .printer = printer,
         .options = options,
+        .diagnostics = diagnostics,
 
         .call_stack = call_stack,
         .scope_stack = scope_stack,
+
+        .environ = environ,
     };
 }
 
