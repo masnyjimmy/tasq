@@ -450,10 +450,7 @@ const TaskArgumentParser = struct {
                             },
                             else => unreachable,
                         },
-                        .string => .{ .string = .{
-                            .data = tok.payload,
-                            .owned = false,
-                        } },
+                        .string => .{ .string = tok.payload },
                         else => unreachable,
                     };
 
@@ -596,18 +593,12 @@ const TaskArgumentParser = struct {
                             },
                         };
                     },
-                    .string => |v| .{ .string = .{
-                        .data = v,
-                        .owned = false,
-                    } },
+                    .string => |v| .{ .string = v },
                     .list_string => |v| {
                         const items = try allocator.alloc(Value, v.len);
 
                         for (v, items) |src, *dest| {
-                            dest.* = .{ .string = .{
-                                .data = src,
-                                .owned = false,
-                            } };
+                            dest.* = .{ .string = src };
                         }
 
                         return .{

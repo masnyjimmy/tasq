@@ -61,6 +61,25 @@ pub const Value = union(TypeTag) {
     bool: bool,
     list: List,
 
+    pub fn clone(self: *const Value, allocator: std.mem.Allocator) std.mem.Allocator.Error!Value {
+        return switch (self.*) {
+            .string => |str| .{ .string = try allocator.dupe(u8, str) },
+            .list => |list| {
+                const out = try allocator.alloc(Value, list.items.len);
+
+                for (list.items, out) |in, *o| {
+                    o.* = try in.clone(allocator);
+                }
+
+                return .{ .list = .{
+                    .items = out,
+                    .items_type = list.items_type,
+                } };
+            },
+            else => self.*,
+        };
+    }
+
     pub fn typeOf(self: *const Value) Type {
         return switch (self.*) {
             .list => |list| .{ .list = list.items_type },
@@ -74,7 +93,7 @@ pub const Value = union(TypeTag) {
 
     pub fn format(self: *const Value, writer: *std.Io.Writer) !void {
         switch (self.*) {
-            .string => |s| try writer.writeAll(s.data),
+            .string => |s| try writer.writeAll(s),
             .char => |ch| try writer.printUnicodeCodepoint(ch),
             .number => |f| try writer.printFloat(f, .{}),
             .bool => |b| try writer.print("{}", .{b}),

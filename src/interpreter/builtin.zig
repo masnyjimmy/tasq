@@ -40,34 +40,23 @@ pub fn callFunction(
 fn handleEnv(self: *const Interpreter, args: []const Value) Error!Value {
     const key = args[0].string;
 
-    const value = if (self.environ.get(key.data)) |value|
+    const value = if (self.environ.get(key)) |value|
         value
     else {
-        self.diagnostics.Err(.runtime, "'{s}' environment variable not found", .{key.data}) catch unreachable;
+        self.diagnostics.Err(.runtime, "'{s}' environment variable not found", .{key}) catch unreachable;
         return Error.FunctionFailed;
     };
 
-    return .{
-        .string = .{
-            .data = value,
-            .owned = false,
-        },
-    };
+    return .{ .string = value };
 }
 
 fn handleEnvWithDefault(self: *const Interpreter, args: []const Value) Error!Value {
     const key = args[0].string;
     const default = args[1].string;
 
-    return if (self.environ.get(key.data)) |value| .{
-        .string = .{
-            .data = value,
-            .owned = false,
-        },
-    } else .{ .string = .{
-        .data = self.allocator.dupe(u8, default.data) catch unreachable,
-        .owned = true,
-    } };
+    return if (self.environ.get(key)) |value| .{
+        .string = value,
+    } else .{ .string = default };
 }
 
 fn handleExists(self: *const Interpreter, args: []const Value) Error!Value {
@@ -75,7 +64,7 @@ fn handleExists(self: *const Interpreter, args: []const Value) Error!Value {
 
     const cwd = std.Io.Dir.cwd();
 
-    const access_result = cwd.access(self.io, path.data, .{ .read = true });
+    const access_result = cwd.access(self.io, path, .{ .read = true });
 
     const result: bool = if (access_result) |_|
         true
@@ -87,10 +76,7 @@ fn handleExists(self: *const Interpreter, args: []const Value) Error!Value {
 
 fn handleOs(_: *const Interpreter, _: []const Value) Error!Value {
     return .{
-        .string = .{
-            .data = @tagName(platform.tag),
-            .owned = false,
-        },
+        .string = @tagName(platform.tag),
     };
 }
 

@@ -111,7 +111,7 @@ fn evalEquality(op: ir.BinaryOp, left: Value, right: Value) Value {
 
     const equal = blk: {
         break :blk switch (T) {
-            .string => std.mem.eql(u8, left.string.data, right.string.data),
+            .string => std.mem.eql(u8, left.string, right.string),
             .list => {
                 if (left.list.items.len != right.list.items.len)
                     break :blk false;
