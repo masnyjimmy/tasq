@@ -17,16 +17,7 @@ const Style = conzole.terminal.Style;
 
 const lib = @import("lib");
 
-io: std.Io,
-gpa: std.mem.Allocator,
-
-filepath: []const u8,
-printer: *conzole.terminal.Printer,
-max_file_size: usize = 5000,
-diagnostics: *lib.Diagnostic.List,
-source_store: *lib.source_file.SourceStore,
-
-const Context = @This();
+const Context = @import("context.zig");
 
 const TaskError = error{
     TaskNotFound,
@@ -34,16 +25,16 @@ const TaskError = error{
 
 const DESCRIPTION_TEXT_OFFSET = 10;
 
-pub fn compileRunfile(ctx: *Context) !compiler.Result {
-    const source_id = try ctx.source_store.loadFile(ctx.gpa, ctx.io, ctx.filepath);
+pub fn compileRunfile(ctx: *const Context) !compiler.Result {
+    const source_id = try ctx.source_store.loadFile(ctx.gpa, ctx.io, ctx.source_file_path);
 
     const source_view = try ctx.source_store.view(source_id);
 
     return try compiler.compile(ctx.gpa, source_view, ctx.diagnostics);
 }
 
-pub fn printTasksList(ctx: *Context) !void {
-    const cr = try ctx.compileRunfile();
+pub fn printTasksList(ctx: *const Context) !void {
+    const cr = try compileRunfile(ctx);
     defer cr.deinit();
 
     const file = &cr.result;
@@ -96,7 +87,7 @@ pub fn printTasksList(ctx: *Context) !void {
     }
 }
 
-pub fn printTaskUsage(ctx: *Context, task_id: []const u8) !void {
+pub fn printTaskUsage(ctx: *const Context, task_id: []const u8) !void {
     const style = struct {
         const head: Style = .{
             .fg = .bright_yellow,
@@ -109,7 +100,7 @@ pub fn printTaskUsage(ctx: *Context, task_id: []const u8) !void {
         };
     };
 
-    const cr = try ctx.compileRunfile();
+    const cr = try compileRunfile(ctx);
     defer cr.deinit();
 
     const file = cr.result;
@@ -677,8 +668,8 @@ const TaskArgumentParser = struct {
     }
 };
 
-pub fn runTask(ctx: *Context, task_id: []const u8, args: []const []const u8) !void {
-    const cr = try ctx.compileRunfile();
+pub fn runTask(ctx: *const Context, task_id: []const u8, args: []const []const u8) !void {
+    const cr = try compileRunfile(ctx);
     defer cr.deinit();
 
     const file = cr.result;

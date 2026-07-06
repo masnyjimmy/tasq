@@ -2,31 +2,13 @@ const std = @import("std");
 const lib = @import("lib");
 const conzole = @import("conzole");
 
-const AppContext = struct {
-    gpa: std.mem.Allocator,
-    io: std.Io,
-    environ: *const std.process.Environ.Map,
-    printer: *conzole.terminal.Printer,
-    diagnostics: *lib.Diagnostic.List,
-    source_store: *lib.source_file.SourceStore,
-
-    const TaskContext = @import("task.zig");
-
-    fn getTaskContext(self: *const AppContext) TaskContext {
-        return TaskContext{
-            .diagnostics = self.diagnostics,
-            .filepath = "tasq",
-            .gpa = self.gpa,
-            .io = self.io,
-            .printer = self.printer,
-            .source_store = self.source_store,
-        };
-    }
-};
+const AppContext = @import("context.zig");
 
 const Command = conzole.CommandWithContext(AppContext);
 
 const Context = Command.Context;
+
+const task_mod = @import("task.zig");
 
 fn GlobalPreHandler(ctx: *const Context) !void {
     if (ctx.root != ctx.current or ctx.args.len == 0) {
@@ -55,8 +37,7 @@ fn RunTask(ctx: *const Context) !void {
     const task = ctx.args[0];
     const args = ctx.args[1..];
 
-    var task_ctx = ctx.app.getTaskContext();
-    task_ctx.runTask(task, args) catch |err| return switch (err) {
+    task_mod.runTask(&ctx.app, task, args) catch |err| return switch (err) {
         error.TaskNotFound => {
             std.debug.panic("Task not found", .{});
         },
@@ -72,13 +53,11 @@ fn ShowUsage(ctx: *const Context) !void {
 
     const taskName = ctx.args[0];
 
-    var task_ctx = ctx.app.getTaskContext();
-    try task_ctx.printTaskUsage(taskName);
+    try task_mod.printTaskUsage(&ctx.app, taskName);
 }
 
 fn RunList(ctx: *const Context) !void {
-    var task_ctx = ctx.app.getTaskContext();
-    try task_ctx.printTasksList();
+    try task_mod.printTasksList(&ctx.app);
 }
 
 fn RunLsp(_: *const Context) !void {}
