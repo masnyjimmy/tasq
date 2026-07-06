@@ -378,7 +378,14 @@ const TaskArgumentParser = struct {
         errdefer collector.deinit(gpa);
 
         var out: std.array_hash_map.String(Value) = .empty;
-        errdefer out.deinit(gpa);
+
+        errdefer {
+            var iter = out.iterator();
+            while (iter.next()) |kv| {
+                kv.value_ptr.deinit(gpa);
+            }
+            out.deinit(gpa);
+        }
 
         const CollectorAdapter = struct {
             fn collect(allocator: std.mem.Allocator, c: *ArgsCollector, r: *ArgsReader, arg: *ir.Argument) ArgsCollector.Error!void {
@@ -639,7 +646,7 @@ const TaskArgumentParser = struct {
         if (missing_argument)
             return Error.ParsingFailed;
 
-        return out;
+        return out.move();
     }
 };
 
@@ -651,17 +658,17 @@ pub fn runTask(ctx: *Context, task_id: []const u8, args: []const []const u8) !vo
 
     const task = file.findTask(.parse(task_id)) orelse return TaskError.TaskNotFound;
 
-    var values = blk: {
-        var parser: TaskArgumentParser = try .init(ctx.gpa, task, ctx.diagnostics);
-        defer parser.deinit(ctx.gpa);
-
-        break :blk try parser.parseArguments(ctx.gpa, args);
-    };
-
     var call_stack: inter.CallStack = .init(ctx.gpa, ctx.diagnostics, task);
     defer call_stack.deinit(ctx.gpa);
 
-    var scope_stack: inter.ScopeStack = try .init(ctx.gpa, ctx.diagnostics, task, values.move());
+    var scope_stack: inter.ScopeStack = blk: {
+        var parser: TaskArgumentParser = try .init(ctx.gpa, task, ctx.diagnostics);
+        defer parser.deinit(ctx.gpa);
+
+        var values = try parser.parseArguments(ctx.gpa, args);
+
+        break :blk try .init(ctx.gpa, ctx.diagnostics, task, values.move());
+    };
     defer scope_stack.deinit(ctx.gpa);
 
     var interpreter = inter.Interpreter.init(

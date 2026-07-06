@@ -26,9 +26,18 @@ pub fn test_main(init: std.process.Init) !void {
 
 pub fn run_main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
+    var gpa = std.heap.DebugAllocator(.{
+        .stack_trace_frames = 32,
+    }).init;
+    defer switch (gpa.deinit()) {
+        .leak => {
+            _ = gpa.detectLeaks();
+        },
+        .ok => {},
+    };
 
     try cli.run(
-        init.gpa,
+        gpa.allocator(),
         init.io,
         init.environ_map,
         args,

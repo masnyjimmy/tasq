@@ -57,6 +57,7 @@ current: ?*ScopeState,
 
 pub fn init(allocator: std.mem.Allocator, diagnostics: *Diagnostics, task: *ir.Task, values_in: std.array_hash_map.String(Value)) !ScopeStack {
     var values = values_in;
+
     const root = try allocator.create(Scope);
     root.* = .init(null, task.body.scope.root());
 
@@ -78,7 +79,7 @@ pub fn init(allocator: std.mem.Allocator, diagnostics: *Diagnostics, task: *ir.T
 
     try bindArgs(allocator, task_scope, task.args, task.name, &values);
 
-    assertExhausted(&values, task.name);
+    assertExhaustedAndFree(allocator, &values, task.name);
 
     return .{
         .diagnostics = diagnostics,
@@ -122,7 +123,7 @@ pub fn pushTask(self: *ScopeStack, allocator: std.mem.Allocator, task: *ir.Task,
 
     try bindArgs(allocator, scope, task.args, task.name, &values);
 
-    assertExhausted(&values, task.name);
+    assertExhaustedAndFree(&values, task.name);
 
     try self.push(
         allocator,
@@ -146,7 +147,7 @@ pub fn pushTaskWithGroup(
 
     try bindArgs(allocator, ts, task.args, task.name, &values);
 
-    assertExhausted(&values, task.name);
+    assertExhaustedAndFree(&values, task.name);
 
     try self.push(allocator, ScopeState.create(
         allocator,
@@ -200,7 +201,7 @@ fn bindArgs(allocator: std.mem.Allocator, scope: *Scope, args: []*ir.Argument, n
     }
 }
 
-fn assertExhausted(values: *const std.array_hash_map.String(Value), name: []const u8) void {
+fn assertExhaustedAndFree(allocator: std.mem.Allocator, values: *std.array_hash_map.String(Value), name: []const u8) void {
     if (values.count() != 0) {
         std.debug.panic(
             "internal error: {d} unexpected value(s) left over for '{s}' at runtime; " ++
@@ -208,4 +209,5 @@ fn assertExhausted(values: *const std.array_hash_map.String(Value), name: []cons
             .{ values.count(), name },
         );
     }
+    values.clearAndFree(allocator);
 }
