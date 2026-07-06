@@ -545,28 +545,15 @@ const TaskArgumentParser = struct {
 
         // translate to Value
 
-        var values = try collector.collect(gpa);
-        defer {
-            // Free lists as those must be dynamically allocated
-            var iter = values.iterator();
-            while (iter.next()) |kv| {
-                switch (kv.value_ptr.*) {
-                    .list_int => |v| gpa.free(v),
-                    .list_number => |v| gpa.free(v),
-                    .list_string => |v| gpa.free(v),
-                    else => {},
-                }
-            }
-            values.deinit(gpa);
-        }
+        var values = try collector.collect(arena.allocator());
 
         const ArgPayloadConverter = struct {
-            fn convert(allocator: std.mem.Allocator, payload: conzole.args.Payload) !Value {
-                return switch (payload) {
+            fn convert(a: std.mem.Allocator, p: conzole.args.Payload) !Value {
+                return switch (p) {
                     .flag => |v| .{ .bool = v },
                     .int => |v| .{ .number = @floatFromInt(v) },
                     .list_int => |v| {
-                        const items = try allocator.alloc(Value, v.len);
+                        const items = try a.alloc(Value, v.len);
                         for (v, items) |src, *desc| {
                             desc.* = .{ .number = @floatFromInt(src) };
                         }
@@ -580,7 +567,7 @@ const TaskArgumentParser = struct {
                     },
                     .number => |v| .{ .number = v },
                     .list_number => |v| {
-                        const items = try allocator.alloc(Value, v.len);
+                        const items = try a.alloc(Value, v.len);
 
                         for (v, items) |src, *dest| {
                             dest.* = .{ .number = src };
@@ -595,7 +582,7 @@ const TaskArgumentParser = struct {
                     },
                     .string => |v| .{ .string = v },
                     .list_string => |v| {
-                        const items = try allocator.alloc(Value, v.len);
+                        const items = try a.alloc(Value, v.len);
 
                         for (v, items) |src, *dest| {
                             dest.* = .{ .string = src };
