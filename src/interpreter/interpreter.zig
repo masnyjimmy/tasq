@@ -72,22 +72,21 @@ pub fn run(self: *Interpreter) !void {
     }
 }
 fn main(self: *Interpreter, stmt: *const ir.Statement) !void {
+    const scope = self.currentScope();
     switch (stmt.*) {
         .decl => |decl| {
-            _ = try self.handleDecl(decl);
+            _ = try self.handleDecl(scope, decl);
         },
         .process => |proc_expr| {
             const process = switch (proc_expr) {
-                .lit => |lit| try self.allocator.dupe(u8, lit),
-                .inter => |inter| try self.resolveStringInterpolation(inter),
+                .lit => |lit| lit,
+                .inter => |inter| try self.resolveStringInterpolation(scope, inter),
             };
-            defer self.allocator.free(process);
 
             try self.handleProcess(process);
         },
         .if_stmt => |if_stmt| {
-            var cond = try self.resolveExpr(&if_stmt.cond);
-            defer cond.deinit(self.allocator);
+            const cond = try self.resolveExpr(scope, &if_stmt.cond);
 
             if (cond.bool) {
                 try self.call_stack.push(self.allocator, null, &if_stmt.then);
@@ -103,15 +102,15 @@ fn main(self: *Interpreter, stmt: *const ir.Statement) !void {
     }
 }
 
-fn handleDecl(self: *Interpreter, decl: *const ir.Decl) InterpreterError!Value {
+fn handleDecl(self: *Interpreter, scope: *Scope, decl: *const ir.Decl) InterpreterError!Value {
     std.debug.assert(self.getSymbol(decl.name) == null);
 
     //TODO: consider this orelse Scope.findByStatic(..).define(..)
-    const scope = self.currentScope();
+    const decl_scope = self.currentScope().findByStatic(decl.scope) orelse unreachable;
 
-    const value = try self.resolveExpr(&decl.value);
+    const value = try self.resolveExpr(decl_scope, &decl.value);
 
-    try scope.define(self.allocator, .{
+    try scope.define(.{
         .name = decl.name,
         .value = value,
     });
@@ -137,27 +136,21 @@ fn handleProcess(self: *Interpreter, process: []const u8) !void {
     _ = try child.wait(self.io);
 }
 
-fn resolveExpr(self: *Interpreter, expr: *const ir.Expr) InterpreterError!Value {
+fn resolveExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) InterpreterError!Value {
     return switch (expr.*) {
         .bool_lit => |lit| .{ .bool = lit },
         .char_lit => |lit| .{ .char = lit },
         .number_lit => |lit| .{ .number = lit },
         .string => |str| switch (str) {
-            .lit => |lit| .{ .string = .{
-                .data = lit,
-                .owned = false,
-            } },
-            .inter => |inter| .{ .string = .{
-                .data = try self.resolveStringInterpolation(inter),
-                .owned = true,
-            } },
+            .lit => |lit| .{ .string = lit },
+            .inter => |inter| .{ .string = try self.resolveStringInterpolation(scope, inter) },
         },
         .list => |list| {
-            var result: std.ArrayList(Value) = try .initCapacity(self.allocator, list.items.len);
-            errdefer result.deinit(self.allocator);
+            var result: std.ArrayList(Value) = try .initCapacity(scope.arena.allocator(), list.items.len);
+            errdefer result.deinit(scope.arena.allocator());
 
             for (list.items) |item|
-                result.appendAssumeCapacity(try self.resolveExpr(&item));
+                result.appendAssumeCapacity(try self.resolveExpr(scope, &item));
 
             return .{
                 .list = .{
@@ -174,32 +167,35 @@ fn resolveExpr(self: *Interpreter, expr: *const ir.Expr) InterpreterError!Value 
             }
             // resolve if not already (lazy resolution)
             return switch (id.symbol.details) {
-                .binding => |b| try self.handleDecl(b.origin),
+                .binding => |b| try self.handleDecl(scope, b.origin),
                 .argument => unreachable, // should be already resolved by runtime builder,
                 else => unreachable, // group and task cannot be used in expression
             };
         },
         .if_expr => |if_expr| {
-            const cond = try self.resolveExpr(&if_expr.cond);
+            const cond = try self.resolveExpr(scope, &if_expr.cond);
             std.debug.assert(cond == .bool);
 
-            return if (cond.bool) try self.resolveExpr(&if_expr.then) else try self.resolveExpr(&if_expr.else_);
+            return if (cond.bool)
+                try self.resolveExpr(scope, &if_expr.then)
+            else
+                try self.resolveExpr(scope, &if_expr.else_);
         },
         .binary => |binary| {
-            const left = try self.resolveExpr(&binary.left);
-            const right = try self.resolveExpr(&binary.right);
+            const left = try self.resolveExpr(scope, &binary.left);
+            const right = try self.resolveExpr(scope, &binary.right);
 
             // add,sub,div,mul => [string,float,int,list,bool] op [string,float,int]
 
             return try binary_mod.evalBinary(
-                self.allocator,
+                scope.arena.allocator(),
                 binary.op,
                 left,
                 right,
             );
         },
         .unary => |unary| {
-            const operand = try self.resolveExpr(&unary.operand);
+            const operand = try self.resolveExpr(scope, &unary.operand);
             std.debug.assert(unary.operand == .bool_lit);
 
             switch (unary.op) {
@@ -219,16 +215,10 @@ fn resolveExpr(self: *Interpreter, expr: *const ir.Expr) InterpreterError!Value 
             return .{ .bool = !operand.bool };
         },
         .builtin_call => |call| {
-            const args = try self.allocator.alloc(Value, call.args.len);
-            defer {
-                for (args) |arg| {
-                    arg.deinit(self.allocator);
-                }
-                self.allocator.free(args);
-            }
+            const args = try scope.arena.allocator().alloc(Value, call.args.len);
 
             for (call.args, args) |in, *out| {
-                out.* = try self.resolveExpr(&in);
+                out.* = try self.resolveExpr(scope, &in);
             }
             // should't ever error
             return builtin.callFunction(self, call.id, args) catch unreachable;
@@ -236,8 +226,8 @@ fn resolveExpr(self: *Interpreter, expr: *const ir.Expr) InterpreterError!Value 
     };
 }
 
-fn resolveStringInterpolation(self: *Interpreter, inter: []const ir.InterStringSeg) InterpreterError![]const u8 {
-    var aw = std.Io.Writer.Allocating.init(self.allocator);
+fn resolveStringInterpolation(self: *Interpreter, scope: *Scope, inter: []const ir.InterStringSeg) InterpreterError![]const u8 {
+    var aw = std.Io.Writer.Allocating.init(scope.arena.allocator());
     const writer = &aw.writer;
     errdefer aw.deinit();
 
@@ -247,7 +237,7 @@ fn resolveStringInterpolation(self: *Interpreter, inter: []const ir.InterStringS
                 try writer.writeAll(lit);
             },
             .expr => |expr| {
-                const value = try self.resolveExpr(&expr);
+                const value = try self.resolveExpr(scope, &expr);
                 try writer.print("{f}", .{value});
             },
         }
@@ -257,9 +247,7 @@ fn resolveStringInterpolation(self: *Interpreter, inter: []const ir.InterStringS
 }
 
 fn currentScope(self: *Interpreter) *Scope {
-    const state = self.scope_stack.current orelse unreachable; //TODO: consider
-
-    return state.current_scope;
+    return self.scope_stack.assertCurrentScope();
 }
 
 fn getSymbol(self: *Interpreter, name: []const u8) ?*Symbol {

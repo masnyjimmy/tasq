@@ -14,31 +14,25 @@ pub const Scope = struct {
     parent: ?*Scope,
     static: *static_scope.Scope,
     symbols: std.StringHashMapUnmanaged(Symbol) = .empty,
+    arena: std.heap.ArenaAllocator,
 
-    pub fn init(parent: ?*Scope, ss: *static_scope.Scope) Scope {
-        return .{ .parent = parent, .static = ss };
+    pub fn init(parent: ?*Scope, allocator: std.mem.Allocator, ss: *static_scope.Scope) Scope {
+        return .{
+            .parent = parent,
+            .arena = .init(allocator),
+            .static = ss,
+        };
     }
 
-    pub fn deinit(self: *Scope, allocator: std.mem.Allocator) void {
-        var iter = self.symbols.valueIterator();
-
-        while (iter.next()) |sym| {
-            sym.value.deinit(allocator);
-        }
-
-        self.symbols.deinit(allocator);
+    pub fn deinit(self: *Scope) void {
+        self.arena.deinit();
     }
 
-    pub fn define(self: *Scope, allocator: std.mem.Allocator, symbol: Symbol) !void {
+    pub fn define(self: *Scope, symbol: Symbol) !void {
         std.debug.assert(self.symbols.contains(symbol.name) == false);
 
-        if (self.static.resolveLocal(symbol.name, .variable)) |_| {
-            try self.symbols.put(allocator, symbol.name, symbol);
-        } else if (self.parent) |p| {
-            try p.define(allocator, symbol);
-        } else {
-            std.debug.panic("No variable named '{s}' available in this scope", .{symbol.name});
-        }
+        std.debug.assert(self.static.resolveLocal(symbol.name, .variable) != null);
+        try self.symbols.put(self.arena.allocator(), symbol.name, symbol);
     }
 
     pub fn resolve(self: *Scope, name: []const u8) ?*Symbol {
