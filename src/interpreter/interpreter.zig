@@ -168,10 +168,11 @@ fn resolveExpr(self: *Interpreter, expr: *const ir.Expr) InterpreterError!Value 
         },
 
         .ident => |id| {
+            // get resolved
             if (self.getSymbol(id.name)) |sym| {
                 return sym.value;
             }
-
+            // resolve if not already (lazy resolution)
             return switch (id.symbol.details) {
                 .binding => |b| try self.handleDecl(b.origin),
                 .argument => unreachable, // should be already resolved by runtime builder,
