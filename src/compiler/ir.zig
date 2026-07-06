@@ -24,7 +24,6 @@ pub const File = struct {
     tasks: []*Task,
 
     pub fn findTask(self: *const File, task_id: TaskId) ?*Task {
-        @import("lib").debug.dump(task_id, 4);
         const scope = blk: {
             if (task_id.groupName) |group_name| {
                 if (self.scope.resolve(group_name, .group)) |group|
