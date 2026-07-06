@@ -37,7 +37,7 @@ status_code: u8 = 0,
 
 call_stack: *CallStack,
 scope_stack: *ScopeStack,
-environ: std.process.Environ.Map,
+environ: *const std.process.Environ.Map,
 
 pub fn init(
     allocator: std.mem.Allocator,
@@ -47,7 +47,7 @@ pub fn init(
     diagnostics: *Diagnostics,
     call_stack: *CallStack,
     scope_stack: *ScopeStack,
-    environ: std.process.Environ.Map,
+    environ: *const std.process.Environ.Map,
 ) Interpreter {
     return .{
         .allocator = allocator,
