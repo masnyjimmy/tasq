@@ -385,25 +385,16 @@ const TaskArgumentParser = struct {
 
     pub fn parseArguments(
         self: *TaskArgumentParser,
-        gpa: std.mem.Allocator,
+        arena: *std.heap.ArenaAllocator,
         arguments: []const []const u8,
     ) Error!std.array_hash_map.String(Value) {
         var reader = ArgsReader.init(arguments);
         var collector = ArgsCollector.empty;
-        errdefer collector.deinit(gpa);
 
         var out: std.array_hash_map.String(Value) = .empty;
 
-        errdefer {
-            var iter = out.iterator();
-            while (iter.next()) |kv| {
-                kv.value_ptr.deinit(gpa);
-            }
-            out.deinit(gpa);
-        }
-
         const CollectorAdapter = struct {
-            fn collect(allocator: std.mem.Allocator, c: *ArgsCollector, r: *ArgsReader, arg: *ir.Argument) ArgsCollector.Error!void {
+            fn collect(a: std.mem.Allocator, c: *ArgsCollector, r: *ArgsReader, arg: *ir.Argument) ArgsCollector.Error!void {
                 const @"type": conzole.args.Type = switch (arg.type) {
                     .flag => .flag,
                     .string => .string,
@@ -412,7 +403,7 @@ const TaskArgumentParser = struct {
                     .list_number => if (arg.int) .list_int else .list_number,
                 };
 
-                try c.interceptNext(allocator, r, arg.name, @"type");
+                try c.interceptNext(a, r, arg.name, @"type");
             }
         };
 
@@ -466,7 +457,7 @@ const TaskArgumentParser = struct {
                         else => unreachable,
                     };
 
-                    try out.put(gpa, arg.name, value);
+                    try out.put(arena.allocator(), arg.name, value);
                 },
                 .long => {
                     positional_end = true;
@@ -483,7 +474,7 @@ const TaskArgumentParser = struct {
                     };
                     //TODO: add way to receive actual token from collector,
 
-                    CollectorAdapter.collect(gpa, &collector, &reader, arg) catch |err| return switch (err) {
+                    CollectorAdapter.collect(arena.allocator(), &collector, &reader, arg) catch |err| return switch (err) {
                         error.InvalidType => {
                             try self.diagnostics.Err(.{ .argument = reader.pos }, "invalid '{s}' value type, got '{s}' expected '{f}'", .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) });
                             return Error.ParsingFailed;
@@ -517,7 +508,7 @@ const TaskArgumentParser = struct {
                             std.debug.panic("TODO: handle invalid short flag pos", .{});
                         }
 
-                        CollectorAdapter.collect(gpa, &collector, &reader, arg) catch |err| return switch (err) {
+                        CollectorAdapter.collect(arena.allocator(), &collector, &reader, arg) catch |err| return switch (err) {
                             error.InvalidType => {
                                 try self.diagnostics.Err(.{ .argument = reader.pos }, "invalid '{s}' value type, got '{s}' expected '{f}'", .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) });
                                 return Error.ParsingFailed;
@@ -540,7 +531,7 @@ const TaskArgumentParser = struct {
                         }
                     };
 
-                    CollectorAdapter.collect(gpa, &collector, &reader, arg) catch |err| return switch (err) {
+                    CollectorAdapter.collect(arena.allocator(), &collector, &reader, arg) catch |err| return switch (err) {
                         error.InvalidType => {
                             try self.diagnostics.Err(.{ .argument = reader.pos }, "invalid '{s}' value type, got '{s}' expected '{f}'", .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) });
                             return Error.ParsingFailed;
@@ -632,14 +623,14 @@ const TaskArgumentParser = struct {
 
         for (self.args.items) |arg| {
             const value = if (values.get(arg.name)) |value|
-                try ArgPayloadConverter.convert(gpa, value)
+                try ArgPayloadConverter.convert(arena.allocator(), value)
             else if (arg.default) |def|
                 def
             else {
                 try self.diagnostics.Err(.{ .argument = null }, "'{s}' argument not provided", .{arg.name});
                 return Error.ParsingFailed;
             };
-            try out.put(gpa, arg.name, value);
+            try out.put(arena.allocator(), arg.name, value);
         }
 
         // validate if everything provided
@@ -676,16 +667,35 @@ pub fn runTask(ctx: *const Context, task_id: []const u8, args: []const []const u
 
     const task = file.findTask(.parse(task_id)) orelse return TaskError.TaskNotFound;
 
-    var call_stack: inter.CallStack = .init(ctx.gpa, ctx.diagnostics, task);
+    var call_stack: inter.CallStack = .init(
+        ctx.gpa,
+        ctx.diagnostics,
+        task,
+    );
     defer call_stack.deinit(ctx.gpa);
 
     var scope_stack: inter.ScopeStack = blk: {
-        var parser: TaskArgumentParser = try .init(ctx.gpa, task, ctx.diagnostics);
+        var parser: TaskArgumentParser = try .init(
+            ctx.gpa,
+            task,
+            ctx.diagnostics,
+        );
         defer parser.deinit(ctx.gpa);
 
-        var values = try parser.parseArguments(ctx.gpa, args);
+        var arena = std.heap.ArenaAllocator.init(ctx.gpa);
+        defer arena.deinit();
 
-        break :blk try .init(ctx.gpa, ctx.diagnostics, task, values.move());
+        var values = try parser.parseArguments(
+            &arena,
+            args,
+        );
+
+        break :blk try .init(
+            ctx.gpa,
+            ctx.diagnostics,
+            task,
+            values.move(),
+        );
     };
     defer scope_stack.deinit(ctx.gpa);
 
