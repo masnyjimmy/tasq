@@ -68,6 +68,20 @@ files: std.array_hash_map.Auto(FileId, FileState) = .empty,
 uri_to_id: std.StringHashMapUnmanaged(FileId) = .empty,
 next_id: u32 = 0,
 
+pub const init: Workspace = .{};
+
+pub fn deinit(self: *Workspace, allocator: std.mem.Allocator) void {
+    var iter = self.files.iterator();
+
+    while (iter.next()) |kv| {
+        kv.value_ptr.deinit(allocator);
+    }
+
+    self.files.deinit(allocator);
+    self.uri_to_id.deinit(allocator);
+    self.next_id = undefined;
+}
+
 pub fn openFile(self: *Workspace, allocator: std.mem.Allocator, uri: []const u8, text: []const u8, version: i32) !FileId {
     const id: FileId = @enumFromInt(self.next_id);
     self.next_id += 1;

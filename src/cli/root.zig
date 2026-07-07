@@ -20,7 +20,8 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
         },
     );
 
-    var workspace: compiler.Workspace = .{};
+    var workspace: compiler.Workspace = .init;
+    defer workspace.deinit(allocator);
 
     //TODO: handle non-compiling error in different way
     var diag: conzole.command.Diagnostic = undefined;
