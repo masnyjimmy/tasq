@@ -20,9 +20,7 @@ pub fn init(allocator: std.mem.Allocator, workspace: *Workspace) Dispatcher {
     };
 }
 
-pub fn deinit(self: *Dispatcher) void {
-    self.files.deinit(self.allocator);
-}
+pub fn deinit(_: *Dispatcher) void {}
 
 pub fn initialize(self: *Dispatcher, _: std.mem.Allocator, request: lsp.types.InitializeParams) lsp.types.InitializeResult {
     if (request.clientInfo) |info| {
@@ -81,21 +79,19 @@ pub fn @"textDocument/didOpen"(
 ) !void {
     std.log.debug("Received 'textDocument/didOpen' notification", .{});
 
-    const new_text = try self.allocator.dupe(u8, notification.textDocument.text);
-    errdefer self.allocator.free(new_text);
-
-    const gop = try self.files.getOrPut(self.allocator, notification.textDocument.uri);
-
-    if (gop.found_existing) {
+    if (self.workspace.getId(notification.textDocument.uri)) |file_id| {
         std.log.warn("Document opened twice: '{s}'", .{notification.textDocument.uri});
-        self.allocator.free(gop.value_ptr.*);
-    } else {
-        errdefer std.debug.assert(self.files.remove(notification.textDocument.uri));
-        // FIX 1: dupe(u8, slice) not dupe(allocator, []u8, slice)
-        gop.key_ptr.* = try self.allocator.dupe(u8, notification.textDocument.uri);
+
+        try self.workspace.changeFile(self.allocator, file_id, notification.textDocument.text, notification.textDocument.version);
+        return;
     }
 
-    gop.value_ptr.* = new_text;
+    _ = try self.workspace.openFile(
+        self.allocator,
+        notification.textDocument.uri,
+        notification.textDocument.text,
+        notification.textDocument.version,
+    );
 }
 
 pub fn @"textDocument/didChange"(
@@ -105,15 +101,20 @@ pub fn @"textDocument/didChange"(
 ) !void {
     std.log.debug("Received 'textDocument/didChange' notification", .{});
 
-    const current_text = self.files.getPtr(notification.textDocument.uri) orelse {
-        std.log.warn("Modifying non existent Document: '{s}'", .{notification.textDocument.uri});
+    const file_id = blk: {
+        if (self.workspace.getId(notification.textDocument.uri)) |id|
+            break :blk id;
+
+        std.log.warn("Modifying non existent document: '{s}'", .{notification.textDocument.uri});
         return;
     };
+
+    const view = self.workspace.view(file_id, .source);
 
     var buffer: std.ArrayList(u8) = .empty;
     errdefer buffer.deinit(self.allocator);
 
-    try buffer.appendSlice(self.allocator, current_text.*);
+    try buffer.appendSlice(self.allocator, view.source);
 
     for (notification.contentChanges) |cc| {
         switch (cc) {
@@ -127,10 +128,8 @@ pub fn @"textDocument/didChange"(
             },
         }
     }
-
     const new_text = try buffer.toOwnedSlice(self.allocator);
-    self.allocator.free(current_text.*);
-    current_text.* = new_text;
+    try self.workspace.changeFile(self.allocator, file_id, new_text, notification.textDocument.version);
 }
 
 pub fn @"textDocument/didClose"(
@@ -140,12 +139,15 @@ pub fn @"textDocument/didClose"(
 ) !void {
     std.log.debug("Received 'textDocument/didClose' notification", .{});
 
-    const entry = self.files.fetchRemove(notification.textDocument.uri) orelse {
+    const file_id = blk: {
+        if (self.workspace.getId(notification.textDocument.uri)) |id|
+            break :blk id;
+
         std.log.warn("Closing non existent Document: '{s}'", .{notification.textDocument.uri});
         return;
     };
-    self.allocator.free(entry.key);
-    self.allocator.free(entry.value);
+
+    try self.workspace.closeFile(self.allocator, file_id);
 }
 
 pub fn onResponse(_: *Dispatcher, _: std.mem.Allocator, response: lsp.JsonRPCMessage.Response) void {
