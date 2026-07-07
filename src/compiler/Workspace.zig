@@ -84,6 +84,8 @@ pub fn deinit(self: *Workspace, allocator: std.mem.Allocator) void {
 }
 
 pub fn openFile(self: *Workspace, allocator: std.mem.Allocator, uri: []const u8, text: []const u8, version: i32) !FileId {
+    std.debug.assert(self.getId(uri) == null);
+
     const id: FileId = @enumFromInt(self.next_id);
     self.next_id += 1;
 
@@ -100,6 +102,10 @@ pub fn openFile(self: *Workspace, allocator: std.mem.Allocator, uri: []const u8,
 
     try self.reparse(id);
     return id;
+}
+
+pub fn getId(self: *Workspace, uri: []const u8) ?FileId {
+    return self.uri_to_id.get(uri);
 }
 
 pub fn view(self: *Workspace, id: FileId, comptime view_type: ViewType) FileView(view_type) {
