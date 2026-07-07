@@ -301,7 +301,6 @@ pub const Lexer = struct {
         return .{
             .kind = kind,
             .span = .{
-                .sourceId = self.source.id,
                 .start = start,
                 .len = len,
             },

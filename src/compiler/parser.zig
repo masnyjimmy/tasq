@@ -149,7 +149,7 @@ pub const Parser = struct {
     ) !void {
         try self.diagnostics.append(
             severity,
-            .{ .span = self.next.span },
+            self.next.span,
             fmt,
             args,
         );

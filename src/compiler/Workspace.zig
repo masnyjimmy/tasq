@@ -2,7 +2,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const ir = @import("ir.zig");
 
-const Diagnostics = @import("diagnostics.zig");
+const Diagnostics = @import("Diagnostics.zig");
 
 const Workspace = @This();
 

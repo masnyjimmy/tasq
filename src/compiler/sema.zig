@@ -34,7 +34,7 @@ pub const Sema = struct {
     arena: *std.heap.ArenaAllocator,
     diagnostics: *Diagnostics,
 
-    pub fn init(arena: *std.heap.ArenaAllocator, diagnostics: *Diagnostics) !Sema {
+    pub fn init(arena: *std.heap.ArenaAllocator, diagnostics: *Diagnostics) Sema {
         return Sema{
             .arena = arena,
             .diagnostics = diagnostics,
