@@ -93,18 +93,28 @@ pub fn view(self: *Workspace, id: FileId, comptime view_type: ViewType) FileView
     return .fromFileState(self, id, file);
 }
 
-pub fn reparse(self: *Workspace, id: FileId) !void {}
+pub fn reparse(self: *Workspace, id: FileId) !void {
+    const file = self.files.getPtr(id).?;
+
+    file.arena.reset(.retain_capacity);
+    file.diagnostics.clear();
+    file.tree = null;
+    file.ir = null;
+
+    const lex = @import("lexer.zig");
+    const parse = @import("parser.zig");
+    var lexer: lex.Lexer = .init(file.source);
+
+    var parser: parse.Parser = .init(&file.arena, &lexer, &file.diagnostics);
+
+    file.tree = try parser.parseFile();
+}
 
 pub fn changeFile(self: *Workspace, allocator: std.mem.Allocator, id: FileId, new_text: []const u8, version: i32) !void {
     var file = self.files.getPtr(id).?;
     allocator.free(file.source);
     file.source = try allocator.dupe(u8, new_text);
     file.version = version;
-
-    file.arena.reset(.retain_capacity);
-    file.diagnostics.clear();
-    file.tree = null;
-    file.ir = null;
 
     try self.reparse(id);
 }
