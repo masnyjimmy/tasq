@@ -38,16 +38,6 @@ pub fn build(b: *std.Build) void {
     interpreter_mod.addImport("compiler", compiler_mod);
     interpreter_mod.addImport("lib", lib_mod);
 
-    const cli_mod = b.createModule(.{
-        .root_source_file = b.path("src/cli//root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    cli_mod.addImport("conzole", conzole_mod);
-    cli_mod.addImport("lib", lib_mod);
-    cli_mod.addImport("compiler", compiler_mod);
-    cli_mod.addImport("interpreter", interpreter_mod);
-
     const lsp_mod = b.createModule(.{
         .root_source_file = b.path("src/lsp/root.zig"),
         .target = target,
@@ -57,6 +47,17 @@ pub fn build(b: *std.Build) void {
     lsp_mod.addImport("lsp_kit", lsp_kit_mod);
     lsp_mod.addImport("lib", lib_mod);
     lsp_mod.addImport("compiler", compiler_mod);
+
+    const cli_mod = b.createModule(.{
+        .root_source_file = b.path("src/cli//root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    cli_mod.addImport("conzole", conzole_mod);
+    cli_mod.addImport("lib", lib_mod);
+    cli_mod.addImport("compiler", compiler_mod);
+    cli_mod.addImport("interpreter", interpreter_mod);
+    cli_mod.addImport("lsp", lsp_mod);
 
     const exe = b.addExecutable(.{
         .name = "tasq",
