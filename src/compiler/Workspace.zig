@@ -110,7 +110,7 @@ pub fn view(self: *Workspace, id: FileId, comptime view_type: ViewType) FileView
 pub fn reparse(self: *Workspace, id: FileId) !void {
     const file = self.files.getPtr(id).?;
 
-    file.arena.reset(.retain_capacity);
+    _ = file.arena.reset(.retain_capacity);
     file.diagnostics.clear();
     file.tree = null;
     file.ir = null;
