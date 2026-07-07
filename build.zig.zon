@@ -6,6 +6,10 @@
             .url = "git+https://github.com/masnyjimmy/conzole/?ref=HEAD#8f2ee820f4bb96b0679749bdf37cb093af6c376d",
             .hash = "conzole-1.0.10-DmAtFFnXAAB4OxoZ7jzcb3s9aA8G6niZImjtcG4YziiI",
         },
+        .lsp_kit = .{
+            .url = "git+https://github.com/zigtools/lsp-kit.git?ref=0.16.x#cf0ff08ac00301859656bbd4a5af6fcb889497e4",
+            .hash = "lsp_kit-0.1.0-bi_PL8cxDAAxREwBYHZFTGG2xVuzAjgnZPMmwiajkFu0",
+        },
     },
     .paths = .{""},
     .fingerprint = 0x8fa97201d2ec7744,
