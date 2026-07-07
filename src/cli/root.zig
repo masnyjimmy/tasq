@@ -52,7 +52,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
                         };
                     });
 
-                    const severity_color: conzole.terminal.Color = switch (d.severity) {
+                    const severity_color: conzole.terminal.Color = switch (record.severity) {
                         .err => .bright_red,
                         .hint => .bright_green,
                         .warning => .yellow,
@@ -62,14 +62,14 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
                         allocator,
                         .{ .bold = true, .fg = severity_color },
                         "{f}: ",
-                        .{d.severity},
+                        .{record.severity},
                     );
 
                     try printer.printStyled(
                         allocator,
                         .{ .fg = .bright_white },
                         "{s}\n",
-                        .{d.message},
+                        .{record.message},
                     );
                 }
             }
