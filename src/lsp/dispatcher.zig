@@ -50,7 +50,7 @@ pub fn initialize(self: *Dispatcher, _: std.mem.Allocator, request: lsp.types.In
             .textDocumentSync = .{
                 .text_document_sync_options = .{
                     .openClose = true,
-                    .change = .Full, //TODO: change to incremental if possible
+                    .change = .Incremental,
                 },
             },
             .hoverProvider = .{ .bool = true },
@@ -94,6 +94,41 @@ pub fn @"textDocument/didOpen"(
     }
 
     gop.value_ptr.* = new_text;
+}
+
+pub fn @"textDocument/didChange"(
+    self: *Dispatcher,
+    _: std.mem.Allocator,
+    notification: lsp.types.TextDocument.DidChangeParams,
+) !void {
+    std.log.debug("Received 'textDocument/didChange' notification", .{});
+
+    const current_text = self.files.getPtr(notification.textDocument.uri) orelse {
+        std.log.warn("Modifying non existent Document: '{s}'", .{notification.textDocument.uri});
+        return;
+    };
+
+    var buffer: std.ArrayList(u8) = .empty;
+    errdefer buffer.deinit(self.allocator);
+
+    try buffer.appendSlice(self.allocator, current_text.*);
+
+    for (notification.contentChanges) |cc| {
+        switch (cc) {
+            .text_document_content_change_whole_document => |change| {
+                buffer.clearRetainingCapacity();
+                try buffer.appendSlice(self.allocator, change.text);
+            },
+            .text_document_content_change_partial => |change| {
+                const loc = lsp.offsets.rangeToLoc(buffer.items, change.range, self.offset_encodings);
+                try buffer.replaceRange(self.allocator, loc.start, loc.end - loc.start, change.text);
+            },
+        }
+    }
+
+    const new_text = try buffer.toOwnedSlice(self.allocator);
+    self.allocator.free(current_text.*);
+    current_text.* = new_text;
 }
 
 pub fn @"textDocument/didClose"(
