@@ -19,9 +19,11 @@ const Scope = @import("scope.zig").Scope;
 
 const TaskId = @import("taskId.zig");
 
+const Diagnostics = @import("Diagnostics.zig");
+const Span = Diagnostics.Span;
+
 const lib = @import("lib");
 const enums = lib.enums;
-const Span = lib.Span;
 
 const SemaError = error{
     SemanticError,

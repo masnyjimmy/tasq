@@ -1,10 +1,11 @@
 const std = @import("std");
-const lib = @import("lib");
-const Span = lib.Span;
+
+const Diagnostics = @import("Diagnostics.zig");
+const Span = Diagnostics.Span;
+pub const WithSpan = Span.Wrapped;
 
 const typing = @import("typing.zig");
 
-pub const WithSpan = lib.WithSpan;
 pub const ArgType = typing.ArgType;
 
 pub fn hasAttr(attrs: []const Attribute, name: []const u8) bool {
