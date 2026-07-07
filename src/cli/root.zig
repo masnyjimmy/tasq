@@ -3,6 +3,7 @@ const lib = @import("lib");
 
 const command = @import("command.zig");
 const conzole = @import("conzole");
+const compiler = @import("compiler");
 
 pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process.Environ.Map, args: []const []const u8) !void {
     var diagnostics: lib.Diagnostic.List = .init(allocator);
@@ -19,9 +20,9 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
         },
     );
 
-    var source_store = lib.source_file.SourceStore.init();
-    defer source_store.deinit(allocator);
+    var workspace: compiler.Workspace = .{};
 
+    //TODO: handle non-compiling error in different way
     var diag: conzole.command.Diagnostic = undefined;
 
     const cmd = try command.buildCommand(allocator);
@@ -32,52 +33,46 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
         .io = io,
         .environ = environ,
         .printer = &printer,
-        .source_store = &source_store,
+        .workspace = &workspace,
     }) catch |err| {
         if (err == conzole.command.CommandError.InvalidArguments) {
             try printer.printStyled(allocator, .{ .fg = .bright_red }, "{f}\n", .{diag});
         } else {
-            for (diagnostics.items.items) |d| {
-                switch (d.details) {
-                    .span => |span| {
-                        if (span == lib.Span.Unknown) {
-                            try printer.printStyled(allocator, .{ .fg = .white }, "unknown span: ", .{});
-                        } else {
-                            try printer.printStyled(allocator, .{ .fg = .white }, "{[file]s}:{[line]}:{[col]}: ", args: {
-                                const file = try source_store.getFile(span.sourceId);
-                                const lineCol = try lib.debug.lineColFromIndex(file.text, span.start);
-                                break :args .{
-                                    .file = file.path,
-                                    .line = lineCol.line,
-                                    .col = lineCol.column,
-                                };
-                            });
-                        }
-                    },
-                    .argument => |argIdx| try printer.printStyled(allocator, .{ .fg = .white }, "at argument [{?}]: ", .{argIdx}),
-                    .runtime => try printer.printStyled(allocator, .{ .bold = true, .fg = .bright_yellow }, "runtime: ", .{}),
+            var iter = workspace.files.iterator();
+            while (iter.next()) |kv| {
+                const file = kv.value_ptr;
+                for (file.diagnostics.records.items) |record| {
+                    try printer.printStyled(allocator, .{ .fg = .white }, "{[file]s}:{[line]}:{[col]}: ", args: {
+                        const line_col = try lib.debug.lineColFromIndex(file.source, record.span.start);
+                        break :args .{
+                            .file = file.uri,
+                            .line = line_col.line,
+                            .col = line_col.column,
+                        };
+                    });
+
+                    const severity_color: conzole.terminal.Color = switch (d.severity) {
+                        .err => .bright_red,
+                        .hint => .bright_green,
+                        .warning => .yellow,
+                    };
+
+                    try printer.printStyled(
+                        allocator,
+                        .{ .bold = true, .fg = severity_color },
+                        "{f}: ",
+                        .{d.severity},
+                    );
+
+                    try printer.printStyled(
+                        allocator,
+                        .{ .fg = .bright_white },
+                        "{s}\n",
+                        .{d.message},
+                    );
                 }
-
-                const severity_color: conzole.terminal.Color = switch (d.severity) {
-                    .err => .bright_red,
-                    .hint => .bright_green,
-                    .warning => .yellow,
-                };
-
-                try printer.printStyled(
-                    allocator,
-                    .{ .bold = true, .fg = severity_color },
-                    "{f}: ",
-                    .{d.severity},
-                );
-
-                try printer.printStyled(
-                    allocator,
-                    .{ .fg = .bright_white },
-                    "{s}\n",
-                    .{d.message},
-                );
             }
+
             stdout_writer.flush() catch unreachable;
         }
 
