@@ -43,6 +43,7 @@ const ViewType = enum {
 };
 pub fn FileView(comptime view_type: ViewType) type {
     return struct {
+        workspace: *Workspace,
         id: FileId,
         source: view_type.Type(),
         diagnostics: *Diagnostics,
