@@ -6,8 +6,6 @@ const conzole = @import("conzole");
 const compiler = @import("compiler");
 
 pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process.Environ.Map, args: []const []const u8) !void {
-    var diagnostics: lib.Diagnostic.List = .init(allocator);
-    defer diagnostics.deinit();
     var buffer: [4096]u8 = undefined;
 
     var stdout = std.Io.File.stdout();
@@ -30,7 +28,6 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
     defer cmd.destroy();
     lib.debug.dump(args, 4);
     cmd.execute(allocator, args[1..], &diag, .{
-        .diagnostics = &diagnostics,
         .allocator = allocator,
         .io = io,
         .environ = environ,

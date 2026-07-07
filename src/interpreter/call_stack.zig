@@ -14,13 +14,11 @@ pub const State = struct {
     pos: usize,
 };
 
-diagnostics: *lib.Diagnostic.List,
 stack: std.ArrayList(*State),
 current: ?*State,
 
-pub fn init(allocator: std.mem.Allocator, diagnostics: *lib.Diagnostic.List, task: ?*ir.Task) CallStack {
+pub fn init(allocator: std.mem.Allocator, task: ?*ir.Task) CallStack {
     var out: CallStack = .{
-        .diagnostics = diagnostics,
         .stack = .empty,
         .current = null,
     };
@@ -90,19 +88,17 @@ pub fn advance(self: *CallStack, allocator: std.mem.Allocator) !?AdvanceResult {
     };
 }
 
-pub fn currentTask(self: *CallStack) !*ir.Task {
+pub fn currentTask(self: *CallStack) *ir.Task {
     const state = self.current orelse {
-        self.diagnostics.Err(.runtime, "unable to retrieve current task, no call state", .{});
-        return error.RuntimeError;
+        std.debug.panic("unable to retrieve current task, no call state", .{});
     };
 
     return state.task;
 }
 
 pub fn currentGroup(self: *CallStack) !?*ir.Group {
-    const task = self.currentTask() catch |err| {
-        self.diagnostics.Err(.runtime, "unable to retrieve group", .{});
-        return err;
+    const task = self.currentTask() catch {
+        std.debug.panic("unable to retrieve group", .{});
     };
 
     return task.group;

@@ -324,7 +324,7 @@ const TaskArgumentParser = struct {
 
     pub const Error = error{
         ParsingFailed,
-    } || std.mem.Allocator.Error;
+    } || std.mem.Allocator.Error || std.Io.Writer.Error;
 
     pub fn init(gpa: std.mem.Allocator, task: *ir.Task, printer: *Printer) Error!TaskArgumentParser {
         var out: TaskArgumentParser = .{
@@ -725,7 +725,6 @@ pub fn runTask(ctx: *const Context, task_id: []const u8, args: []const []const u
 
     var call_stack: inter.CallStack = .init(
         ctx.allocator,
-        ctx.diagnostics,
         task,
     );
     defer call_stack.deinit(ctx.allocator);
@@ -748,7 +747,6 @@ pub fn runTask(ctx: *const Context, task_id: []const u8, args: []const []const u
 
         break :blk try .init(
             ctx.allocator,
-            ctx.diagnostics,
             task,
             values.move(),
         );
@@ -760,7 +758,6 @@ pub fn runTask(ctx: *const Context, task_id: []const u8, args: []const []const u
         ctx.io,
         ctx.printer,
         &file.options,
-        ctx.diagnostics,
         &call_stack,
         &scope_stack,
         ctx.environ,

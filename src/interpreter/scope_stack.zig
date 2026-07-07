@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const lib = @import("lib");
-const Diagnostics = lib.Diagnostic.List;
 
 const comp = @import("compiler");
 const ir = comp.ir;
@@ -49,13 +48,12 @@ const ScopeState = struct {
         allocator.destroy(self);
     }
 };
-diagnostics: *Diagnostics,
 
 root: *Scope,
 stack: std.ArrayList(*ScopeState),
 current: ?*ScopeState,
 
-pub fn init(allocator: std.mem.Allocator, diagnostics: *Diagnostics, task: *ir.Task, values_in: std.array_hash_map.String(Value)) !ScopeStack {
+pub fn init(allocator: std.mem.Allocator, task: *ir.Task, values_in: std.array_hash_map.String(Value)) !ScopeStack {
     var values = values_in;
 
     const root = try allocator.create(Scope);
@@ -82,7 +80,6 @@ pub fn init(allocator: std.mem.Allocator, diagnostics: *Diagnostics, task: *ir.T
     assertExhaustedAndFree(&values, task.name);
 
     return .{
-        .diagnostics = diagnostics,
         .root = root,
         .stack = .empty,
         .current = try ScopeState.create(
