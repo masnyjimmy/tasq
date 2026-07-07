@@ -180,13 +180,13 @@ pub const Sema = struct {
             for (self.sets) |set| {
                 var attributes = AttributesResolver.resolve(self.sema, .setting, set.attrs) catch |err| switch (err) {
                     SemaError.PlatformMismatch => {
-                        try self.sema.diagnostics.hint(.{ .span = set.span }, "skipping settings, platform mismatch", .{});
+                        try self.sema.diagnostics.hint(set.span, "skipping settings, platform mismatch", .{});
                         continue;
                     },
                     else => return err,
                 };
                 std.debug.assert(attributes.count() == 0);
-                defer attributes.deinit(self.sema.allocator);
+                defer attributes.deinit(self.sema.arena.allocator());
 
                 try self.resolveOption(set.body);
             }
@@ -195,19 +195,19 @@ pub const Sema = struct {
         fn resolveOption(self: *OptionResolver, decls: []const ast.Set.SetDecl) !void {
             for (decls) |decl| {
                 const def = options.get(decl.name.value) orelse {
-                    try self.sema.diagnostics.Err(.{ .span = decl.span }, "unknown option '{s}'", .{decl.name.value});
+                    try self.sema.diagnostics.err(decl.span, "unknown option '{s}'", .{decl.name.value});
                     return SemaError.SemanticError;
                 };
 
                 if (self.storage.contains(def.id)) {
-                    try self.sema.diagnostics.Err(.{ .span = decl.span }, "duplicate option '{s}'", .{decl.name.value});
+                    try self.sema.diagnostics.err(decl.span, "duplicate option '{s}'", .{decl.name.value});
                     return SemaError.SemanticError;
                 }
 
                 const value: ast.MetaValue = decl.value orelse .{ .bool = true };
 
                 if (value.validateType(def.value_type) == false) {
-                    try self.sema.diagnostics.Err(.{ .span = decl.span }, "invalid '{s}' option value type, expected '{f}'", .{ decl.name.value, def.value_type });
+                    try self.sema.diagnostics.err(decl.span, "invalid '{s}' option value type, expected '{f}'", .{ decl.name.value, def.value_type });
                     return SemaError.SemanticError;
                 }
 
@@ -218,10 +218,10 @@ pub const Sema = struct {
         fn getOptionValue(self: *OptionResolver, id: options.Type, value: ast.MetaValue) !OptionValue {
             switch (id) {
                 inline .shell, .script => |tag| {
-                    var out: std.ArrayList([]const u8) = try .initCapacity(self.sema.allocator, value.list.len);
+                    var out: std.ArrayList([]const u8) = try .initCapacity(self.sema.arena.allocator(), value.list.len);
 
                     for (value.list) |val| {
-                        const string = try text.processString(self.sema.allocator, val.string);
+                        const string = try text.processString(self.sema.arena.allocator(), val.string);
                         out.appendAssumeCapacity(string);
                     }
                     return @unionInit(
@@ -273,7 +273,7 @@ pub const Sema = struct {
         fn resolveAttributes(self: *AttributesResolver, attributes: []const ast.Attribute, target: attrib.definitions.Target) !void {
             for (attributes) |attr| {
                 const def = attrib.definitions.get(attr.name, target) orelse {
-                    try self.sema.diagnostics.err(.{ .span = attr.span }, "'{s}' is not valid attribute for this element", .{attr.name});
+                    try self.sema.diagnostics.err(attr.span, "'{s}' is not valid attribute for this element", .{attr.name});
                     return SemaError.SemanticError;
                 };
 
@@ -284,7 +284,7 @@ pub const Sema = struct {
                         std.debug.assert(def.unique == true);
 
                         if (self.platforms.contains(pt)) {
-                            try self.sema.diagnostics.err(.{ .span = attr.span }, "'{s}' platform attribute duplicate", .{attr.name});
+                            try self.sema.diagnostics.err(attr.span, "'{s}' platform attribute duplicate", .{attr.name});
                             return SemaError.SemanticError;
                         }
 
@@ -293,7 +293,7 @@ pub const Sema = struct {
                     else => {
                         // validate uniqueness
                         if (def.unique and self.attributes.contains(def.type)) {
-                            try self.sema.diagnostics.Err(.{ .span = attr.span }, "'{s}' attribute duplicate", .{attr.name});
+                            try self.sema.diagnostics.err(attr.span, "'{s}' attribute duplicate", .{attr.name});
                             return SemaError.SemanticError;
                         }
 
@@ -302,16 +302,16 @@ pub const Sema = struct {
                             for (def.value_types) |vt| {
                                 if (val.validateType(vt)) break;
                             } else {
-                                const expected = try attrib.typesListToString(self.sema.allocator, def.value_types, def.allow_default);
-                                try self.sema.diagnostics.Err(.{ .span = attr.span }, "invalid '{s}' attribute value type, expected '{s}'", .{ attr.name, expected });
+                                const expected = try attrib.typesListToString(self.sema.arena.allocator(), def.value_types, def.allow_default);
+                                try self.sema.diagnostics.err(attr.span, "invalid '{s}' attribute value type, expected '{s}'", .{ attr.name, expected });
                                 return SemaError.SemanticError;
                             }
                         } else if (def.allow_default == false) {
-                            const expected = try attrib.typesListToString(self.sema.allocator, def.value_types, def.allow_default);
-                            try self.sema.diagnostics.Err(.{ .span = attr.span }, "'{s}' attribute doesn't support default value, expected '{s}'", .{ attr.name, expected });
+                            const expected = try attrib.typesListToString(self.sema.arena.allocator(), def.value_types, def.allow_default);
+                            try self.sema.diagnostics.err(attr.span, "'{s}' attribute doesn't support default value, expected '{s}'", .{ attr.name, expected });
                             return SemaError.SemanticError;
                         }
-                        try self.attributes.add(self.sema.allocator, def.type, attr.value);
+                        try self.attributes.add(self.sema.arena.allocator(), def.type, attr.value);
                     },
                 }
             }
@@ -898,7 +898,7 @@ pub const Sema = struct {
                     .is_static = true,
                     .string = .{
                         .lit = text.processString(self.arena.allocator(), str) catch {
-                            try self.diagnostics.err(.{ .span = .Unknown }, "Invalid string escape sequence: {s}", .{str});
+                            try self.diagnostics.err(.unknown, "Invalid string escape sequence: {s}", .{str});
                             return SemaError.SemanticError;
                         },
                     },
@@ -913,7 +913,7 @@ pub const Sema = struct {
                         .lit => |str| {
                             try segments.append(self.arena.allocator(), .{ .lit = text.processString(self.arena.allocator(), str) catch {
                                 try self.diagnostics.err(
-                                    .{ .span = .Unknown },
+                                    .unknown,
                                     "Invalid string escape sequence: {s}",
                                     .{str},
                                 );
@@ -956,11 +956,11 @@ pub const Sema = struct {
 
         const def = functions.getFunctionDef(call.name, call.args.len) catch |err| switch (err) {
             error.UnknownFunction => {
-                try self.diagnostics.err(.{ .span = call.span }, "unknown function '{s}'", .{call.name});
+                try self.diagnostics.err(call.span, "unknown function '{s}'", .{call.name});
                 return SemaError.SemanticError;
             },
             error.InvalidArguments => {
-                try self.diagnostics.err(.{ .span = call.span }, "invalid arguments num", .{});
+                try self.diagnostics.err(call.span, "invalid arguments num", .{});
                 return SemaError.SemanticError;
             },
         };
@@ -971,7 +971,7 @@ pub const Sema = struct {
             const arg = try self.analyseExpr(scope, expr);
 
             if (arg.type.eq(arg_def[1]) == false) {
-                try self.diagnostics.err(.{ .span = expr.span() }, "invalid argument type, got '{f}' expected '{f}'", .{ arg.type, arg_def[1] });
+                try self.diagnostics.err(expr.span(), "invalid argument type, got '{f}' expected '{f}'", .{ arg.type, arg_def[1] });
                 return SemaError.SemanticError;
             }
 
@@ -1044,7 +1044,7 @@ pub const Sema = struct {
                 for (list.value[1..]) |i| {
                     const curr = try self.analyseExpr(scope, i);
                     if (list_type.eq(curr.type) == false) {
-                        try self.diagnostics.err(.{ .span = expr.span() }, "All list elements must be of same type", .{});
+                        try self.diagnostics.err(expr.span(), "All list elements must be of same type", .{});
                         return SemaError.SemanticError;
                     }
                     if (curr.is_static) is_static = true;
@@ -1072,7 +1072,7 @@ pub const Sema = struct {
             },
             .ident => |name| {
                 const symbol = scope.resolve(name.value, .variable) orelse {
-                    try self.diagnostics.err(.{ .span = name.span }, "undefined variable '{s}'", .{name.value});
+                    try self.diagnostics.err(name.span, "undefined variable '{s}'", .{name.value});
                     return SemaError.SemanticError;
                 };
 
@@ -1137,13 +1137,13 @@ pub const Sema = struct {
                 const result_type: ir.Type = switch (u.op) {
                     .not_op => blk: {
                         if (operand.type != .bool) {
-                            try self.diagnostics.Err(.{ .span = u.span }, "'not' requires a bool or flag", .{});
+                            try self.diagnostics.err(.{ .span = u.span }, "'not' requires a bool or flag", .{});
                         }
                         break :blk .bool;
                     },
                     .negate => blk: {
                         if (operand.type != .number) {
-                            try self.diagnostics.Err(.{ .span = u.span }, "unary '-' requires number", .{});
+                            try self.diagnostics.err(.{ .span = u.span }, "unary '-' requires number", .{});
                         }
                         break :blk operand.type;
                     },
