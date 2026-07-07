@@ -10,9 +10,9 @@ const token = @import("token.zig");
 const Token = token.Token;
 const TokenKind = token.TokenKind;
 
-const lib = @import("lib");
-const Diagnostic = lib.Diagnostic;
-const WithSpan = lib.WithSpan;
+const Diagnostics = @import("Diagnostics.zig");
+const Span = Diagnostics.Span;
+const WithSpan = Span.Wrapped;
 
 const ParseError = error{
     UnexpectedToken,
@@ -27,28 +27,18 @@ fn parseTaskCall(value: []const u8) struct { []const u8, []const u8 } {
 //TODO: make parser conserve order of nodes
 
 pub const Parser = struct {
-    pub const Result = struct {
-        arena: *std.heap.ArenaAllocator,
-        result: ast.File,
-
-        pub fn deinit(self: *const Result) void {
-            const allocator = self.arena.child_allocator;
-            self.arena.deinit();
-            allocator.destroy(self.arena);
-        }
-    };
-    allocator: std.mem.Allocator,
+    arena: *std.heap.ArenaAllocator,
     lexer: *Lexer,
-    diagnostics: *lib.Diagnostic.List,
+    diagnostics: *Diagnostics,
 
     current: ?Token,
     next: Token,
 
-    pub fn init(allocator: std.mem.Allocator, lexer: *Lexer, diagnostics: *lib.Diagnostic.List) !Parser {
+    pub fn init(arena: *std.heap.ArenaAllocator, lexer: *Lexer, diagnostics: *Diagnostics) !Parser {
         const first = lexer.next();
 
         return .{
-            .allocator = allocator,
+            .arena = arena,
             .lexer = lexer,
             .diagnostics = diagnostics,
             .current = null,
@@ -58,10 +48,9 @@ pub const Parser = struct {
 
     // ── Span helper ───────────────────────────────────────────────────────────
 
-    fn spanFrom(self: *Parser, start: u32) lib.Span {
+    fn spanFrom(self: *Parser, start: u32) Span {
         const end = if (self.current) |p| p.span.start + p.span.len else self.next.span.start;
         return .{
-            .sourceId = self.next.span.sourceId,
             .start = start,
             .len = end - start,
         };
@@ -154,7 +143,7 @@ pub const Parser = struct {
 
     fn addDiagnostic(
         self: *Parser,
-        comptime severity: lib.Severity,
+        comptime severity: Diagnostics.Severity,
         comptime fmt: []const u8,
         args: anytype,
     ) !void {
@@ -181,21 +170,8 @@ pub const Parser = struct {
         }
     }
 
-    pub fn parseFile(self: *Parser) !Result {
+    pub fn parseFile(self: *Parser) !ast.File {
         const start = self.currentPos();
-
-        // setup arena to allow simple ast destruction through File.deinit
-        const arena = self.allocator.create(std.heap.ArenaAllocator) catch unreachable;
-        arena.* = .init(self.allocator);
-
-        const previous_allocator = self.allocator;
-        self.allocator = arena.allocator();
-        defer self.allocator = previous_allocator;
-
-        errdefer {
-            arena.deinit();
-            previous_allocator.destroy(arena);
-        }
 
         var options = try std.ArrayList(ast.Set).initCapacity(self.allocator, 1);
         var decls = try std.ArrayList(ast.Decl).initCapacity(self.allocator, 1);
@@ -248,14 +224,11 @@ pub const Parser = struct {
         }
 
         return .{
-            .arena = arena,
-            .result = .{
-                .options = try options.toOwnedSlice(self.allocator),
-                .decls = try decls.toOwnedSlice(self.allocator),
-                .groups = try groups.toOwnedSlice(self.allocator),
-                .tasks = try tasks.toOwnedSlice(self.allocator),
-                .span = self.spanFrom(start),
-            },
+            .options = try options.toOwnedSlice(self.allocator),
+            .decls = try decls.toOwnedSlice(self.allocator),
+            .groups = try groups.toOwnedSlice(self.allocator),
+            .tasks = try tasks.toOwnedSlice(self.allocator),
+            .span = self.spanFrom(start),
         };
     }
 

@@ -37,10 +37,10 @@ fn hexValue(c: u8) u32 {
     };
 }
 pub const Lexer = struct {
-    source: lib.source_file.SourceView,
+    source: []const u8,
     pos: u32,
 
-    pub fn init(source: lib.source_file.SourceView) Lexer {
+    pub fn init(source: []const u8) Lexer {
         return .{ .source = source, .pos = 0 };
     }
 
@@ -141,7 +141,7 @@ pub const Lexer = struct {
 
         pub fn checkTerminator(self: *StringLexer, terminator: []const u8) bool {
             std.debug.assert(terminator.len > 0);
-            return std.mem.startsWith(u8, self.lexer.source.text[self.lexer.pos..], terminator);
+            return std.mem.startsWith(u8, self.lexer.source[self.lexer.pos..], terminator);
         }
 
         /// Reads as string while handling escape sequences till terminator found.
@@ -258,7 +258,7 @@ pub const Lexer = struct {
     // ── Private helpers ───────────────────────────────────────────────────────
 
     inline fn length(self: *Lexer) usize {
-        return self.source.text.len;
+        return self.source.len;
     }
 
     inline fn isValidPos(self: *Lexer, pos: usize) bool {
@@ -267,13 +267,13 @@ pub const Lexer = struct {
 
     fn peek(self: *Lexer) u8 {
         if (self.isValidPos(self.pos) == false) return 0;
-        return self.source.text[self.pos];
+        return self.source[self.pos];
     }
 
     fn peekAt(self: *Lexer, offset: u32) u8 {
         const i = self.pos + offset;
         if (self.isValidPos(i) == false) return 0;
-        return self.source.text[i];
+        return self.source[i];
     }
 
     fn skipWhitespace(self: *Lexer) void {
@@ -305,7 +305,7 @@ pub const Lexer = struct {
                 .start = start,
                 .len = len,
             },
-            .lexeme = self.source.text[start .. start + len],
+            .lexeme = self.source[start .. start + len],
         };
     }
 
@@ -339,7 +339,7 @@ pub const Lexer = struct {
                 else => break,
             }
         }
-        const text = self.source.text[start..self.pos];
+        const text = self.source[start..self.pos];
         const kind = keywords.get(text) orelse .ident;
         return self.makeToken(kind, start, self.pos - start);
     }

@@ -1,6 +1,6 @@
-const lib = @import("lib");
-const Span = lib.Span;
-const WithSpan = lib.WithSpan;
+const Diagnostics = @import("Diagnostics.zig");
+const Span = Diagnostics.Span;
+const WithSpan = Span.Wrapped;
 
 // ── Token kinds ───────────────────────────────────────────────────────────────
 
@@ -78,7 +78,7 @@ pub const TokenKind = enum {
 
 pub const Token = struct {
     kind: TokenKind,
-    span: lib.Span,
+    span: Span,
     lexeme: []const u8,
 
     pub fn sliceWithSpan(self: Token) WithSpan([]const u8) {
