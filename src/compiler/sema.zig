@@ -31,33 +31,18 @@ const SemaError = error{
 } || std.mem.Allocator.Error;
 
 pub const Sema = struct {
-    pub fn Result(comptime T: type) type {
-        return struct {
-            const Self = @This();
+    arena: *std.heap.ArenaAllocator,
+    diagnostics: *Diagnostics,
 
-            arena: *std.heap.ArenaAllocator,
-            result: T,
-
-            pub fn deinit(self: *const Self) void {
-                const allocator = self.arena.child_allocator;
-                self.arena.deinit();
-                allocator.destroy(self.arena);
-            }
-        };
-    }
-
-    allocator: std.mem.Allocator,
-    diagnostics: *lib.Diagnostic.List,
-
-    pub fn init(allocator: std.mem.Allocator, diagnostics: *lib.Diagnostic.List) !Sema {
+    pub fn init(arena: *std.heap.ArenaAllocator, diagnostics: *Diagnostics) !Sema {
         return Sema{
-            .allocator = allocator,
+            .arena = arena,
             .diagnostics = diagnostics,
         };
     }
 
     fn createScope(self: *Sema, parent: ?*Scope) !*Scope {
-        const ptr = try self.allocator.create(Scope);
+        const ptr = try self.arena.allocator().create(Scope);
         ptr.* = .init(parent);
         return ptr;
     }
@@ -69,10 +54,10 @@ pub const Sema = struct {
 
         const options = try self.analyseOptions(file.options);
 
-        var decls = try std.ArrayList(*ir.Decl).initCapacity(self.allocator, file.decls.len);
-        for (file.decls) |decl| try decls.append(self.allocator, try self.analyseDecl(root_scope, decl));
+        var decls = try std.ArrayList(*ir.Decl).initCapacity(self.arena.allocator(), file.decls.len);
+        for (file.decls) |decl| try decls.append(self.arena.allocator(), try self.analyseDecl(root_scope, decl));
 
-        var tasks = try std.ArrayList(*ir.Task).initCapacity(self.allocator, file.tasks.len);
+        var tasks = try std.ArrayList(*ir.Task).initCapacity(self.arena.allocator(), file.tasks.len);
         for (file.tasks) |task| {
             const ptr = self.collectTaskSignature(root_scope, task) catch |err| switch (err) {
                 SemaError.PlatformMismatch => {
@@ -114,15 +99,15 @@ pub const Sema = struct {
                     },
                 });
             }
-            try groups.append(self.allocator, ptr);
+            try groups.append(self.arena.allocator(), ptr);
         }
 
         return ir.File{
             .scope = root_scope,
             .options = options,
-            .decls = try decls.toOwnedSlice(self.allocator),
-            .tasks = try tasks.toOwnedSlice(self.allocator),
-            .groups = try groups.toOwnedSlice(self.allocator),
+            .decls = try decls.toOwnedSlice(self.arena.allocator()),
+            .tasks = try tasks.toOwnedSlice(self.arena.allocator()),
+            .groups = try groups.toOwnedSlice(self.arena.allocator()),
         };
     }
 
@@ -138,27 +123,12 @@ pub const Sema = struct {
         }
     }
 
-    pub fn analyse(self: *Sema, ast_file: ast.File) !Result(ir.File) {
-        const arena = try self.allocator.create(std.heap.ArenaAllocator);
-        arena.* = .init(self.allocator);
-
-        const previous_allocator = self.allocator;
-        self.allocator = arena.allocator();
-        defer self.allocator = previous_allocator;
-
-        errdefer {
-            arena.deinit();
-            previous_allocator.destroy(arena);
-        }
-
+    pub fn analyse(self: *Sema, ast_file: ast.File) !ir.File {
         var file = try self.firstPass(ast_file);
 
         try self.secondPass(&file, ast_file);
 
-        return .{
-            .arena = arena,
-            .result = file,
-        };
+        return file;
     }
 
     fn analyseOptions(self: *Sema, options: []const ast.Set) !ir.Options {
@@ -268,7 +238,7 @@ pub const Sema = struct {
         const result = try self.analyseExpr(scope, decl.value);
 
         //TODO: copy pattern in other origins
-        const ptr = try self.allocator.create(ir.Decl);
+        const ptr = try self.arena.allocator().create(ir.Decl);
 
         ptr.* = .{
             .name = decl.name,
@@ -367,7 +337,7 @@ pub const Sema = struct {
     };
 
     fn analyseArgs(self: *Sema, scope: *Scope, args: []ast.Argument, group: bool) ![]*ir.Argument {
-        var out = try std.ArrayList(*ir.Argument).initCapacity(self.allocator, args.len);
+        var out = try std.ArrayList(*ir.Argument).initCapacity(self.arena.allocator(), args.len);
 
         // implicitly named when:
         //      any previous is named,
@@ -379,7 +349,7 @@ pub const Sema = struct {
                 SemaError.PlatformMismatch => unreachable,
                 else => return err,
             };
-            defer attributes.deinit(self.allocator);
+            defer attributes.deinit(self.arena.allocator());
 
             const name_required = group or arg.type.isNamedOnly();
 
@@ -469,7 +439,7 @@ pub const Sema = struct {
             //validate arg order
             try self.validateArgOrder(arg, &phase, has_name, default != null);
 
-            const ptr = try self.allocator.create(ir.Argument);
+            const ptr = try self.arena.allocator().create(ir.Argument);
             ptr.* = .{
                 .name = arg.name,
                 .type = arg.type,
@@ -499,11 +469,11 @@ pub const Sema = struct {
             );
 
             try out.append(
-                self.allocator,
+                self.arena.allocator(),
                 ptr,
             );
         }
-        return out.toOwnedSlice(self.allocator);
+        return out.toOwnedSlice(self.arena.allocator());
     }
 
     const ArgPhase = enum {
@@ -608,23 +578,23 @@ pub const Sema = struct {
 
         const args = try self.analyseArgs(groupScope, group.args, true);
 
-        var decls = try std.ArrayList(*ir.Decl).initCapacity(self.allocator, group.decls.len);
-        for (group.decls) |decl| try decls.append(self.allocator, try self.analyseDecl(groupScope, decl));
+        var decls = try std.ArrayList(*ir.Decl).initCapacity(self.arena.allocator(), group.decls.len);
+        for (group.decls) |decl| try decls.append(self.arena.allocator(), try self.analyseDecl(groupScope, decl));
 
-        const ptr = try self.allocator.create(ir.Group);
+        const ptr = try self.arena.allocator().create(ir.Group);
 
         ptr.* = .{
             .scope = groupScope,
             .name = group.name,
             .args = args,
-            .decls = try decls.toOwnedSlice(self.allocator),
+            .decls = try decls.toOwnedSlice(self.arena.allocator()),
             .tasks = undefined, // yet
             .desc = "<not supported yet>", // TODO: add support
         };
 
         const tasks_target_scope = if (group.name) |_| groupScope else scope;
 
-        var tasks = try std.ArrayList(*ir.Task).initCapacity(self.allocator, group.tasks.len);
+        var tasks = try std.ArrayList(*ir.Task).initCapacity(self.arena.allocator(), group.tasks.len);
         for (group.tasks) |task| {
             const task_ptr = self.collectTaskSignature(groupScope, task) catch |err| switch (err) {
                 SemaError.PlatformMismatch => {
@@ -649,12 +619,12 @@ pub const Sema = struct {
             );
 
             try tasks.append(
-                self.allocator,
+                self.arena.allocator(),
                 task_ptr,
             );
         }
 
-        ptr.*.tasks = try tasks.toOwnedSlice(self.allocator);
+        ptr.*.tasks = try tasks.toOwnedSlice(self.arena.allocator());
 
         return ptr;
     }
@@ -665,7 +635,7 @@ pub const Sema = struct {
 
     fn collectTaskSignature(self: *Sema, scope: *Scope, task: ast.Task) !*ir.Task {
         var attributes = try AttributesResolver.resolve(self, .task, task.attrs);
-        defer attributes.deinit(self.allocator);
+        defer attributes.deinit(self.arena.allocator());
 
         const taskScope = try self.createScope(scope);
 
@@ -678,7 +648,7 @@ pub const Sema = struct {
 
         const args = try self.analyseArgs(taskScope, task.args, false);
 
-        const ptr = try self.allocator.create(ir.Task);
+        const ptr = try self.arena.allocator().create(ir.Task);
 
         ptr.* = .{
             .name = task.name,
@@ -708,16 +678,16 @@ pub const Sema = struct {
     }
 
     fn analyseStatements(self: *Sema, scope: *Scope, stmts: []ast.Statement) ![]ir.Statement {
-        var out = try std.ArrayList(ir.Statement).initCapacity(self.allocator, stmts.len);
+        var out = try std.ArrayList(ir.Statement).initCapacity(self.arena.allocator(), stmts.len);
 
         for (stmts) |stmt| {
             try out.append(
-                self.allocator,
+                self.arena.allocator(),
                 try self.analyseStatement(scope, stmt),
             );
         }
 
-        return try out.toOwnedSlice(self.allocator);
+        return try out.toOwnedSlice(self.arena.allocator());
     }
 
     fn analyseStatement(self: *Sema, scope: *Scope, stmt: ast.Statement) !ir.Statement {
@@ -780,7 +750,7 @@ pub const Sema = struct {
         };
 
         // validate args
-        var outArgs = ir.TaskCallArgs.init(self.allocator);
+        var outArgs = ir.TaskCallArgs.init(self.arena.allocator());
 
         // read positional
         const positionalCount = blk: {
@@ -927,22 +897,22 @@ pub const Sema = struct {
                 return .{
                     .is_static = true,
                     .string = .{
-                        .lit = text.processString(self.allocator, str) catch {
-                            try self.diagnostics.Err(.{ .span = .Unknown }, "Invalid string escape sequence: {s}", .{str});
+                        .lit = text.processString(self.arena.allocator(), str) catch {
+                            try self.diagnostics.err(.{ .span = .Unknown }, "Invalid string escape sequence: {s}", .{str});
                             return SemaError.SemanticError;
                         },
                     },
                 };
             },
             .inter => |segs| {
-                var segments = try std.ArrayList(ir.InterStringSeg).initCapacity(self.allocator, segs.len);
+                var segments = try std.ArrayList(ir.InterStringSeg).initCapacity(self.arena.allocator(), segs.len);
 
                 var is_static: bool = true;
                 for (segs) |seg| {
                     switch (seg) {
                         .lit => |str| {
-                            try segments.append(self.allocator, .{ .lit = text.processString(self.allocator, str) catch {
-                                try self.diagnostics.Err(
+                            try segments.append(self.arena.allocator(), .{ .lit = text.processString(self.arena.allocator(), str) catch {
+                                try self.diagnostics.err(
                                     .{ .span = .Unknown },
                                     "Invalid string escape sequence: {s}",
                                     .{str},
@@ -958,7 +928,7 @@ pub const Sema = struct {
                             }
 
                             try segments.append(
-                                self.allocator,
+                                self.arena.allocator(),
                                 .{
                                     .expr = res.expr,
                                 },
@@ -969,7 +939,7 @@ pub const Sema = struct {
                 return .{
                     .is_static = is_static,
                     .string = .{
-                        .inter = try segments.toOwnedSlice(self.allocator),
+                        .inter = try segments.toOwnedSlice(self.arena.allocator()),
                     },
                 };
             },
@@ -1057,12 +1027,12 @@ pub const Sema = struct {
             },
             .list => |list| {
                 std.debug.assert(list.value.len != 0);
-                var out = try std.ArrayList(ir.Expr).initCapacity(self.allocator, list.value.len);
+                var out = try std.ArrayList(ir.Expr).initCapacity(self.arena.allocator(), list.value.len);
 
                 var is_static: bool = false;
 
-                const list_type = try self.allocator.create(typing.Type);
-                errdefer self.allocator.destroy(list_type);
+                const list_type = try self.arena.allocator().create(typing.Type);
+                errdefer self.arena.allocator().destroy(list_type);
 
                 list_type.* = blk: {
                     const first = try self.analyseExpr(scope, list.value[0]);
@@ -1085,7 +1055,7 @@ pub const Sema = struct {
                     .expr = .{
                         .list = .{
                             .items_type = list_type.*,
-                            .items = try out.toOwnedSlice(self.allocator),
+                            .items = try out.toOwnedSlice(self.arena.allocator()),
                         },
                     },
                     .type = .{ .list = list_type },
@@ -1141,14 +1111,14 @@ pub const Sema = struct {
                 const binary_result = binary.binaryResultType(b.op, left.type, right.type) catch |err| {
                     switch (err) {
                         binary.Error.TypeMismatch => {
-                            try self.diagnostics.Err(.{ .span = b.span }, "invalid operator '{f}' for types: {f} and {f}", .{ b.op, left.type, right.type });
+                            try self.diagnostics.err(.{ .span = b.span }, "invalid operator '{f}' for types: {f} and {f}", .{ b.op, left.type, right.type });
                             return SemaError.SemanticError;
                         },
                     }
                     return err;
                 };
 
-                const node = try self.allocator.create(ir.BinaryExpr);
+                const node = try self.arena.allocator().create(ir.BinaryExpr);
 
                 node.* = .{
                     .op = b.op,
@@ -1179,7 +1149,7 @@ pub const Sema = struct {
                     },
                 };
 
-                const node = try self.allocator.create(ir.UnaryExpr);
+                const node = try self.arena.allocator().create(ir.UnaryExpr);
                 node.* = .{
                     .op = @as(ir.UnaryOp, u.op),
                     .operand = operand.expr,
@@ -1210,7 +1180,7 @@ pub const Sema = struct {
                     );
                 }
 
-                const node = try self.allocator.create(ir.IfExpr);
+                const node = try self.arena.allocator().create(ir.IfExpr);
                 node.* = .{
                     .cond = cond.expr,
                     .then = then.expr,
@@ -1308,6 +1278,6 @@ pub const Sema = struct {
             return SemaError.SemanticError;
         }
 
-        try scope.define(self.allocator, symbol);
+        try scope.define(self.arena.allocator(), symbol);
     }
 };
