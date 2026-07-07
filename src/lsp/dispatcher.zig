@@ -150,6 +150,57 @@ pub fn @"textDocument/didClose"(
     try self.workspace.closeFile(self.allocator, file_id);
 }
 
+pub fn @"textDocument/hover"(
+    self: *Dispatcher,
+    _: std.mem.Allocator,
+    params: lsp.types.Hover.Params,
+) ?lsp.types.Hover {
+    std.log.debug("Received 'textDocument/hover' request", .{});
+
+    const file_id = blk: {
+        if (self.workspace.getId(params.textDocument.uri)) |file_id|
+            break :blk file_id;
+
+        std.log.warn("Hover on non existent document: '{s}'", .{params.textDocument.uri});
+        return null;
+    };
+
+    const view = self.workspace.view(file_id, .source);
+
+    const source_index = lsp.offsets.positionToIndex(view.source, params.position, self.offset_encodings);
+    std.log.debug("Hover position: line={d}, character={d}, index={d}", .{
+        params.position.line, params.position.character, source_index,
+    });
+
+    return .{
+        .contents = .{
+            .markup_content = .{
+                .kind = .plaintext,
+                .value = "hello",
+            },
+        },
+    };
+}
+
+pub fn @"textDocument/completion"(
+    _: *Dispatcher,
+    arena: std.mem.Allocator,
+    params: lsp.types.completion.Params,
+) !?lsp.types.completion.Result {
+    std.log.debug("Received 'textDocument/completion' notification", .{});
+
+    if (params.context) |ctx| {
+        std.log.info("completion triggered by {?s} {t}", .{ ctx.triggerCharacter, ctx.triggerKind });
+    }
+
+    const completions = try arena.dupe(lsp.types.completion.Item, &.{
+        .{ .label = "get", .detail = "get the value" },
+        .{ .label = "set", .detail = "set the value" },
+    });
+
+    return .{ .completion_items = completions };
+}
+
 pub fn onResponse(_: *Dispatcher, _: std.mem.Allocator, response: lsp.JsonRPCMessage.Response) void {
     std.log.warn("received unexpected response from client with id '{?}'!", .{response.id});
 }
