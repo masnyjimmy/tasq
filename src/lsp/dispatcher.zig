@@ -4,19 +4,19 @@ const lsp = @import("lsp_kit");
 
 const compiler = @import("compiler");
 const ir = compiler.ir;
+const Workspace = compiler.Workspace;
 
 const Dispatcher = @This();
 
 allocator: std.mem.Allocator,
-files: std.hash_map.StringHashMapUnmanaged([]u8) = .empty,
-asts: std.hash_map.StringHashMapUnmanaged(compiler.Parser.Result),
-irs: std.hash_map.StringHashMapUnmanaged(compiler.Result),
+workspace: *Workspace,
 
 offset_encodings: lsp.offsets.Encoding = .@"utf-16",
 
-pub fn init(allocator: std.mem.Allocator) Dispatcher {
+pub fn init(allocator: std.mem.Allocator, workspace: *Workspace) Dispatcher {
     return .{
         .allocator = allocator,
+        .workspace = workspace,
     };
 }
 
