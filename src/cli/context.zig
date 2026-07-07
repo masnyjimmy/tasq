@@ -3,7 +3,7 @@ const conzole = @import("conzole");
 const lib = @import("lib");
 const compiler = @import("compiler");
 
-gpa: std.mem.Allocator,
+allocator: std.mem.Allocator,
 io: std.Io,
 environ: *const std.process.Environ.Map,
 printer: *conzole.terminal.Printer,

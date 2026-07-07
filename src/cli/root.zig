@@ -31,7 +31,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
     lib.debug.dump(args, 4);
     cmd.execute(allocator, args[1..], &diag, .{
         .diagnostics = &diagnostics,
-        .gpa = allocator,
+        .allocator = allocator,
         .io = io,
         .environ = environ,
         .printer = &printer,
