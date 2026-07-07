@@ -60,7 +60,11 @@ fn RunList(ctx: *const Context) !void {
     try task_mod.printTasksList(&ctx.app);
 }
 
-fn RunLsp(_: *const Context) !void {}
+fn RunLsp(ctx: *const Context) !void {
+    const lsp = @import("lsp");
+
+    try lsp.run(ctx.app.gpa, ctx.app.io);
+}
 
 pub fn buildCommand(allocator: std.mem.Allocator) !*Command {
     var rootCmd = try Command.create(allocator, .{
@@ -94,6 +98,18 @@ pub fn buildCommand(allocator: std.mem.Allocator) !*Command {
         .brief = "Display usage of task",
         .run = .set(ShowUsage),
     });
+
+    var lspCmd = try rootCmd.createSub(.{
+        .name = "--lsp",
+        .brief = "Starts lsp server protocol on stdio",
+        .run = .set(RunLsp),
+    });
+
+    try lspCmd.addFlag(.{
+        .name = "stdio",
+        .brief = "choose stdio as transport layer",
+        .short = null,
+    }, .flag);
 
     return rootCmd;
 }
