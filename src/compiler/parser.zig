@@ -34,7 +34,7 @@ pub const Parser = struct {
     current: ?Token,
     next: Token,
 
-    pub fn init(arena: *std.heap.ArenaAllocator, lexer: *Lexer, diagnostics: *Diagnostics) !Parser {
+    pub fn init(arena: *std.heap.ArenaAllocator, lexer: *Lexer, diagnostics: *Diagnostics) Parser {
         const first = lexer.next();
 
         return .{
