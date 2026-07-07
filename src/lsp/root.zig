@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Dispatcher = @import("dispatcher.zig");
+const Dispatcher = @import("Dispatcher.zig");
 const lsp = @import("lsp_kit");
 
 pub fn run(

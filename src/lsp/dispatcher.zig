@@ -9,6 +9,8 @@ const Dispatcher = @This();
 
 allocator: std.mem.Allocator,
 files: std.hash_map.StringHashMapUnmanaged([]u8) = .empty,
+asts: std.hash_map.StringHashMapUnmanaged(compiler.Parser.Result),
+irs: std.hash_map.StringHashMapUnmanaged(compiler.Result),
 
 offset_encodings: lsp.offsets.Encoding = .@"utf-16",
 
