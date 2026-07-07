@@ -14,44 +14,10 @@ pub const Severity = enum {
     }
 };
 
-pub const Span = packed struct {
-    sourceId: source_file.SourceId,
-    start: u32,
-    len: u32,
-
-    pub const Unknown: Span = .{
-        .sourceId = source_file.INVALID_FILE_ID,
-        .start = 0,
-        .len = 0,
-    };
-
-    pub fn end(self: @This()) u32 {
-        return self.start + self.len;
-    }
-
-    pub fn between(first: Span, last: Span) Span {
-        std.debug.assert(first.sourceId == last.sourceId);
-
-        return .{
-            .sourceId = first.sourceId,
-            .start = first.start,
-            .len = (last.start - first.start) + last.len,
-        };
-    }
-};
-
 pub const Details = union(enum) {
-    span: Span,
     argument: ?usize,
     runtime,
 };
-
-pub fn WithSpan(comptime T: type) type {
-    return struct {
-        value: T,
-        span: Span,
-    };
-}
 
 pub const Diagnostic = struct {
     details: Details,
