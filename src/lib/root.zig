@@ -2,10 +2,7 @@ const diag = @import("diagnostic.zig");
 const utils = @import("utils.zig");
 
 pub const Diagnostic = diag.Diagnostic;
-pub const Span = diag.Span;
 pub const Severity = diag.Severity;
-
-pub const WithSpan = diag.WithSpan;
 
 pub const Enum = struct {
     const Size = utils.EnumSize;
