@@ -61,7 +61,7 @@ pub const Sema = struct {
         for (file.tasks) |task| {
             const ptr = self.collectTaskSignature(root_scope, task) catch |err| switch (err) {
                 SemaError.PlatformMismatch => {
-                    try self.diagnostics.hint(.{ .span = task.span }, "skipping task, platform mismatch", .{});
+                    try self.diagnostics.hint(task.span, "skipping task, platform mismatch", .{});
                     continue;
                 },
                 else => return err,
@@ -82,7 +82,7 @@ pub const Sema = struct {
         for (file.groups) |group| {
             const ptr = self.collectGroupSignature(root_scope, group) catch |err| switch (err) {
                 SemaError.PlatformMismatch => {
-                    try self.diagnostics.hint(.{ .span = group.span }, "skipping group, platform mismatch", .{});
+                    try self.diagnostics.hint(group.span, "skipping group, platform mismatch", .{});
                     continue;
                 },
                 else => return err,
@@ -357,7 +357,7 @@ pub const Sema = struct {
             const default: ?typing.Value = blk: {
                 if (arg.type == .flag) {
                     if (arg.default) |def| {
-                        try self.diagnostics.err(.{ .span = def.span() }, "flag value have implicit default value", .{});
+                        try self.diagnostics.err(def.span(), "flag value have implicit default value", .{});
                         return SemaError.SemanticError;
                     }
                     break :blk .{ .bool = false };
@@ -423,12 +423,12 @@ pub const Sema = struct {
 
                 if (!has_name) {
                     if (group) {
-                        try self.diagnostics.err(.{ .span = arg.span }, "group arguments must be named", .{});
+                        try self.diagnostics.err(arg.span, "group arguments must be named", .{});
                         return SemaError.SemanticError;
                     }
 
                     if (name_required) {
-                        try self.diagnostics.err(.{ .span = arg.span }, "'{f}' type expect long or/and short attribute", .{arg.type});
+                        try self.diagnostics.err(arg.span, "'{f}' type expect long or/and short attribute", .{arg.type});
                         return SemaError.SemanticError;
                     }
                 }
@@ -486,7 +486,7 @@ pub const Sema = struct {
         const class = blk: {
             if (named == false) {
                 if (optional) {
-                    try self.diagnostics.err(.{ .span = arg.span }, "positional arguments cannot have default values", .{});
+                    try self.diagnostics.err(arg.span, "positional arguments cannot have default values", .{});
                     return SemaError.SemanticError;
                 }
                 break :blk ArgPhase.positional;
@@ -503,18 +503,18 @@ pub const Sema = struct {
             .positional => {},
             .named_required => switch (class) {
                 .positional => {
-                    try self.diagnostics.err(.{ .span = arg.span }, "positional argument cannot follow a named argument", .{});
+                    try self.diagnostics.err(arg.span, "positional argument cannot follow a named argument", .{});
                     return SemaError.SemanticError;
                 },
                 else => {},
             },
             .named_optional => switch (class) {
                 .positional => {
-                    try self.diagnostics.err(.{ .span = arg.span }, "positional argument cannot follow a named argument", .{});
+                    try self.diagnostics.err(arg.span, "positional argument cannot follow a named argument", .{});
                     return SemaError.SemanticError;
                 },
                 .named_required => {
-                    try self.diagnostics.err(.{ .span = arg.span }, "required argument cannot follow a optional argument", .{});
+                    try self.diagnostics.err(arg.span, "required argument cannot follow a optional argument", .{});
                     return SemaError.SemanticError;
                 },
                 else => {},
@@ -531,19 +531,19 @@ pub const Sema = struct {
             .string => |str| switch (str.value) {
                 .lit => .string,
                 .inter => {
-                    try self.diagnostics.err(.{ .span = expr.span() }, "invalid type, expected '{f}' literal, found string interpolation expr", .{expected_type});
+                    try self.diagnostics.err(expr.span(), "invalid type, expected '{f}' literal, found string interpolation expr", .{expected_type});
                     return SemaError.SemanticError;
                 },
             },
             .list => .list,
             else => {
-                try self.diagnostics.err(.{ .span = expr.span() }, "invalid value type, default value must be literal", .{});
+                try self.diagnostics.err(expr.span(), "invalid value type, default value must be literal", .{});
                 return SemaError.SemanticError;
             },
         };
 
         if (expr_type != expected_type) {
-            try self.diagnostics.err(.{ .span = expr.span() }, "invalid value type, expected '{f}' literal, found {s}", .{ expected_type, @tagName(expr_type) });
+            try self.diagnostics.err(expr.span(), "invalid value type, expected '{f}' literal, found {s}", .{ expected_type, @tagName(expr_type) });
             return SemaError.SemanticError;
         }
 
@@ -557,7 +557,7 @@ pub const Sema = struct {
 
                 for (expr.list.value) |v| {
                     const lit = self.assertLiteral(items_type.*, v) catch |err| {
-                        try self.diagnostics.err(.{ .span = expr.span() }, "invalid list items type", .{});
+                        try self.diagnostics.err(expr.span(), "invalid list items type", .{});
                         return err;
                     };
                     out.appendAssumeCapacity(lit);
@@ -598,7 +598,7 @@ pub const Sema = struct {
         for (group.tasks) |task| {
             const task_ptr = self.collectTaskSignature(groupScope, task) catch |err| switch (err) {
                 SemaError.PlatformMismatch => {
-                    try self.diagnostics.hint(.{ .span = task.span }, "skipping task, platform mismatch", .{});
+                    try self.diagnostics.hint(task.span, "skipping task, platform mismatch", .{});
                     continue;
                 },
                 else => return err,
@@ -710,7 +710,7 @@ pub const Sema = struct {
                         std.debug.assert(symbol.details == .task);
                         break :blk symbol.details.task.origin;
                     } else {
-                        try self.diagnostics.err(.{ .span = call.span }, "unknown task '{s}'", .{target_task_name});
+                        try self.diagnostics.err(call.span, "unknown task '{s}'", .{target_task_name});
                         return SemaError.SemanticError;
                     }
                 },
@@ -719,7 +719,7 @@ pub const Sema = struct {
                         std.debug.assert(symbol.details == .task);
                         break :blk symbol.details.task.origin;
                     } else {
-                        try self.diagnostics.err(.{ .span = call.span }, "unknown task '::{s}'", .{target_task_name});
+                        try self.diagnostics.err(call.span, "unknown task '::{s}'", .{target_task_name});
                         return SemaError.SemanticError;
                     }
                 },
@@ -729,7 +729,7 @@ pub const Sema = struct {
                             std.debug.assert(symbol.details == .group);
                             break :grp symbol.details.group.origin;
                         } else {
-                            try self.diagnostics.err(.{ .span = call.span }, "unknown group '{s}'", .{gname});
+                            try self.diagnostics.err(call.span, "unknown group '{s}'", .{gname});
                             return SemaError.SemanticError;
                         }
                     };
@@ -739,7 +739,7 @@ pub const Sema = struct {
                             std.debug.assert(symbol.details == .task);
                             break :tsk symbol.details.task.origin;
                         } else {
-                            try self.diagnostics.err(.{ .span = call.span }, "unknown task '{s}::{s}'", .{ gname, target_task_name });
+                            try self.diagnostics.err(call.span, "unknown task '{s}::{s}'", .{ gname, target_task_name });
                             return SemaError.SemanticError;
                         }
                     };
@@ -760,14 +760,14 @@ pub const Sema = struct {
                 const result = try self.analyseExpr(scope, arg.value);
 
                 if (idx >= task.args.len) {
-                    try self.diagnostics.err(.{ .span = arg.span }, "invalid positional arguments count, got '{}', expected {}", .{ idx + 1, task.args.len });
+                    try self.diagnostics.err(arg.span, "invalid positional arguments count, got '{}', expected {}", .{ idx + 1, task.args.len });
                     return SemaError.SemanticError;
                 }
 
                 const t = task.args[idx];
 
                 if (!typing.Type.eq(t.type.typeOf(), result.type)) {
-                    try self.diagnostics.err(.{ .span = arg.span }, "invalid type", .{});
+                    try self.diagnostics.err(arg.span, "invalid type", .{});
                     return SemaError.SemanticError;
                 }
 
@@ -796,7 +796,7 @@ pub const Sema = struct {
             var out = std.StringHashMap(ast.TaskCallArg).init(self.arena.allocator());
             for (call.args[positionalCount..]) |arg| {
                 if (out.contains(arg.name.?)) {
-                    try self.diagnostics.err(.{ .span = arg.span }, "duplicate argument '{s}'", .{arg.name.?});
+                    try self.diagnostics.err(arg.span, "duplicate argument '{s}'", .{arg.name.?});
                     return SemaError.SemanticError;
                 }
 
@@ -813,7 +813,7 @@ pub const Sema = struct {
                 const result = try self.analyseExpr(scope, inArg.value);
                 if (!typing.Type.eq(result.type, arg.type.typeOf())) {
                     try self.diagnostics.err(
-                        .{ .span = inArg.span },
+                        inArg.span,
                         "invalid argument type, got '{s}', expected '{s}'",
                         .{
                             @tagName(result.type),
@@ -824,7 +824,7 @@ pub const Sema = struct {
                 }
                 try outArgs.put(arg.name, result.expr);
             } else if (arg.default == null) {
-                try self.diagnostics.err(.{ .span = call.span }, "missing argument '{s}'", .{arg.name});
+                try self.diagnostics.err(call.span, "missing argument '{s}'", .{arg.name});
                 return SemaError.SemanticError;
             }
         }
@@ -837,7 +837,7 @@ pub const Sema = struct {
                     const result = try self.analyseExpr(scope, inArg.value);
                     if (!typing.Type.eq(result.type, arg.type.typeOf())) {
                         try self.diagnostics.err(
-                            .{ .span = inArg.span },
+                            inArg.span,
                             "invalid argument type, got '{s}', expected '{s}'",
                             .{
                                 @tagName(result.type),
@@ -847,7 +847,7 @@ pub const Sema = struct {
                         return SemaError.SemanticError;
                     }
                 } else if (arg.default == null) {
-                    try self.diagnostics.err(.{ .span = call.span }, "missing group argument '{s}'", .{arg.name});
+                    try self.diagnostics.err(call.span, "missing group argument '{s}'", .{arg.name});
                     return SemaError.SemanticError;
                 }
             }
@@ -856,7 +856,7 @@ pub const Sema = struct {
         if (restCallArgs.unmanaged.size != 0) {
             var iter = restCallArgs.iterator();
             while (iter.next()) |v| {
-                try self.diagnostics.err(.{ .span = v.value_ptr.span }, "invalid argument '{s}'", .{v.key_ptr.*});
+                try self.diagnostics.err(v.value_ptr.span, "invalid argument '{s}'", .{v.key_ptr.*});
             }
             return SemaError.SemanticError;
         }
@@ -1111,7 +1111,7 @@ pub const Sema = struct {
                 const binary_result = binary.binaryResultType(b.op, left.type, right.type) catch |err| {
                     switch (err) {
                         binary.Error.TypeMismatch => {
-                            try self.diagnostics.err(.{ .span = b.span }, "invalid operator '{f}' for types: {f} and {f}", .{ b.op, left.type, right.type });
+                            try self.diagnostics.err(b.span, "invalid operator '{f}' for types: {f} and {f}", .{ b.op, left.type, right.type });
                             return SemaError.SemanticError;
                         },
                     }
@@ -1137,13 +1137,13 @@ pub const Sema = struct {
                 const result_type: ir.Type = switch (u.op) {
                     .not_op => blk: {
                         if (operand.type != .bool) {
-                            try self.diagnostics.err(.{ .span = u.span }, "'not' requires a bool or flag", .{});
+                            try self.diagnostics.err(u.span, "'not' requires a bool or flag", .{});
                         }
                         break :blk .bool;
                     },
                     .negate => blk: {
                         if (operand.type != .number) {
-                            try self.diagnostics.err(.{ .span = u.span }, "unary '-' requires number", .{});
+                            try self.diagnostics.err(u.span, "unary '-' requires number", .{});
                         }
                         break :blk operand.type;
                     },
@@ -1167,11 +1167,11 @@ pub const Sema = struct {
                 const else_ = try self.analyseExpr(scope, i.else_);
 
                 if (cond.type != .bool) {
-                    try self.diagnostics.err(.{ .span = i.span }, "if condition must be a bool or flag", .{});
+                    try self.diagnostics.err(i.span, "if condition must be a bool or flag", .{});
                 }
                 if (!typing.Type.eq(then.type, else_.type)) {
                     try self.diagnostics.err(
-                        .{ .span = i.span },
+                        i.span,
                         "if branches must have the same type: got {s} and {s}",
                         .{
                             @tagName(then.type),
@@ -1273,8 +1273,8 @@ pub const Sema = struct {
         };
 
         if (previous_symbol) |prev| {
-            try self.diagnostics.err(.{ .span = symbol.span }, "'{s}' {s} already defined", .{ symbol.name, @tagName(symbol_type) });
-            try self.diagnostics.hint(.{ .span = prev.span }, "{s} defined already here", .{@tagName(symbol_type)});
+            try self.diagnostics.err(symbol.span, "'{s}' {s} already defined", .{ symbol.name, @tagName(symbol_type) });
+            try self.diagnostics.hint(prev.span, "{s} defined already here", .{@tagName(symbol_type)});
             return SemaError.SemanticError;
         }
 
