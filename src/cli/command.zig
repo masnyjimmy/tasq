@@ -99,5 +99,11 @@ pub fn buildCommand(allocator: std.mem.Allocator) !*Command {
         .run = .set(ShowUsage),
     });
 
+    _ = try rootCmd.createSub(.{
+        .name = "--lsp",
+        .brief = "Starts lsp server protocol on stdin / stdout",
+        .run = .set(RunLsp),
+    });
+
     return rootCmd;
 }

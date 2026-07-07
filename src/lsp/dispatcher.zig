@@ -110,3 +110,7 @@ pub fn @"textDocument/didClose"(
     self.allocator.free(entry.key);
     self.allocator.free(entry.value);
 }
+
+pub fn onResponse(_: *Dispatcher, _: std.mem.Allocator, response: lsp.JsonRPCMessage.Response) void {
+    std.log.warn("received unexpected response from client with id '{?}'!", .{response.id});
+}
