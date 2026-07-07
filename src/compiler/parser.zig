@@ -173,10 +173,10 @@ pub const Parser = struct {
     pub fn parseFile(self: *Parser) !ast.File {
         const start = self.currentPos();
 
-        var options = try std.ArrayList(ast.Set).initCapacity(self.allocator, 1);
-        var decls = try std.ArrayList(ast.Decl).initCapacity(self.allocator, 1);
-        var groups = try std.ArrayList(ast.Group).initCapacity(self.allocator, 8);
-        var tasks = try std.ArrayList(ast.Task).initCapacity(self.allocator, 5);
+        var options = try std.ArrayList(ast.Set).initCapacity(self.arena.allocator(), 1);
+        var decls = try std.ArrayList(ast.Decl).initCapacity(self.arena.allocator(), 1);
+        var groups = try std.ArrayList(ast.Group).initCapacity(self.arena.allocator(), 8);
+        var tasks = try std.ArrayList(ast.Task).initCapacity(self.arena.allocator(), 5);
 
         while (self.peek() != .eof) {
             const attrs = try self.collectAttributes();
@@ -186,7 +186,7 @@ pub const Parser = struct {
             switch (tok.kind) {
                 .set_kw => {
                     const set = try self.parseSet(attrs, tok_start);
-                    try options.append(self.allocator, set);
+                    try options.append(self.arena.allocator(), set);
                     continue;
                 },
                 .ident => {
@@ -203,17 +203,17 @@ pub const Parser = struct {
                         .span = self.spanFrom(tok_start),
                     };
 
-                    try decls.append(self.allocator, decl);
+                    try decls.append(self.arena.allocator(), decl);
                     continue;
                 },
                 .group_kw => {
                     const group = try self.parseGroup(attrs, tok_start);
-                    try groups.append(self.allocator, group);
+                    try groups.append(self.arena.allocator(), group);
                     continue;
                 },
                 .task_kw => {
                     const task = try self.parseTask(attrs, tok_start);
-                    try tasks.append(self.allocator, task);
+                    try tasks.append(self.arena.allocator(), task);
                     continue;
                 },
                 else => {
@@ -224,29 +224,29 @@ pub const Parser = struct {
         }
 
         return .{
-            .options = try options.toOwnedSlice(self.allocator),
-            .decls = try decls.toOwnedSlice(self.allocator),
-            .groups = try groups.toOwnedSlice(self.allocator),
-            .tasks = try tasks.toOwnedSlice(self.allocator),
+            .options = try options.toOwnedSlice(self.arena.allocator()),
+            .decls = try decls.toOwnedSlice(self.arena.allocator()),
+            .groups = try groups.toOwnedSlice(self.arena.allocator()),
+            .tasks = try tasks.toOwnedSlice(self.arena.allocator()),
             .span = self.spanFrom(start),
         };
     }
 
     fn collectAttributes(self: *Parser) ![]ast.Attribute {
-        var attributes = try std.ArrayList(ast.Attribute).initCapacity(self.allocator, 1);
+        var attributes = try std.ArrayList(ast.Attribute).initCapacity(self.arena.allocator(), 1);
 
         while (self.eat(.lbracket) != null) {
             const attr = try self.parseAttribute();
-            try attributes.appendSlice(self.allocator, attr);
+            try attributes.appendSlice(self.arena.allocator(), attr);
             // FIX: removed arena free — arena allocators don't release individual allocations,
             // this was a no-op and misleading.
         }
 
-        return try attributes.toOwnedSlice(self.allocator);
+        return try attributes.toOwnedSlice(self.arena.allocator());
     }
 
     fn parseAttribute(self: *Parser) ![]ast.Attribute {
-        var attrs = try std.ArrayList(ast.Attribute).initCapacity(self.allocator, 1);
+        var attrs = try std.ArrayList(ast.Attribute).initCapacity(self.arena.allocator(), 1);
 
         while (true) {
             const attr_start = self.currentPos();
@@ -259,7 +259,7 @@ pub const Parser = struct {
             }
 
             try attrs.append(
-                self.allocator,
+                self.arena.allocator(),
                 .{
                     .name = name.lexeme,
                     .value = value,
@@ -274,7 +274,7 @@ pub const Parser = struct {
 
         _ = try self.expect(.rbracket);
 
-        return attrs.toOwnedSlice(self.allocator);
+        return attrs.toOwnedSlice(self.arena.allocator());
     }
 
     fn parseGroup(self: *Parser, attrs: []ast.Attribute, start: u32) !ast.Group {
@@ -288,8 +288,8 @@ pub const Parser = struct {
 
         _ = try self.expect(.lbrace);
 
-        var decls = try std.ArrayList(ast.Decl).initCapacity(self.allocator, 5);
-        var tasks = try std.ArrayList(ast.Task).initCapacity(self.allocator, 1);
+        var decls = try std.ArrayList(ast.Decl).initCapacity(self.arena.allocator(), 5);
+        var tasks = try std.ArrayList(ast.Task).initCapacity(self.arena.allocator(), 1);
 
         while (self.eat(.rbrace) == null) {
             const tmpAttr = try self.collectAttributes();
@@ -313,12 +313,12 @@ pub const Parser = struct {
                         .span = self.spanFrom(tok_start),
                     };
 
-                    try decls.append(self.allocator, decl);
+                    try decls.append(self.arena.allocator(), decl);
                     continue;
                 },
                 .task_kw => {
                     const task = try self.parseTask(tmpAttr, tok.span.start);
-                    try tasks.append(self.allocator, task);
+                    try tasks.append(self.arena.allocator(), task);
                     continue;
                 },
                 else => {
@@ -332,8 +332,8 @@ pub const Parser = struct {
             .name = if (name) |v| v.lexeme else null,
             .attrs = attrs,
             .args = arguments,
-            .decls = try decls.toOwnedSlice(self.allocator),
-            .tasks = try tasks.toOwnedSlice(self.allocator),
+            .decls = try decls.toOwnedSlice(self.arena.allocator()),
+            .tasks = try tasks.toOwnedSlice(self.arena.allocator()),
             .span = self.spanFrom(start),
         };
     }
@@ -357,7 +357,7 @@ pub const Parser = struct {
 
                 _ = try self.expect(.rbrace);
 
-                const stmts = try self.allocator.alloc(ast.Statement, 1);
+                const stmts = try self.arena.allocator().alloc(ast.Statement, 1);
                 stmts[0] = .{ .process = str };
 
                 break :blk stmts;
@@ -376,13 +376,13 @@ pub const Parser = struct {
     }
 
     fn parseStatements(self: *Parser) ParseError![]ast.Statement {
-        var stmts = try std.ArrayList(ast.Statement).initCapacity(self.allocator, 1);
+        var stmts = try std.ArrayList(ast.Statement).initCapacity(self.arena.allocator(), 1);
 
         while (self.eat(.rbrace) == null) {
-            try stmts.append(self.allocator, try self.parseOneStatement());
+            try stmts.append(self.arena.allocator(), try self.parseOneStatement());
         }
 
-        return try stmts.toOwnedSlice(self.allocator);
+        return try stmts.toOwnedSlice(self.arena.allocator());
     }
 
     fn parseOneStatement(self: *Parser) ParseError!ast.Statement {
@@ -457,7 +457,7 @@ pub const Parser = struct {
                     then = try self.parseStatements();
                 } else {
                     then = blk: {
-                        var arr = try self.allocator.alloc(ast.Statement, 1);
+                        var arr = try self.arena.allocator().alloc(ast.Statement, 1);
                         arr[0] = try self.parseOneStatement();
                         break :blk arr;
                     };
@@ -468,7 +468,7 @@ pub const Parser = struct {
                         else_ = try self.parseStatements();
                     } else {
                         else_ = blk: {
-                            var arr = try self.allocator.alloc(ast.Statement, 1);
+                            var arr = try self.arena.allocator().alloc(ast.Statement, 1);
                             arr[0] = try self.parseOneStatement();
                             break :blk arr;
                         };
@@ -491,7 +491,7 @@ pub const Parser = struct {
     }
 
     fn parseTaskCallArgs(self: *Parser) ![]ast.TaskCallArg {
-        var args = try std.ArrayList(ast.TaskCallArg).initCapacity(self.allocator, 1);
+        var args = try std.ArrayList(ast.TaskCallArg).initCapacity(self.arena.allocator(), 1);
 
         _ = try self.expect(.lparen);
 
@@ -515,7 +515,7 @@ pub const Parser = struct {
                 value = try self.parseExpr();
             }
 
-            try args.append(self.allocator, .{
+            try args.append(self.arena.allocator(), .{
                 .name = argName,
                 .value = value,
                 .span = self.spanFrom(arg_start),
@@ -526,11 +526,11 @@ pub const Parser = struct {
             }
         }
 
-        return try args.toOwnedSlice(self.allocator);
+        return try args.toOwnedSlice(self.arena.allocator());
     }
 
     fn parseArguments(self: *Parser) ![]ast.Argument {
-        var arguments = try std.ArrayList(ast.Argument).initCapacity(self.allocator, 1);
+        var arguments = try std.ArrayList(ast.Argument).initCapacity(self.arena.allocator(), 1);
 
         while (self.eat(.rparen) == null) {
             const arg_start = self.currentPos();
@@ -548,7 +548,7 @@ pub const Parser = struct {
                 default = try self.parseExpr();
             }
 
-            try arguments.append(self.allocator, .{
+            try arguments.append(self.arena.allocator(), .{
                 .name = name.lexeme,
                 .attrs = attrs,
                 .type = argType,
@@ -560,7 +560,7 @@ pub const Parser = struct {
             _ = self.eat(.comma);
         }
 
-        return try arguments.toOwnedSlice(self.allocator);
+        return try arguments.toOwnedSlice(self.arena.allocator());
     }
     fn parseSet(self: *Parser, attributes: []ast.Attribute, start: u32) !ast.Set {
         var decls: std.ArrayList(ast.Set.SetDecl) = .empty;
@@ -568,15 +568,15 @@ pub const Parser = struct {
         if (self.eat(.lbrace)) |_| { // block
             while (self.eat(.rbrace) == null) {
                 const decl = try self.parseSetDecl();
-                try decls.append(self.allocator, decl);
+                try decls.append(self.arena.allocator(), decl);
             }
         } else {
-            try decls.append(self.allocator, try self.parseSetDecl());
+            try decls.append(self.arena.allocator(), try self.parseSetDecl());
         }
 
         return .{
             .attrs = attributes,
-            .body = try decls.toOwnedSlice(self.allocator),
+            .body = try decls.toOwnedSlice(self.arena.allocator()),
             .span = self.spanFrom(start),
         };
     }
@@ -638,14 +638,14 @@ pub const Parser = struct {
 
         _ = try self.expect(.lparen);
 
-        var args = try std.ArrayList(ast.Expr).initCapacity(self.allocator, 1);
+        var args = try std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 1);
 
         // FIX: previously the loop unconditionally tried to parse an expression,
         // making @foo() (empty args) a parse error. Now we check for ) first.
         if (self.eat(.rparen) == null) {
             while (true) {
                 const expr = try self.parseExpr();
-                try args.append(self.allocator, expr);
+                try args.append(self.arena.allocator(), expr);
                 if (self.eat(.comma) == null) break;
             }
             _ = try self.expect(.rparen);
@@ -654,7 +654,7 @@ pub const Parser = struct {
         return ast.Expr{
             .builtin_call = .{
                 .name = ident.lexeme,
-                .args = try args.toOwnedSlice(self.allocator),
+                .args = try args.toOwnedSlice(self.arena.allocator()),
                 .span = self.spanFrom(start),
             },
         };
@@ -676,7 +676,7 @@ pub const Parser = struct {
 
         const else_ = try self.parseExpr();
 
-        const node = try self.allocator.create(ast.IfExpr);
+        const node = try self.arena.allocator().create(ast.IfExpr);
         node.* = .{
             .cond = cond,
             .then = then,
@@ -695,7 +695,7 @@ pub const Parser = struct {
 
         while (self.eat(.or_kw) != null) {
             const right = try self.parseAnd();
-            const node = try self.allocator.create(ast.BinaryExpr);
+            const node = try self.arena.allocator().create(ast.BinaryExpr);
             node.* = .{ .op = .or_op, .left = left, .right = right, .span = self.spanFrom(left.spanStart()) };
             left = .{ .binary = node };
         }
@@ -708,7 +708,7 @@ pub const Parser = struct {
 
         while (self.eat(.and_kw) != null) {
             const right = try self.parseNot();
-            const node = try self.allocator.create(ast.BinaryExpr);
+            const node = try self.arena.allocator().create(ast.BinaryExpr);
             node.* = .{ .op = .and_op, .left = left, .right = right, .span = self.spanFrom(left.spanStart()) };
             left = .{ .binary = node };
         }
@@ -720,7 +720,7 @@ pub const Parser = struct {
         const start = self.currentPos();
         if (self.eat(.not_kw) != null) {
             const operand = try self.parseNot();
-            const node = try self.allocator.create(ast.UnaryExpr);
+            const node = try self.arena.allocator().create(ast.UnaryExpr);
             node.* = .{ .op = .not_op, .operand = operand, .span = self.spanFrom(start) };
             return .{ .unary = node };
         }
@@ -743,7 +743,7 @@ pub const Parser = struct {
 
         _ = self.advance();
         const right = try self.parseAddSub();
-        const node = try self.allocator.create(ast.BinaryExpr);
+        const node = try self.arena.allocator().create(ast.BinaryExpr);
         node.* = .{ .op = op, .left = left, .right = right, .span = self.spanFrom(left.spanStart()) };
         return .{ .binary = node };
     }
@@ -759,7 +759,7 @@ pub const Parser = struct {
             };
             _ = self.advance();
             const right = try self.parseMulDiv();
-            const node = try self.allocator.create(ast.BinaryExpr);
+            const node = try self.arena.allocator().create(ast.BinaryExpr);
             node.* = .{ .op = op, .left = left, .right = right, .span = self.spanFrom(left.spanStart()) };
             left = .{ .binary = node };
         }
@@ -777,7 +777,7 @@ pub const Parser = struct {
             };
             _ = self.advance();
             const right = try self.parseUnary();
-            const node = try self.allocator.create(ast.BinaryExpr);
+            const node = try self.arena.allocator().create(ast.BinaryExpr);
             node.* = .{ .op = op, .left = left, .right = right, .span = self.spanFrom(left.spanStart()) };
             left = .{ .binary = node };
         }
@@ -789,7 +789,7 @@ pub const Parser = struct {
         const start = self.currentPos();
         if (self.eat(.minus) != null) {
             const operand = try self.parseUnary();
-            const node = try self.allocator.create(ast.UnaryExpr);
+            const node = try self.arena.allocator().create(ast.UnaryExpr);
             node.* = .{ .op = .negate, .operand = operand, .span = self.spanFrom(start) };
             return .{ .unary = node };
         }
@@ -818,10 +818,10 @@ pub const Parser = struct {
                 _ = self.advance();
 
                 var items: std.ArrayList(ast.Expr) = .empty;
-                errdefer items.deinit(self.allocator);
+                errdefer items.deinit(self.arena.allocator());
 
                 while (self.eat(.rbracket) == null) {
-                    try items.append(self.allocator, try self.parseExpr());
+                    try items.append(self.arena.allocator(), try self.parseExpr());
 
                     if (self.eat(.comma) == null) {
                         _ = try self.expect(.rbracket);
@@ -832,7 +832,7 @@ pub const Parser = struct {
                 return .{
                     .list = .{
                         .span = self.spanFrom(start),
-                        .value = try items.toOwnedSlice(self.allocator),
+                        .value = try items.toOwnedSlice(self.arena.allocator()),
                     },
                 };
             },
@@ -841,7 +841,7 @@ pub const Parser = struct {
                 const ch = try self.readCharacter();
                 _ = try self.expect(.apostrophe);
 
-                const result = text.processChar(self.allocator, ch.lexeme) catch unreachable;
+                const result = text.processChar(self.arena.allocator(), ch.lexeme) catch unreachable;
 
                 return .{
                     .char_lit = .{
@@ -913,7 +913,7 @@ pub const Parser = struct {
             const seg = lexer.lexString(&.{ terminator, "{{" }, multiline);
 
             switch (seg.kind) {
-                .string => try out.append(self.allocator, .{ .lit = seg.lexeme }),
+                .string => try out.append(self.arena.allocator(), .{ .lit = seg.lexeme }),
                 .unterminated_string => {
                     try self.addDiagnostic(.err, "unterminated string", .{});
                     return ParseError.UnexpectedToken;
@@ -927,7 +927,7 @@ pub const Parser = struct {
             self.resyncFromRaw();
             if (self.eat(.ldbrace)) |_| {
                 const expr = try self.parseExpr();
-                try out.append(self.allocator, .{ .expr = expr });
+                try out.append(self.arena.allocator(), .{ .expr = expr });
                 _ = try self.expect(.rdbrace);
                 self.resyncToRaw();
             } else {
@@ -939,12 +939,12 @@ pub const Parser = struct {
 
         if (out.items.len == 1) {
             std.debug.assert(out.items[0] == .lit);
-            defer out.deinit(self.allocator);
+            defer out.deinit(self.arena.allocator());
 
             return .{ .lit = out.items[0].lit };
         }
 
-        return .{ .inter = try out.toOwnedSlice(self.allocator) };
+        return .{ .inter = try out.toOwnedSlice(self.arena.allocator()) };
     }
 
     fn parseMetaValue(self: *Parser) ParseError!ast.MetaValue {
@@ -991,10 +991,10 @@ pub const Parser = struct {
                 _ = self.expect(.lbracket) catch unreachable;
 
                 var items: std.ArrayList(ast.MetaValue) = .empty;
-                errdefer items.deinit(self.allocator);
+                errdefer items.deinit(self.arena.allocator());
 
                 while (self.eat(.rbracket) == null) {
-                    try items.append(self.allocator, try self.parseMetaValue());
+                    try items.append(self.arena.allocator(), try self.parseMetaValue());
 
                     if (self.eat(.comma) == null) {
                         _ = try self.expect(.rbracket);
@@ -1008,7 +1008,7 @@ pub const Parser = struct {
                 }
 
                 return .{
-                    .list = try items.toOwnedSlice(self.allocator),
+                    .list = try items.toOwnedSlice(self.arena.allocator()),
                 };
             },
             else => {
