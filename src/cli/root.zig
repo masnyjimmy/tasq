@@ -56,7 +56,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
                     const severity_color: conzole.terminal.Color = switch (record.severity) {
                         .err => .bright_red,
                         .hint => .bright_green,
-                        .warning => .yellow,
+                        .warn => .yellow,
                     };
 
                     try printer.printStyled(
