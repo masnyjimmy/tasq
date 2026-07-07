@@ -1,5 +1,7 @@
 const ir = @import("ir.zig");
-const lib = @import("lib");
+
+const Diagnostics = @import("Diagnostics.zig");
+const Span = Diagnostics.Span;
 
 const BindingDetails = struct {
     static: bool,
@@ -29,7 +31,7 @@ pub const Details = union(enum) {
 
 pub const Symbol = struct {
     name: []const u8,
-    span: lib.Span,
+    span: Span,
     details: Details,
 
     pub const Type = enum {
