@@ -28,6 +28,8 @@ pub const binary = @import("binary.zig");
 
 pub const functions = @import("functions.zig");
 
+pub const Workspace = @import("Workspace.zig");
+
 pub fn parse(allocator: std.mem.Allocator, source: lib.source_file.SourceView, diagnostics: *lib.Diagnostic.List) !Parser.Result {
     var lexer = Lexer.init(source);
 
