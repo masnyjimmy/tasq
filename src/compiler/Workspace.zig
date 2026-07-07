@@ -87,7 +87,7 @@ pub fn openFile(self: *Workspace, allocator: std.mem.Allocator, uri: []const u8,
     self.next_id += 1;
 
     const owned_uri = try allocator.dupe(u8, uri);
-    try self.uri_to_id.put(allocator, owned_uri, uri);
+    try self.uri_to_id.put(allocator, owned_uri, id);
 
     try self.files.put(allocator, id, .{
         .uri = owned_uri,
