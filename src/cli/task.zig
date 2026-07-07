@@ -25,19 +25,19 @@ const TaskError = error{
 
 const DESCRIPTION_TEXT_OFFSET = 10;
 
-pub fn compileRunfile(ctx: *const Context) !compiler.Result {
-    const source_id = try ctx.source_store.loadFile(ctx.gpa, ctx.io, ctx.source_file_path);
+pub fn compileRunfile(ctx: *const Context) !*const compiler.ir.File {
+    const cwd = std.Io.Dir.cwd();
 
-    const source_view = try ctx.source_store.view(source_id);
+    const content = try cwd.readFileAlloc(ctx.io, ctx.source_file_path, ctx.gpa, .unlimited);
+    defer ctx.gpa.free(content);
 
-    return try compiler.compile(ctx.gpa, source_view, ctx.diagnostics);
+    const file_id = try ctx.workspace.openFile(ctx.gpa, ctx.source_file_path, content, 0);
+
+    return ctx.workspace.view(file_id, .ir).source;
 }
 
 pub fn printTasksList(ctx: *const Context) !void {
-    const cr = try compileRunfile(ctx);
-    defer cr.deinit();
-
-    const file = &cr.result;
+    const file = try compileRunfile(ctx);
 
     const p = ctx.printer;
 
@@ -100,10 +100,7 @@ pub fn printTaskUsage(ctx: *const Context, task_id: []const u8) !void {
         };
     };
 
-    const cr = try compileRunfile(ctx);
-    defer cr.deinit();
-
-    const file = cr.result;
+    const file = try compileRunfile(ctx);
 
     const task = file.findTask(.parse(task_id)) orelse return TaskError.TaskNotFound;
 
@@ -638,10 +635,7 @@ const TaskArgumentParser = struct {
 };
 
 pub fn runTask(ctx: *const Context, task_id: []const u8, args: []const []const u8) !void {
-    const cr = try compileRunfile(ctx);
-    defer cr.deinit();
-
-    const file = cr.result;
+    const file = try compileRunfile(ctx);
 
     const task = file.findTask(.parse(task_id)) orelse return TaskError.TaskNotFound;
 
