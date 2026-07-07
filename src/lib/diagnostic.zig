@@ -1,5 +1,4 @@
 const std = @import("std");
-const source_file = @import("source_file.zig");
 
 pub const Severity = enum {
     err,
