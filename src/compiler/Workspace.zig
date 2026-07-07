@@ -107,7 +107,14 @@ pub fn reparse(self: *Workspace, id: FileId) !void {
 
     var parser: parse.Parser = .init(&file.arena, &lexer, &file.diagnostics);
 
-    file.tree = try parser.parseFile();
+    const tree = try parser.parseFile();
+
+    file.tree = tree;
+
+    const Sema = @import("sema.zig").Sema;
+    var sema: Sema = .init(&file.arena, &file.diagnostics);
+
+    file.ir = try sema.analyse(tree);
 }
 
 pub fn changeFile(self: *Workspace, allocator: std.mem.Allocator, id: FileId, new_text: []const u8, version: i32) !void {
