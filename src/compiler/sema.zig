@@ -273,7 +273,7 @@ pub const Sema = struct {
         fn resolveAttributes(self: *AttributesResolver, attributes: []const ast.Attribute, target: attrib.definitions.Target) !void {
             for (attributes) |attr| {
                 const def = attrib.definitions.get(attr.name, target) orelse {
-                    try self.sema.diagnostics.Err(.{ .span = attr.span }, "'{s}' is not valid attribute for this element", .{attr.name});
+                    try self.sema.diagnostics.err(.{ .span = attr.span }, "'{s}' is not valid attribute for this element", .{attr.name});
                     return SemaError.SemanticError;
                 };
 
@@ -284,7 +284,7 @@ pub const Sema = struct {
                         std.debug.assert(def.unique == true);
 
                         if (self.platforms.contains(pt)) {
-                            try self.sema.diagnostics.Err(.{ .span = attr.span }, "'{s}' platform attribute duplicate", .{attr.name});
+                            try self.sema.diagnostics.err(.{ .span = attr.span }, "'{s}' platform attribute duplicate", .{attr.name});
                             return SemaError.SemanticError;
                         }
 
