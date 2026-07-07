@@ -19,6 +19,4 @@ pub const Interface = @import("interface.zig");
 
 pub const enums = @import("enums.zig");
 
-pub const source_file = @import("source_file.zig");
-
 pub const @"comptime" = @import("comptime.zig");
