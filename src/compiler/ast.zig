@@ -10,7 +10,7 @@ pub const ArgType = typing.ArgType;
 
 pub fn hasAttr(attrs: []const Attribute, name: []const u8) bool {
     for (attrs) |attr| {
-        if (std.mem.eql(u8, attr.name, name))
+        if (std.mem.eql(u8, attr.name.value, name))
             return true;
     }
     return false;

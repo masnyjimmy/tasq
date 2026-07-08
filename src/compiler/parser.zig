@@ -261,7 +261,7 @@ pub const Parser = struct {
             try attrs.append(
                 self.arena.allocator(),
                 .{
-                    .name = name.lexeme,
+                    .name = name.sliceWithSpan(),
                     .value = value,
                     .span = self.spanFrom(attr_start), //TODO: consider if valid span,
                 },
@@ -416,14 +416,14 @@ pub const Parser = struct {
                     if (self.eat(.dcolon)) |_| {
                         scope = .{ .group = task.sliceWithSpan() };
                         const tok = try self.expect(.ident);
-                        task = tok.sliceWithSpan();
+                        task = tok;
                     }
 
                     const args = try self.parseTaskCallArgs();
 
                     return .{
                         .task_call = .{
-                            .task = task,
+                            .task = task.sliceWithSpan(),
                             .scope = scope,
                             .args = args,
                             .span = self.spanFrom(call_start),
@@ -440,7 +440,7 @@ pub const Parser = struct {
 
                 return .{
                     .task_call = .{
-                        .task = identName.lexeme,
+                        .task = identName.sliceWithSpan(),
                         .scope = .root,
                         .args = args,
                         .span = self.spanFrom(start),
@@ -540,7 +540,15 @@ pub const Parser = struct {
 
             _ = try self.expect(.colon);
 
-            const argType = try self.parseArgType();
+            const arg_type = blk: {
+                const start = self.currentPos();
+                const out = try self.parseArgType();
+
+                break :blk WithSpan(ast.ArgType){
+                    .span = self.spanFrom(start),
+                    .value = out,
+                };
+            };
 
             var default: ?ast.Expr = null;
 
@@ -549,9 +557,9 @@ pub const Parser = struct {
             }
 
             try arguments.append(self.arena.allocator(), .{
-                .name = name.lexeme,
+                .name = name.sliceWithSpan(),
                 .attrs = attrs,
-                .type = argType,
+                .type = arg_type,
                 .default = default,
                 .span = self.spanFrom(arg_start),
             });
@@ -653,7 +661,7 @@ pub const Parser = struct {
 
         return ast.Expr{
             .builtin_call = .{
-                .name = ident.lexeme,
+                .name = ident.sliceWithSpan(),
                 .args = try args.toOwnedSlice(self.arena.allocator()),
                 .span = self.spanFrom(start),
             },
