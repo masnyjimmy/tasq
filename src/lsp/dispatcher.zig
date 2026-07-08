@@ -22,7 +22,11 @@ pub fn init(allocator: std.mem.Allocator, workspace: *Workspace) Dispatcher {
 
 pub fn deinit(_: *Dispatcher) void {}
 
-pub fn initialize(self: *Dispatcher, _: std.mem.Allocator, request: lsp.types.InitializeParams) lsp.types.InitializeResult {
+pub fn initialize(
+    self: *Dispatcher,
+    _: std.mem.Allocator,
+    request: lsp.types.InitializeParams,
+) lsp.types.InitializeResult {
     if (request.clientInfo) |info| {
         std.log.info("The client is '{s}' ({s})", .{ info.name, info.version orelse "unknown version" });
     }
@@ -55,6 +59,23 @@ pub fn initialize(self: *Dispatcher, _: std.mem.Allocator, request: lsp.types.In
             },
             .hoverProvider = .{ .bool = true },
             .completionProvider = .{ .triggerCharacters = &.{"."} },
+            .semanticTokensProvider = .{
+                .semantic_tokens_options = .{
+                    .legend = .{
+                        .tokenTypes = &.{
+                            "keyword",
+                            "property",
+                            "function",
+                            "number",
+                            "string",
+                            "variable",
+                            "parameter",
+                            "type",
+                        },
+                        .tokenModifiers = &.{},
+                    },
+                },
+            },
         },
     };
 }
