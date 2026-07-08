@@ -198,7 +198,7 @@ pub const Parser = struct {
                     const value = try self.parseExpr();
 
                     const decl = ast.Decl{
-                        .name = tok.lexeme,
+                        .name = tok.sliceWithSpan(),
                         .value = value,
                         .span = self.spanFrom(tok_start),
                     };
@@ -308,7 +308,7 @@ pub const Parser = struct {
                     const value = try self.parseExpr();
 
                     const decl = ast.Decl{
-                        .name = tok.lexeme,
+                        .name = tok.sliceWithSpan(),
                         .value = value,
                         .span = self.spanFrom(tok_start),
                     };
@@ -329,7 +329,7 @@ pub const Parser = struct {
         }
 
         return .{
-            .name = if (name) |v| v.lexeme else null,
+            .name = if (name) |v| v.sliceWithSpan() else null,
             .attrs = attrs,
             .args = arguments,
             .decls = try decls.toOwnedSlice(self.arena.allocator()),
@@ -367,7 +367,7 @@ pub const Parser = struct {
         };
 
         return .{
-            .name = name.lexeme,
+            .name = name.sliceWithSpan(),
             .attrs = attrs,
             .args = arguments,
             .body = body,
@@ -402,7 +402,7 @@ pub const Parser = struct {
                     const value = try self.parseExpr();
                     return .{
                         .decl = .{
-                            .name = identName.lexeme,
+                            .name = identName.sliceWithSpan(),
                             .value = value,
                             .span = self.spanFrom(ident_start),
                         },
@@ -411,12 +411,12 @@ pub const Parser = struct {
                     const call_start = ident_start;
                     var scope: ast.TaskCallScope = .closest;
 
-                    var task: []const u8 = identName.lexeme;
+                    var task = identName;
 
                     if (self.eat(.dcolon)) |_| {
-                        scope = .{ .group = task };
+                        scope = .{ .group = task.sliceWithSpan() };
                         const tok = try self.expect(.ident);
-                        task = tok.lexeme;
+                        task = tok.sliceWithSpan();
                     }
 
                     const args = try self.parseTaskCallArgs();
@@ -913,7 +913,7 @@ pub const Parser = struct {
             const seg = lexer.lexString(&.{ terminator, "{{" }, multiline);
 
             switch (seg.kind) {
-                .string => try out.append(self.arena.allocator(), .{ .lit = seg.lexeme }),
+                .string => try out.append(self.arena.allocator(), .{ .lit = seg.sliceWithSpan() }),
                 .unterminated_string => {
                     try self.addDiagnostic(.err, "unterminated string", .{});
                     return ParseError.UnexpectedToken;

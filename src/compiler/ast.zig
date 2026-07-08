@@ -36,7 +36,7 @@ pub const Set = struct {
     span: Span,
 };
 pub const Group = struct {
-    name: ?[]const u8,
+    name: ?WithSpan([]const u8),
     attrs: []Attribute,
     args: []Argument,
     decls: []Decl,
@@ -45,7 +45,7 @@ pub const Group = struct {
 };
 
 pub const Task = struct {
-    name: []const u8,
+    name: WithSpan([]const u8),
     attrs: []Attribute,
     args: []Argument,
     body: StatementBlock,
@@ -53,21 +53,21 @@ pub const Task = struct {
 };
 
 pub const Argument = struct {
-    name: []const u8,
+    name: WithSpan([]const u8),
     attrs: []Attribute,
-    type: ArgType,
+    type: WithSpan(ArgType),
     default: ?Expr,
     span: Span,
 };
 
 pub const Attribute = struct {
-    name: []const u8,
+    name: WithSpan([]const u8),
     value: ?MetaValue,
     span: Span,
 };
 
 pub const Decl = struct {
-    name: []const u8,
+    name: WithSpan([]const u8),
     value: Expr,
     span: Span,
 };
@@ -94,12 +94,12 @@ pub const ProcessStmt = StringExpr;
 pub const TaskCallScope = union(enum) {
     closest,
     root,
-    group: []const u8,
+    group: WithSpan([]const u8),
 };
 
 pub const TaskCall = struct {
     scope: TaskCallScope, // null for same-group calls
-    task: []const u8,
+    task: WithSpan([]const u8),
     args: []TaskCallArg,
     span: Span,
 };
@@ -137,32 +137,22 @@ pub const Expr = union(enum) {
         };
     }
 
+    // TODO: consider if this can be removed
     pub fn spanStart(self: Expr) u32 {
-        return switch (self) {
-            .char_lit => 0,
-            .number_lit => |v| v.span.start,
-            .bool_lit => |v| v.span.start,
-            .string => 0, // strings don't carry a span directly — adjust if you add one
-            .list => 0,
-            .builtin_call => |v| v.span.start,
-            .ident => |v| v.span.start,
-            .binary => |v| v.span.start,
-            .unary => |v| v.span.start,
-            .if_expr => |v| v.span.start,
-        };
+        return self.span().start;
     }
 };
 
 pub const BuiltInCall = struct {
-    name: []const u8,
+    name: WithSpan([]const u8),
     args: []Expr,
     span: Span,
 };
 
-pub const StringExpr = union(enum) { lit: []const u8, inter: []const InterStringSeg };
+pub const StringExpr = union(enum) { lit: WithSpan([]const u8), inter: []const InterStringSeg };
 
 pub const InterStringSeg = union(enum) {
-    lit: []const u8,
+    lit: WithSpan([]const u8),
     expr: Expr,
 };
 
