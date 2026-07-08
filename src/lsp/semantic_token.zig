@@ -67,21 +67,29 @@ pub fn sortTokens(tokens: []RawToken) !void {
 pub const Collector = struct {
     allocator: std.mem.Allocator,
     tokens: std.ArrayList(RawToken),
+    span_registry: *const Span.Registry,
 
     const Error = std.mem.Allocator.Error;
 
-    pub fn collect(allocator: std.mem.Allocator, file: *const ast.File) Error![]RawToken {
-        var collector: Collector = .init(allocator);
+    pub fn collect(allocator: std.mem.Allocator, file: *const ast.File, span_registry: *const Span.Registry) Error![]RawToken {
+        var collector: Collector = .init(allocator, span_registry);
+
+        for (span_registry.spans.items) |span_item| {
+            const tt = lib.enums.castEnum(span_item.type, TokenType) orelse unreachable;
+
+            try collector.add(span_item.span, tt, null);
+        }
 
         try collector.walkFile(file);
 
         return try collector.tokens.toOwnedSlice(allocator);
     }
 
-    fn init(allocator: std.mem.Allocator) Collector {
+    fn init(allocator: std.mem.Allocator, span_registry: *const Span.Registry) Collector {
         return .{
             .allocator = allocator,
             .tokens = .empty,
+            .span_registry = span_registry,
         };
     }
 
@@ -104,8 +112,9 @@ pub const Collector = struct {
     }
 
     fn walkGroup(self: *Collector, group: *const ast.Group) Error!void {
-        if (group.name) |name| {
-            try self.add(name.span, .variable, null);
+        if (group.name) |_| {
+            const name_span = self.span_registry.getSpan(group.id, .name);
+            try self.add(name_span, .variable, null);
         }
 
         for (group.args) |*arg| {
@@ -126,7 +135,8 @@ pub const Collector = struct {
     }
 
     fn walkTask(self: *Collector, task: *const ast.Task) Error!void {
-        try self.add(task.name.span, .variable, null);
+        const name_span = self.span_registry.getSpan(task.id, .name);
+        try self.add(name_span, .variable, null);
 
         for (task.args) |*arg| {
             try self.walkArgument(arg);
@@ -152,7 +162,8 @@ pub const Collector = struct {
     }
 
     fn walkArgument(self: *Collector, arg: *const ast.Argument) Error!void {
-        try self.add(arg.name.span, .variable, null);
+        const name_span = self.span_registry.getSpan(arg.id, .name);
+        try self.add(name_span, .variable, null);
 
         for (arg.attrs) |*attr| {
             try self.walkAttribute(attr);
@@ -162,11 +173,13 @@ pub const Collector = struct {
             try self.walkExpr(def);
         }
 
-        try self.add(arg.type.span, .type, null);
+        const type_span = self.span_registry.getSpan(arg.id, .extra);
+        try self.add(type_span, .type, null);
     }
 
     fn walkAttribute(self: *Collector, attr: *const ast.Attribute) Error!void {
-        try self.add(attr.name.span, .variable, null);
+        const name_span = self.span_registry.getSpan(attr.id, .name);
+        try self.add(name_span, .variable, null);
 
         if (attr.value) |_| {
             //TODO: implement
@@ -174,44 +187,14 @@ pub const Collector = struct {
     }
 
     fn walkDecl(self: *Collector, decl: *const ast.Decl) Error!void {
-        try self.add(decl.name.span, .variable, &.{TokenModifier.declaration});
+        const name_span = self.span_registry.getSpan(decl.id, .name);
+        try self.add(name_span, .variable, &.{TokenModifier.declaration});
         try self.walkExpr(&decl.value);
     }
 
-    fn walkExpr(self: *Collector, expr: *const ast.Expr) Error!void {
-        switch (expr.*) {
-            .bool_lit => |v| try self.add(v.span, .keyword, null),
-            .number_lit => |v| try self.add(v.span, .number, null),
-            .char_lit => |v| try self.add(v.span, .string, null),
-            .string => |v| try self.walkStringExpr(&v.value),
-            .list => |v| for (v.value) |item| try self.walkExpr(&item),
-            .builtin_call => |v| {
-                try self.add(v.name.span, .function, null);
-                for (v.args) |a| try self.walkExpr(&a);
-            },
-            .ident => |v| try self.add(v.span, .variable, null),
-            .binary => |v| {
-                try self.walkExpr(&v.left);
-                try self.walkExpr(&v.right);
-            },
-            .unary => |v| try self.walkExpr(&v.operand),
-            .if_expr => |v| {
-                //TODO: add if and else keywords spans
-                try self.walkExpr(&v.cond);
-                try self.walkExpr(&v.else_);
-                try self.walkExpr(&v.then);
-            },
-        }
+    fn walkExpr(_: *Collector, _: *const ast.Expr) Error!void {
+        // TODO: ensure that its already handled (keywords, operators, identifier, numbers, strings)
     }
 
-    fn walkStringExpr(self: *Collector, str: *const ast.StringExpr) Error!void {
-        switch (str.*) {
-            .lit => |lit| try self.add(lit.span, .string, null),
-            .inter => |inter| for (inter) |seg|
-                switch (seg) {
-                    .lit => |lit| try self.add(lit.span, .string, null),
-                    .expr => |expr| try self.walkExpr(&expr),
-                },
-        }
-    }
+    fn walkStringExpr(self: *Collector, str: *const ast.StringExpr) Error!void {}
 };
