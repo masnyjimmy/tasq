@@ -29,5 +29,6 @@ pub const binary = @import("binary.zig");
 pub const functions = @import("functions.zig");
 
 pub const Diagnostics = @import("Diagnostics.zig");
+const Span = Diagnostics.Span;
 
 pub const Workspace = @import("Workspace.zig");
