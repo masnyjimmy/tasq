@@ -27,50 +27,49 @@ pub const File = struct {
 
 pub const Set = struct {
     pub const SetDecl = struct {
-        name: WithSpan([]const u8),
+        id: SpanId,
+        name: []const u8,
         value: ?MetaValue,
-        span: Span,
     };
-
+    id: SpanId,
     attrs: []Attribute,
     body: []SetDecl,
-    span: Span,
 };
 pub const Group = struct {
-    name: ?WithSpan([]const u8),
+    id: SpanId,
+    name: []const u8,
     attrs: []Attribute,
     args: []Argument,
     decls: []Decl,
     tasks: []Task,
-    span: Span,
 };
 
 pub const Task = struct {
-    name: WithSpan([]const u8),
+    id: SpanId,
+    name: []const u8,
     attrs: []Attribute,
     args: []Argument,
     body: StatementBlock,
-    span: Span,
 };
 
 pub const Argument = struct {
-    name: WithSpan([]const u8),
+    id: SpanId,
+    name: []const u8,
     attrs: []Attribute,
-    type: WithSpan(ArgType),
+    type: ArgType,
     default: ?Expr,
-    span: Span,
 };
 
 pub const Attribute = struct {
-    name: WithSpan([]const u8),
+    id: SpanId,
+    name: []const u8,
     value: ?MetaValue,
-    span: Span,
 };
 
 pub const Decl = struct {
-    name: WithSpan([]const u8),
+    id: SpanId,
+    name: []const u8,
     value: Expr,
-    span: Span,
 };
 
 pub const StatementBlock = []Statement;
@@ -85,7 +84,8 @@ pub const Statement = union(enum) {
 
 // 'IF' DOESNT CREATE SCOPE
 pub const IfStmt = struct {
-    cond: Expr,
+    id: SpanId,
+    cond: Expr, // [Span] Node.object
     then: StatementBlock,
     else_: ?StatementBlock,
 };
@@ -95,48 +95,33 @@ pub const ProcessStmt = StringExpr;
 pub const TaskCallScope = union(enum) {
     closest,
     root,
-    group: WithSpan([]const u8),
+    group: []const u8, // [Span] TaskCall::extra
 };
 
 pub const TaskCall = struct {
+    id: SpanId,
     scope: TaskCallScope, // null for same-group calls
-    task: WithSpan([]const u8),
+    task: []const u8, // [Span] This::name
     args: []TaskCallArg,
-    span: Span,
 };
 
 pub const TaskCallArg = struct {
+    id: SpanId,
     name: ?[]const u8,
     value: Expr,
-    span: Span,
 };
 
 pub const Expr = union(enum) {
-    bool_lit: WithSpan(bool),
-    number_lit: WithSpan(f64),
-    char_lit: WithSpan(u21),
-    string: WithSpan(StringExpr),
-    list: WithSpan([]const Expr),
+    bool_lit: bool,
+    number_lit: f64,
+    char_lit: u21,
+    string: StringExpr,
+    list: []const Expr,
     builtin_call: BuiltInCall,
-    ident: WithSpan([]const u8),
+    ident: []const u8,
     binary: *BinaryExpr,
     unary: *UnaryExpr,
     if_expr: *IfExpr,
-
-    pub fn span(self: Expr) Span {
-        return switch (self) {
-            .bool_lit => |v| v.span,
-            .char_lit => |v| v.span,
-            .number_lit => |v| v.span,
-            .string => |v| v.span,
-            .list => |v| v.span,
-            .builtin_call => |v| v.span,
-            .ident => |v| v.span,
-            .binary => |v| v.span,
-            .unary => |v| v.span,
-            .if_expr => |v| v.span,
-        };
-    }
 
     // TODO: consider if this can be removed
     pub fn spanStart(self: Expr) u32 {
@@ -145,15 +130,15 @@ pub const Expr = union(enum) {
 };
 
 pub const BuiltInCall = struct {
-    name: WithSpan([]const u8),
+    id: SpanId,
+    name: []const u8,
     args: []Expr,
-    span: Span,
 };
 
-pub const StringExpr = union(enum) { lit: WithSpan([]const u8), inter: []const InterStringSeg };
+pub const StringExpr = union(enum) { lit: []const u8, inter: []const InterStringSeg };
 
 pub const InterStringSeg = union(enum) {
-    lit: WithSpan([]const u8),
+    lit: []const u8,
     expr: Expr,
 };
 
