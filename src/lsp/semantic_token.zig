@@ -189,7 +189,7 @@ pub const Collector = struct {
                 try self.add(v.name.span, .function, null);
                 for (v.args) |a| try self.walkExpr(&a);
             },
-            .ident => |v| try self.add(v.span, .variable),
+            .ident => |v| try self.add(v.span, .variable, null),
             .binary => |v| {
                 try self.walkExpr(&v.left);
                 try self.walkExpr(&v.right);
@@ -204,12 +204,12 @@ pub const Collector = struct {
         }
     }
 
-    fn walkStringExpr(self: *Collector, str: *const ast.StringExpr) !void {
+    fn walkStringExpr(self: *Collector, str: *const ast.StringExpr) Error!void {
         switch (str.*) {
-            .lit => |lit| try self.add(lit.span, .string),
+            .lit => |lit| try self.add(lit.span, .string, null),
             .inter => |inter| for (inter) |seg|
                 switch (seg) {
-                    .lit => |lit| try self.add(lit.span, .string),
+                    .lit => |lit| try self.add(lit.span, .string, null),
                     .expr => |expr| try self.walkExpr(&expr),
                 },
         }
