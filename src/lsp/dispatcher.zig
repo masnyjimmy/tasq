@@ -64,18 +64,10 @@ pub fn initialize(
             .semanticTokensProvider = .{
                 .semantic_tokens_options = .{
                     .legend = .{
-                        .tokenTypes = &.{
-                            "keyword",
-                            "property",
-                            "function",
-                            "number",
-                            "string",
-                            "variable",
-                            "parameter",
-                            "type",
-                        },
-                        .tokenModifiers = &.{},
+                        .tokenTypes = sem.TokenType.getNames(),
+                        .tokenModifiers = sem.TokenModifier.getNames(),
                     },
+                    .full = .{ .bool = true },
                 },
             },
         },
@@ -222,6 +214,45 @@ pub fn @"textDocument/completion"(
     });
 
     return .{ .completion_items = completions };
+}
+
+pub fn @"textDocument/semanticTokens/full"(
+    self: *Dispatcher,
+    arena: std.mem.Allocator,
+    params: lsp.types.semantic_tokens.Params,
+) !?lsp.types.semantic_tokens.Result {
+    std.log.debug("Received 'textDocument/semanticTokens/full'", .{});
+
+    const file_id = self.workspace.getId(params.textDocument.uri) orelse return null;
+
+    const source_view = self.workspace.view(file_id, .source);
+    const ast_view = self.workspace.view(file_id, .tree);
+
+    const raw_tokens = try sem.Collector.collect(arena, ast_view.source);
+
+    _ = try sem.sortTokens(raw_tokens);
+
+    var data: std.ArrayList(u32) = .empty;
+    var prev_line: u32 = 0;
+    var prev_char: u32 = 0;
+
+    for (raw_tokens) |raw| {
+        const start_pos = lsp.offsets.indexToPosition(source_view.source, raw.start, self.offset_encodings);
+        const len = lsp.offsets.locLength(source_view.source, .{ .start = raw.start, .end = raw.end }, self.offset_encodings);
+
+        const line: u32 = @intCast(start_pos.line);
+        const char: u32 = @intCast(start_pos.character);
+
+        const delta_line = line - prev_line;
+        const delta_char = if (delta_line == 0) char - prev_char else char;
+
+        try data.appendSlice(arena, &.{ delta_line, delta_char, @intCast(len), raw.ttype, raw.mods });
+
+        prev_line = line;
+        prev_char = char;
+    }
+
+    return .{ .data = data.items };
 }
 
 pub fn onResponse(_: *Dispatcher, _: std.mem.Allocator, response: lsp.JsonRPCMessage.Response) void {
