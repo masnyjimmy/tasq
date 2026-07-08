@@ -11,8 +11,8 @@ const Token = token.Token;
 const TokenKind = token.TokenKind;
 
 const Diagnostics = @import("Diagnostics.zig");
-const Span = Diagnostics.Span;
-const WithSpan = Span.Wrapped;
+
+const Span = @import("span.zig");
 
 const ParseError = error{
     UnexpectedToken,
@@ -30,6 +30,7 @@ pub const Parser = struct {
     arena: *std.heap.ArenaAllocator,
     lexer: *Lexer,
     diagnostics: *Diagnostics,
+    span_registry: *Span.Registry,
 
     current: ?Token,
     next: Token,
@@ -53,13 +54,6 @@ pub const Parser = struct {
         return .{
             .start = start,
             .len = end - start,
-        };
-    }
-
-    fn valueFromToken(_: *Parser, tok: Token) WithSpan([]const u8) {
-        return .{
-            .span = tok.span,
-            .value = tok.lexeme,
         };
     }
 
@@ -195,12 +189,21 @@ pub const Parser = struct {
                         return error.UnexpectedToken;
                     }
                     _ = try self.expect(.colon_eq);
+
+                    const value_start = self.currentPos();
                     const value = try self.parseExpr();
 
+                    const id = try self.span_registry.putNode(
+                        self.spanFrom(tok_start),
+                        tok.span,
+                        self.spanFrom(value_start),
+                        null,
+                    );
+
                     const decl = ast.Decl{
-                        .name = tok.sliceWithSpan(),
+                        .id = id,
+                        .name = tok.lexeme,
                         .value = value,
-                        .span = self.spanFrom(tok_start),
                     };
 
                     try decls.append(self.arena.allocator(), decl);
@@ -253,17 +256,27 @@ pub const Parser = struct {
             const name = try self.expect(.ident);
 
             var value: ?ast.MetaValue = null;
+            var span: ?Span = null;
 
-            if (self.eat(.colon) != null) {
+            if (self.eat(.colon) != null) { //TODO: handle color span
+                const meta_start = self.currentPos();
                 value = try self.parseMetaValue();
+                span = self.spanFrom(meta_start);
             }
+
+            const id = try self.span_registry.putNode(
+                self.span_registry(attr_start),
+                name.span,
+                span,
+                null,
+            );
 
             try attrs.append(
                 self.arena.allocator(),
                 .{
-                    .name = name.sliceWithSpan(),
+                    .id = id,
+                    .name = name.lexeme,
                     .value = value,
-                    .span = self.spanFrom(attr_start), //TODO: consider if valid span,
                 },
             );
 
@@ -305,12 +318,20 @@ pub const Parser = struct {
                         return error.UnexpectedToken;
                     }
                     _ = try self.expect(.colon_eq);
+                    const value_start = self.currentPos();
                     const value = try self.parseExpr();
 
+                    const id = try self.span_registry.putNode(
+                        self.spanFrom(tok_start),
+                        tok.span,
+                        self.spanFrom(value_start),
+                        null,
+                    );
+
                     const decl = ast.Decl{
-                        .name = tok.sliceWithSpan(),
+                        .id = id,
+                        .name = tok.lexeme,
                         .value = value,
-                        .span = self.spanFrom(tok_start),
                     };
 
                     try decls.append(self.arena.allocator(), decl);
@@ -328,13 +349,20 @@ pub const Parser = struct {
             }
         }
 
+        const id = try self.span_registry.putNode(
+            self.spanFrom(start),
+            if (name) |v| v.span else null,
+            null,
+            null,
+        );
+
         return .{
-            .name = if (name) |v| v.sliceWithSpan() else null,
+            .id = id,
+            .name = if (name) |v| v.lexeme else null,
             .attrs = attrs,
             .args = arguments,
             .decls = try decls.toOwnedSlice(self.arena.allocator()),
             .tasks = try tasks.toOwnedSlice(self.arena.allocator()),
-            .span = self.spanFrom(start),
         };
     }
 
@@ -351,6 +379,7 @@ pub const Parser = struct {
 
         const body = blk: {
             if (ast.hasAttr(attrs, "script")) {
+                const body_start = self.currentPos();
                 self.resyncToRaw();
 
                 const str = try self.parseStringExpr("}", true);
@@ -360,18 +389,28 @@ pub const Parser = struct {
                 const stmts = try self.arena.allocator().alloc(ast.Statement, 1);
                 stmts[0] = .{ .process = str };
 
+                // whole body as string
+                try self.span_registry.put(.string, self.spanFrom(body_start));
+
                 break :blk stmts;
             }
 
             break :blk try self.parseStatements();
         };
 
+        const id = try self.span_registry.putNode(
+            self.spanFrom(start),
+            name.span,
+            null,
+            null,
+        );
+
         return .{
-            .name = name.sliceWithSpan(),
+            .id = id,
+            .name = name.lexeme,
             .attrs = attrs,
             .args = arguments,
             .body = body,
-            .span = self.spanFrom(start),
         };
     }
 
@@ -388,8 +427,13 @@ pub const Parser = struct {
     fn parseOneStatement(self: *Parser) ParseError!ast.Statement {
         switch (self.peek()) {
             .backtick => {
+                try self.span_registry.put(.string, self.next.span); // backstick is string part
+
                 const str = try self.parseStringExpr("`", false);
-                _ = try self.expect(.backtick);
+
+                if (try self.expect(.backtick)) |tok| {
+                    try self.span_registry.put(.string, tok.span); // here too
+                }
 
                 return .{ .process = str };
             },
@@ -398,39 +442,60 @@ pub const Parser = struct {
                 const ident_start = self.currentPos();
                 const identName = self.advance();
 
-                if (self.eat(.colon_eq) != null) {
+                if (self.eat(.colon_eq)) |_| {
+                    const value_start = self.currentPos();
                     const value = try self.parseExpr();
+
+                    const id = try self.span_registry.putNode(
+                        self.spanFrom(ident_start),
+                        identName.span,
+                        self.spanFrom(value_start),
+                        null,
+                    );
+
                     return .{
                         .decl = .{
-                            .name = identName.sliceWithSpan(),
+                            .id = id,
+                            .name = identName.lexeme,
                             .value = value,
-                            .span = self.spanFrom(ident_start),
                         },
                     };
                 } else { // must be task call
                     const call_start = ident_start;
                     var scope: ast.TaskCallScope = .closest;
 
+                    var group_scope_span: ?Span = null;
+
                     var task = identName;
 
                     if (self.eat(.dcolon)) |_| {
-                        scope = .{ .group = task.sliceWithSpan() };
-                        const tok = try self.expect(.ident);
-                        task = tok;
+                        const group = task;
+                        task = try self.expect(.ident);
+
+                        group_scope_span = group.span;
+                        scope = .{ .group = group.lexeme };
                     }
 
                     const args = try self.parseTaskCallArgs();
 
+                    const id = try self.span_registry.putNode(
+                        self.spanFrom(call_start),
+                        task.span,
+                        null,
+                        group_scope_span,
+                    );
+
                     return .{
                         .task_call = .{
-                            .task = task.sliceWithSpan(),
+                            .id = id,
+                            .task = task.lexeme,
                             .scope = scope,
                             .args = args,
-                            .span = self.spanFrom(call_start),
                         },
                     };
                 }
             },
+            // ::task => root task call
             .dcolon => {
                 const start = self.currentPos();
                 _ = self.advance();
@@ -438,18 +503,29 @@ pub const Parser = struct {
 
                 const args = try self.parseTaskCallArgs();
 
+                const id = try self.span_registry.putNode(
+                    self.spanFrom(start),
+                    identName.span,
+                    null,
+                    null,
+                );
                 return .{
                     .task_call = .{
-                        .task = identName.sliceWithSpan(),
+                        .id = id,
+                        .task = identName.lexeme,
                         .scope = .root,
                         .args = args,
-                        .span = self.spanFrom(start),
                     },
                 };
             },
             .if_kw => {
                 _ = self.advance();
-                const cond = try self.parseExpr();
+
+                const cond, const cond_span = blk: {
+                    const cond_start = self.currentPos();
+                    const cond = try self.parseExpr();
+                    break :blk .{ cond, self.spanFrom(cond_start) };
+                };
                 var then: []ast.Statement = undefined;
                 var else_: ?[]ast.Statement = null;
 
@@ -475,8 +551,11 @@ pub const Parser = struct {
                     }
                 }
 
+                const id = try self.span_registry.putNode(cond_span, null, null, null);
+
                 return .{
                     .if_stmt = .{
+                        .id = id,
                         .cond = cond,
                         .then = then,
                         .else_ = else_,
@@ -498,27 +577,40 @@ pub const Parser = struct {
         while (self.eat(.rparen) == null) {
             const arg_start = self.currentPos();
 
-            var argName: ?[]const u8 = null;
-            var value: ast.Expr = undefined;
+            var arg_name: ?Token = null;
 
-            // FIX: previously `value` was left undefined when the current token
-            // was not an ident, causing UB. Now every branch sets `value`.
+            var value: ast.Expr = undefined;
+            var value_span: ?Span = null;
+
             if (self.eat(.ident)) |tok| {
                 if (self.eat(.colon)) |_| {
-                    argName = tok.lexeme;
+                    arg_name = tok;
+                    const value_start = self.currentPos();
                     value = try self.parseExpr();
+                    value_span = self.spanFrom(value_start);
                 } else {
                     _ = try self.retreat();
+                    const value_start = self.currentPos();
                     value = try self.parseExpr();
+                    value_span = self.spanFrom(value_start);
                 }
             } else {
+                const value_start = self.currentPos();
                 value = try self.parseExpr();
+                value_span = self.spanFrom(value_start);
             }
 
+            const id = self.span_registry.putNode(
+                self.spanFrom(arg_start),
+                if (arg_name) |v| v.span else null,
+                value_span,
+                null,
+            );
+
             try args.append(self.arena.allocator(), .{
-                .name = argName,
+                .id = id,
+                .name = if (arg_name) |v| v.lexeme else null,
                 .value = value,
-                .span = self.spanFrom(arg_start),
             });
 
             if (self.peek() != .rparen) {
@@ -540,28 +632,33 @@ pub const Parser = struct {
 
             _ = try self.expect(.colon);
 
-            const arg_type = blk: {
+            const arg_type, const arg_span = blk: {
                 const start = self.currentPos();
                 const out = try self.parseArgType();
 
-                break :blk WithSpan(ast.ArgType){
-                    .span = self.spanFrom(start),
-                    .value = out,
-                };
+                break :blk .{ out, self.spanFrom(start) };
             };
 
             var default: ?ast.Expr = null;
+            var default_span: ?Span = null;
 
             if (self.eat(.eq) != null) {
+                const default_start = self.currentPos();
                 default = try self.parseExpr();
+                default_span = self.spanFrom(default_start);
             }
-
+            const id = try self.span_registry.putNode(
+                self.spanFrom(arg_start),
+                name.span,
+                default_span,
+                arg_span,
+            );
             try arguments.append(self.arena.allocator(), .{
-                .name = name.sliceWithSpan(),
+                .id = id,
+                .name = name.lexeme,
                 .attrs = attrs,
                 .type = arg_type,
                 .default = default,
-                .span = self.spanFrom(arg_start),
             });
 
             //TODO: comma is kinda not needed to parse this so just make it optional for now
@@ -582,10 +679,17 @@ pub const Parser = struct {
             try decls.append(self.arena.allocator(), try self.parseSetDecl());
         }
 
+        const id = try self.span_registry.putNode(
+            self.spanFrom(start),
+            null,
+            null,
+            null,
+        );
+
         return .{
+            .id = id,
             .attrs = attributes,
             .body = try decls.toOwnedSlice(self.arena.allocator()),
-            .span = self.spanFrom(start),
         };
     }
 
@@ -594,20 +698,31 @@ pub const Parser = struct {
 
         const ident = try self.expect(.ident);
         var value: ?ast.MetaValue = null;
+        var value_span: ?Span = null;
 
         if (self.eat(.eq)) |_| {
+            const value_start = self.currentPos();
             value = try self.parseMetaValue();
+            value_span = self.spanFrom(value_start);
         }
 
+        const id = try self.span_registry.putNode(
+            self.spanFrom(start),
+            ident.span,
+            value_span,
+            null,
+        );
+
         return .{
-            .name = ident.sliceWithSpan(),
+            .id = id,
+            .name = ident.lexeme,
             .value = value,
-            .span = self.spanFrom(start),
         };
     }
 
     fn parseArgType(self: *Parser) !ast.ArgType {
         const list = blk: {
+            // TODO: handle brackets span
             if (self.eat(.lbracket)) |_| {
                 _ = try self.expect(.rbracket);
                 break :blk true;
@@ -659,11 +774,18 @@ pub const Parser = struct {
             _ = try self.expect(.rparen);
         }
 
+        const id = try self.span_registry.putNode(
+            self.spanFrom(start),
+            ident.span,
+            null,
+            null,
+        );
+
         return ast.Expr{
             .builtin_call = .{
-                .name = ident.sliceWithSpan(),
+                .id = id,
+                .name = ident.lexeme,
                 .args = try args.toOwnedSlice(self.arena.allocator()),
-                .span = self.spanFrom(start),
             },
         };
     }
@@ -806,6 +928,7 @@ pub const Parser = struct {
     }
 
     fn parsePrimary(self: *Parser) ParseError!ast.Expr {
+        //TODO: ensure that every span handled correctly
         switch (self.peek()) {
             .number => {
                 const tok = self.advance();
@@ -921,7 +1044,12 @@ pub const Parser = struct {
             const seg = lexer.lexString(&.{ terminator, "{{" }, multiline);
 
             switch (seg.kind) {
-                .string => try out.append(self.arena.allocator(), .{ .lit = seg.sliceWithSpan() }),
+                .string => {
+                    try self.span_registry.put(.string, seg.span);
+                    try out.append(self.arena.allocator(), .{
+                        .lit = seg.lexeme,
+                    });
+                },
                 .unterminated_string => {
                     try self.addDiagnostic(.err, "unterminated string", .{});
                     return ParseError.UnexpectedToken;
@@ -933,7 +1061,7 @@ pub const Parser = struct {
             }
 
             self.resyncFromRaw();
-            if (self.eat(.ldbrace)) |_| {
+            if (self.eat(.ldbrace)) |_| { //TODO: handle ld/rd brace span
                 const expr = try self.parseExpr();
                 try out.append(self.arena.allocator(), .{ .expr = expr });
                 _ = try self.expect(.rdbrace);
