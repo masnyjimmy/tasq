@@ -17,7 +17,7 @@ pub const TokenType = enum(u32) {
     type,
 
     pub fn getNames() []const []const u8 {
-        std.meta.fieldNames(@This());
+        return std.meta.fieldNames(@This());
     }
 };
 
@@ -27,10 +27,10 @@ pub const TokenModifier = enum(u32) {
     default_library = 1 << 2,
 
     pub fn getNames() []const []const u8 {
-        std.meta.fieldNames(@This());
+        return std.meta.fieldNames(@This());
     }
 
-    fn modsToInt(comptime mods: []TokenModifier) u32 {
+    fn modsToInt(comptime mods: []const TokenModifier) u32 {
         var out: u32 = 0;
 
         for (mods) |mod| {
@@ -46,7 +46,7 @@ const RawToken = struct {
     ttype: u32,
     mods: u32 = 0,
 
-    pub fn make(span: Span, comptime ttype: TokenType, comptime mods: []TokenModifier) RawToken {
+    pub fn make(span: Span, comptime ttype: TokenType, comptime mods: []const TokenModifier) RawToken {
         return .{
             .start = span.start,
             .end = span.end(),
@@ -68,7 +68,9 @@ pub const Collector = struct {
     allocator: std.mem.Allocator,
     tokens: std.ArrayList(RawToken),
 
-    pub fn collect(allocator: std.mem.Allocator, file: *const ast.File) ![]RawToken {
+    const Error = std.mem.Allocator.Error;
+
+    pub fn collect(allocator: std.mem.Allocator, file: *const ast.File) Error![]RawToken {
         var collector: Collector = .init(allocator);
 
         try collector.walkFile(file);
@@ -83,11 +85,11 @@ pub const Collector = struct {
         };
     }
 
-    fn add(self: *Collector, span: Span, comptime ttype: TokenType, comptime mods: ?[]TokenModifier) !void {
-        self.tokens.append(self.allocator, .make(span, ttype, mods orelse &.{}));
+    fn add(self: *Collector, span: Span, comptime ttype: TokenType, comptime mods: ?[]const TokenModifier) Error!void {
+        try self.tokens.append(self.allocator, .make(span, ttype, mods orelse &.{}));
     }
 
-    fn walkFile(self: *Collector, file: *const ast.File) !void {
+    fn walkFile(self: *Collector, file: *const ast.File) Error!void {
         for (file.decls) |*decl| {
             try self.walkDecl(decl);
         }
@@ -101,9 +103,9 @@ pub const Collector = struct {
         }
     }
 
-    fn walkGroup(self: *Collector, group: *const ast.Group) !void {
+    fn walkGroup(self: *Collector, group: *const ast.Group) Error!void {
         if (group.name) |name| {
-            try self.add(name.span, .variable);
+            try self.add(name.span, .variable, null);
         }
 
         for (group.args) |*arg| {
@@ -123,8 +125,8 @@ pub const Collector = struct {
         }
     }
 
-    fn walkTask(self: *Collector, task: *const ast.Task) !void {
-        try self.add(task.name.span, .variable);
+    fn walkTask(self: *Collector, task: *const ast.Task) Error!void {
+        try self.add(task.name.span, .variable, null);
 
         for (task.args) |*arg| {
             try self.walkArgument(arg);
@@ -139,7 +141,7 @@ pub const Collector = struct {
         }
     }
 
-    fn walkStatement(self: *Collector, stmt: *const ast.Statement) !void {
+    fn walkStatement(self: *Collector, stmt: *const ast.Statement) Error!void {
         switch (stmt.*) {
             .process => |v| try self.walkStringExpr(&v),
             .decl => |v| try self.walkDecl(&v),
@@ -149,8 +151,8 @@ pub const Collector = struct {
         }
     }
 
-    fn walkArgument(self: *Collector, arg: *const ast.Argument) !void {
-        try self.add(arg.name.span, .variable);
+    fn walkArgument(self: *Collector, arg: *const ast.Argument) Error!void {
+        try self.add(arg.name.span, .variable, null);
 
         for (arg.attrs) |*attr| {
             try self.walkAttribute(attr);
@@ -160,23 +162,23 @@ pub const Collector = struct {
             try self.walkExpr(def);
         }
 
-        try self.add(arg.type.span, .type);
+        try self.add(arg.type.span, .type, null);
     }
 
-    fn walkAttribute(self: *Collector, attr: *const ast.Attribute) !void {
-        try self.add(attr.name.span, .variable);
+    fn walkAttribute(self: *Collector, attr: *const ast.Attribute) Error!void {
+        try self.add(attr.name.span, .variable, null);
 
-        if (attr.value) |val| {
+        if (attr.value) |_| {
             //TODO: implement
         }
     }
 
-    fn walkDecl(self: *Collector, decl: *const ast.Decl) !void {
-        self.add(decl.name.span, .variable, &.{TokenModifier.declaration});
-        self.walkExpr(&decl.value);
+    fn walkDecl(self: *Collector, decl: *const ast.Decl) Error!void {
+        try self.add(decl.name.span, .variable, &.{TokenModifier.declaration});
+        try self.walkExpr(&decl.value);
     }
 
-    fn walkExpr(self: *Collector, expr: *const ast.Expr) !void {
+    fn walkExpr(self: *Collector, expr: *const ast.Expr) Error!void {
         switch (expr.*) {
             .bool_lit => |v| try self.add(v.span, .keyword, null),
             .number_lit => |v| try self.add(v.span, .number, null),
