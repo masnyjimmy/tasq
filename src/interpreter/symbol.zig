@@ -30,8 +30,8 @@ pub const Scope = struct {
 
     pub fn define(self: *Scope, symbol: Symbol) !void {
         std.debug.assert(self.symbols.contains(symbol.name) == false);
-
         std.debug.assert(self.static.resolveLocal(symbol.name, .variable) != null);
+
         try self.symbols.put(self.arena.allocator(), symbol.name, symbol);
     }
 
@@ -44,7 +44,7 @@ pub const Scope = struct {
 
         while (curr) |c| {
             if (c.static == static)
-                return curr;
+                return c;
 
             curr = c.parent;
         }
