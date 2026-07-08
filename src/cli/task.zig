@@ -721,7 +721,10 @@ const TaskArgumentParser = struct {
 pub fn runTask(ctx: *const Context, task_id: []const u8, args: []const []const u8) !void {
     const file = try compileRunfile(ctx);
 
-    const task = file.findTask(.parse(task_id)) orelse return TaskError.TaskNotFound;
+    const task = file.findTask(.parse(task_id)) orelse {
+        try ctx.printer.printStyled(ctx.allocator, style.err, "Task '{s}' not found\n", .{task_id});
+        return TaskError.TaskNotFound;
+    };
 
     var call_stack: inter.CallStack = .init(
         ctx.allocator,

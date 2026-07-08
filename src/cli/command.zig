@@ -37,12 +37,7 @@ fn RunTask(ctx: *const Context) !void {
     const task = ctx.args[0];
     const args = ctx.args[1..];
 
-    task_mod.runTask(&ctx.app, task, args) catch |err| return switch (err) {
-        error.TaskNotFound => {
-            std.debug.panic("Task not found", .{});
-        },
-        else => err,
-    };
+    try task_mod.runTask(&ctx.app, task, args);
 }
 
 fn ShowUsage(ctx: *const Context) !void {
