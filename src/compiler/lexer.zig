@@ -6,6 +6,8 @@ const token = @import("token.zig");
 const TokenKind = token.TokenKind;
 const Token = token.Token;
 
+const Span = @import("span.zig");
+
 // ── Keyword map ───────────────────────────────────────────────────────────────
 
 const keywords = std.StaticStringMap(TokenKind).initComptime(.{
@@ -40,8 +42,14 @@ pub const Lexer = struct {
     source: []const u8,
     pos: u32,
 
-    pub fn init(source: []const u8) Lexer {
-        return .{ .source = source, .pos = 0 };
+    span_registry: *Span.Registry,
+
+    pub fn init(source: []const u8, span_registry: *Span.Registry) Lexer {
+        return .{
+            .source = source,
+            .pos = 0,
+            .span_registry = span_registry,
+        };
     }
 
     // ── Public interface ──────────────────────────────────────────────────────
@@ -298,6 +306,32 @@ pub const Lexer = struct {
     // ── Token constructors ────────────────────────────────────────────────────
 
     fn makeToken(self: *Lexer, kind: TokenKind, start: u32, len: u32) Token {
+        const span: Span = .{
+            .start = start,
+            .len = len,
+        };
+
+        switch (kind) {
+            .set_kw,
+            .task_kw,
+            .group_kw,
+            .if_kw,
+            .else_kw,
+            .and_kw,
+            .or_kw,
+            .not_kw,
+            => {
+                try self.span_registry.put(.keyword, span);
+            },
+            .string_type, .flag_type, .number_type => {
+                try self.span_registry.put(.type, span);
+            },
+            .number => {
+                try self.span_registry.put(.number, span);
+            },
+        }
+        std.debug.print("makeToken: {t}", .{kind});
+
         return .{
             .kind = kind,
             .span = .{
@@ -311,6 +345,7 @@ pub const Lexer = struct {
     fn consumeN(self: *Lexer, kind: TokenKind, n: u32) Token {
         const start = self.pos;
         self.pos += n;
+
         return self.makeToken(kind, start, n);
     }
 
