@@ -72,18 +72,16 @@ pub const Registry = struct {
     // bellow functions asserts that those exists
     // it will be known from either ast or ir,
 
-    pub fn fullSpan(self: *Registry, id: SpanId) Span {
-        return self.nodes.get(id).?.object;
-    }
-    pub fn nameSpan(self: *Registry, id: SpanId) Span {
-        return self.nodes.get(id).?.name.?;
-    }
+    const NodeSpanType = enum { full, name, value, extra };
 
-    pub fn valueSpan(self: *Registry, id: SpanId) Span {
-        return self.nodes.get(id).?.value.?;
-    }
+    pub fn getSpan(self: *Registry, id: SpanId, comptime nstype: NodeSpanType) Span {
+        const node = self.nodes.get(id).?;
 
-    pub fn extraSpan(self: *Registry, id: SpanId) Span {
-        return self.nodes.get(id).?.extra.?;
+        return switch (nstype) {
+            .full => node.object,
+            .name => node.name,
+            .value => node.value,
+            .extra => node.extra,
+        };
     }
 };
