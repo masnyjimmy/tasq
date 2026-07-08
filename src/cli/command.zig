@@ -22,7 +22,7 @@ fn GlobalPreHandler(ctx: *const Context) !void {
 
 fn PrintVersion(ctx: *const Context) !void {
     try ctx.app.printer.printStyled(
-        ctx.app.gpa,
+        ctx.app.allocator,
         .{ .fg = .bright_white },
         "later bro",
         .{},
@@ -63,7 +63,7 @@ fn RunList(ctx: *const Context) !void {
 fn RunLsp(ctx: *const Context) !void {
     const lsp = @import("lsp");
 
-    try lsp.run(ctx.app.gpa, ctx.app.io);
+    try lsp.run(ctx.app.allocator, ctx.app.io);
 }
 
 pub fn buildCommand(allocator: std.mem.Allocator) !*Command {

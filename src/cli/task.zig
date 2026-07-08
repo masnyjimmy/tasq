@@ -28,10 +28,20 @@ const DESCRIPTION_TEXT_OFFSET = 10;
 pub fn compileRunfile(ctx: *const Context) !*const compiler.ir.File {
     const cwd = std.Io.Dir.cwd();
 
-    const content = try cwd.readFileAlloc(ctx.io, ctx.source_file_path, ctx.gpa, .unlimited);
-    defer ctx.gpa.free(content);
+    const content = try cwd.readFileAlloc(
+        ctx.io,
+        ctx.source_file_path,
+        ctx.allocator,
+        .unlimited,
+    );
+    defer ctx.allocator.free(content);
 
-    const file_id = try ctx.workspace.openFile(ctx.gpa, ctx.source_file_path, content, 0);
+    const file_id = try ctx.workspace.openFile(
+        ctx.allocator,
+        ctx.source_file_path,
+        content,
+        0,
+    );
 
     return ctx.workspace.view(file_id, .ir).source;
 }
@@ -42,27 +52,27 @@ pub fn printTasksList(ctx: *const Context) !void {
     const p = ctx.printer;
 
     // consider moving task reading into ir.File
-    const tasks = try file.scope.readTasks(ctx.gpa);
-    defer ctx.gpa.free(tasks);
+    const tasks = try file.scope.readTasks(ctx.allocator);
+    defer ctx.allocator.free(tasks);
 
-    const groups = try file.scope.readGroups(ctx.gpa);
-    defer ctx.gpa.free(groups);
+    const groups = try file.scope.readGroups(ctx.allocator);
+    defer ctx.allocator.free(groups);
 
     if (tasks.len == 0 and groups.len == 0) {
-        try p.printStyled(ctx.gpa, .{ .fg = .bright_yellow }, "no tasks available\n", .{});
+        try p.printStyled(ctx.allocator, .{ .fg = .bright_yellow }, "no tasks available\n", .{});
         return;
     }
 
-    try p.printStyled(ctx.gpa, .{ .fg = .white, .bold = true }, "Tasks:", .{});
+    try p.printStyled(ctx.allocator, .{ .fg = .white, .bold = true }, "Tasks:", .{});
 
     for (file.tasks) |task| {
         p.indent();
         defer p.detend();
 
-        try p.printStyled(ctx.gpa, .{ .fg = .green }, "\n{s}", .{task.name});
+        try p.printStyled(ctx.allocator, .{ .fg = .green }, "\n{s}", .{task.name});
 
         if (task.desc) |desc| {
-            try p.printStyled(ctx.gpa, .{ .fg = .white }, " " ** 4 ++ "{s}", .{desc});
+            try p.printStyled(ctx.allocator, .{ .fg = .white }, " " ** 4 ++ "{s}", .{desc});
         }
     }
 
@@ -72,16 +82,16 @@ pub fn printTasksList(ctx: *const Context) !void {
 
         //TODO: handle properly anonymous groups
         try p.printStyled(
-            ctx.gpa,
+            ctx.allocator,
             .{ .fg = .yellow, .bold = true },
             "\n[{s}]",
             .{group.name.?},
         );
 
         for (group.tasks) |task| {
-            try p.printStyled(ctx.gpa, .{ .fg = .green }, "\n{s}", .{task.name});
+            try p.printStyled(ctx.allocator, .{ .fg = .green }, "\n{s}", .{task.name});
             if (task.desc) |desc| {
-                try p.printStyled(ctx.gpa, .{ .fg = .white }, " " ** 4 ++ "{s}", .{desc});
+                try p.printStyled(ctx.allocator, .{ .fg = .white }, " " ** 4 ++ "{s}", .{desc});
             }
         }
     }
@@ -120,14 +130,14 @@ pub fn printTaskUsage(ctx: *const Context, task_id: []const u8) !void {
         break :blk task.args[0..count];
     };
 
-    try ctx.printer.printStyled(ctx.gpa, style.head, "Usage: ", .{});
+    try ctx.printer.printStyled(ctx.allocator, style.head, "Usage: ", .{});
 
-    try ctx.printer.printStyled(ctx.gpa, style.body, "tasq {s} ", .{task.name});
+    try ctx.printer.printStyled(ctx.allocator, style.body, "tasq {s} ", .{task.name});
 
     for (positional) |arg|
-        try ctx.printer.printStyled(ctx.gpa, style.body, "{s} ", .{arg.name});
+        try ctx.printer.printStyled(ctx.allocator, style.body, "{s} ", .{arg.name});
 
-    try ctx.printer.printStyled(ctx.gpa, style.body, "[OPTIONS]\n", .{});
+    try ctx.printer.printStyled(ctx.allocator, style.body, "[OPTIONS]\n", .{});
 
     //Arguments:
     //  {argument name} [<{argument value type}>]   [{description}]
@@ -143,19 +153,19 @@ pub fn printTaskUsage(ctx: *const Context, task_id: []const u8) !void {
             break :blk @max(10, max);
         };
 
-        try ctx.printer.printStyled(ctx.gpa, style.head, "\nArguments:", .{});
+        try ctx.printer.printStyled(ctx.allocator, style.head, "\nArguments:", .{});
 
         for (positional) |arg| {
             ctx.printer.indent();
             defer ctx.printer.detend();
 
-            try ctx.printer.printStyled(ctx.gpa, style.body, "\n{[name]s: <[width]}", .{
+            try ctx.printer.printStyled(ctx.allocator, style.body, "\n{[name]s: <[width]}", .{
                 .name = arg.name,
                 .width = names_col_width,
             });
 
             if (arg.desc) |desc| {
-                try ctx.printer.printStyled(ctx.gpa, style.desc, "{s}", .{desc});
+                try ctx.printer.printStyled(ctx.allocator, style.desc, "{s}", .{desc});
             }
         }
     }
@@ -187,35 +197,35 @@ pub fn printTaskUsage(ctx: *const Context, task_id: []const u8) !void {
     };
 
     const options = blk: {
-        var options = try std.ArrayList(*ir.Argument).initCapacity(ctx.gpa, task.args.len - positional.len);
+        var options = try std.ArrayList(*ir.Argument).initCapacity(ctx.allocator, task.args.len - positional.len);
         // append non positional task args
-        try options.appendSlice(ctx.gpa, task.args[positional.len..]);
+        try options.appendSlice(ctx.allocator, task.args[positional.len..]);
 
         // append group args
         if (task.group) |group| {
-            try options.appendSlice(ctx.gpa, group.args);
+            try options.appendSlice(ctx.allocator, group.args);
         }
 
-        break :blk try options.toOwnedSlice(ctx.gpa);
+        break :blk try options.toOwnedSlice(ctx.allocator);
     };
-    defer ctx.gpa.free(options);
+    defer ctx.allocator.free(options);
 
     if (options.len != 0) {
 
         // build and compute max length of names (i.e "-s, --long")
-        const precomputed_names = try ctx.gpa.alloc([]const u8, options.len);
+        const precomputed_names = try ctx.allocator.alloc([]const u8, options.len);
         defer {
             for (precomputed_names) |pn| {
-                ctx.gpa.free(pn);
+                ctx.allocator.free(pn);
             }
-            ctx.gpa.free(precomputed_names);
+            ctx.allocator.free(precomputed_names);
         }
 
         const name_col_width = blk: {
             var max: usize = 0;
 
             for (options, precomputed_names) |opt, *out| {
-                const names = try OptionNameBuilder.build(ctx.gpa, opt);
+                const names = try OptionNameBuilder.build(ctx.allocator, opt);
                 max = @max(max, names.len);
                 out.* = names;
             }
@@ -224,14 +234,14 @@ pub fn printTaskUsage(ctx: *const Context, task_id: []const u8) !void {
         };
 
         // build and compute max length of type names (excluding flag) (i.e "<string>")
-        const precomputed_type_names = try ctx.gpa.alloc(?[]const u8, options.len);
+        const precomputed_type_names = try ctx.allocator.alloc(?[]const u8, options.len);
         defer {
             for (precomputed_type_names) |precomputed_types_name| {
                 if (precomputed_types_name) |ptn| {
-                    ctx.gpa.free(ptn);
+                    ctx.allocator.free(ptn);
                 }
             }
-            ctx.gpa.free(precomputed_type_names);
+            ctx.allocator.free(precomputed_type_names);
         }
 
         const type_col_width = blk: {
@@ -243,7 +253,7 @@ pub fn printTaskUsage(ctx: *const Context, task_id: []const u8) !void {
                     continue;
                 }
 
-                const type_name = try std.fmt.allocPrint(ctx.gpa, "<{f}>", .{opt.type});
+                const type_name = try std.fmt.allocPrint(ctx.allocator, "<{f}>", .{opt.type});
                 const w = type_name.len;
 
                 precomputed_type_names[idx] = type_name;
@@ -269,7 +279,7 @@ pub fn printTaskUsage(ctx: *const Context, task_id: []const u8) !void {
             break :blk @max(10, max + DESCRIPTION_TEXT_OFFSET);
         };
 
-        try ctx.printer.printStyled(ctx.gpa, style.head, "\nOptions:", .{});
+        try ctx.printer.printStyled(ctx.allocator, style.head, "\nOptions:", .{});
 
         // left = name + type + offset
         // type + offset = left - name
@@ -280,13 +290,13 @@ pub fn printTaskUsage(ctx: *const Context, task_id: []const u8) !void {
             defer ctx.printer.detend();
 
             // print name
-            try ctx.printer.printStyled(ctx.gpa, style.option_name, "\n{[name]s: >[width]}", .{
+            try ctx.printer.printStyled(ctx.allocator, style.option_name, "\n{[name]s: >[width]}", .{
                 .name = name,
                 .width = name_col_width,
             });
 
             // print type optionally
-            try ctx.printer.printStyled(ctx.gpa, style.body, "{[type]s: <[width]}", .{
+            try ctx.printer.printStyled(ctx.allocator, style.body, "{[type]s: <[width]}", .{
                 .type = type_name orelse "",
                 .width = type_with_offset_width,
             });
@@ -294,7 +304,7 @@ pub fn printTaskUsage(ctx: *const Context, task_id: []const u8) !void {
             //print desc
 
             if (opt.desc) |desc| {
-                try ctx.printer.printStyled(ctx.gpa, style.desc, "{s}", .{desc});
+                try ctx.printer.printStyled(ctx.allocator, style.desc, "{s}", .{desc});
             }
         }
     }
@@ -302,20 +312,24 @@ pub fn printTaskUsage(ctx: *const Context, task_id: []const u8) !void {
 
 const TaskArgumentParser = struct {
     task: *ir.Task,
-    diagnostics: *lib.Diagnostic.List,
+    printer: *Printer,
 
     args: std.ArrayList(*ir.Argument) = .empty,
     long_alias: std.StringHashMapUnmanaged(usize) = .empty,
     short_alias: std.AutoHashMapUnmanaged(u8, usize) = .empty,
 
+    const style = struct {
+        const err: Style = .{ .fg = .bright_red };
+    };
+
     pub const Error = error{
         ParsingFailed,
-    } || std.mem.Allocator.Error;
+    } || std.mem.Allocator.Error || std.Io.Writer.Error;
 
-    pub fn init(gpa: std.mem.Allocator, task: *ir.Task, diagnostics: *lib.Diagnostic.List) Error!TaskArgumentParser {
+    pub fn init(gpa: std.mem.Allocator, task: *ir.Task, printer: *Printer) Error!TaskArgumentParser {
         var out: TaskArgumentParser = .{
             .task = task,
-            .diagnostics = diagnostics,
+            .printer = printer,
         };
 
         for (task.args) |arg| {
@@ -411,7 +425,12 @@ const TaskArgumentParser = struct {
             switch (tok.type) {
                 .value => {
                     if (positional_end) {
-                        try self.diagnostics.Err(.{ .argument = reader.pos }, "positional arguments must be placed before named ones", .{});
+                        try self.printer.printStyled(
+                            arena.allocator(),
+                            style.err,
+                            "positional arguments must be placed before named ones\n",
+                            .{},
+                        );
                         return Error.ParsingFailed;
                     }
 
@@ -423,7 +442,12 @@ const TaskArgumentParser = struct {
                     // problems may appear somewhere else,
                     // i.e flag nor list can never be positional
                     if (arg.is_positional == false) {
-                        try self.diagnostics.Err(.{ .argument = reader.pos }, "{s} is not positional", .{arg.name});
+                        try self.printer.printStyled(
+                            arena.allocator(),
+                            style.err,
+                            "'{s}' is not positional\n",
+                            .{arg.name},
+                        );
                         return Error.ParsingFailed;
                     }
 
@@ -439,10 +463,12 @@ const TaskArgumentParser = struct {
                     const value: Value = switch (arg.type) {
                         .number => NumberHandler.handle(tok.payload, arg.int) catch |err| return switch (err) {
                             error.InvalidType => {
-                                try self.diagnostics.Err(.{ .argument = reader.pos }, "invalid argument type, got '{s}' expected '{f}'", .{
-                                    tok.lexeme,
-                                    PrintableArgType.make(arg),
-                                });
+                                try self.printer.printStyled(
+                                    arena.allocator(),
+                                    style.err,
+                                    "invalid argument type, got '{s}' expected '{f}'\n",
+                                    .{ tok.lexeme, PrintableArgType.make(arg) },
+                                );
                                 return Error.ParsingFailed;
                             },
                             else => unreachable,
@@ -459,10 +485,14 @@ const TaskArgumentParser = struct {
 
                     const arg = blk: {
                         if (self.long_alias.get(tok.payload)) |arg_idx| {
-                            const arg = self.args.items[arg_idx];
-                            break :blk arg;
+                            break :blk self.args.items[arg_idx];
                         } else {
-                            try self.diagnostics.Err(.{ .argument = reader.pos }, "unknown argument '--{s}'", .{tok.payload});
+                            try self.printer.printStyled(
+                                arena.allocator(),
+                                style.err,
+                                "unknown argument '--{s}'\n",
+                                .{tok.payload},
+                            );
                             return Error.ParsingFailed;
                         }
                     };
@@ -470,11 +500,21 @@ const TaskArgumentParser = struct {
 
                     CollectorAdapter.collect(arena.allocator(), &collector, &reader, arg) catch |err| return switch (err) {
                         error.InvalidType => {
-                            try self.diagnostics.Err(.{ .argument = reader.pos }, "invalid '{s}' value type, got '{s}' expected '{f}'", .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) });
+                            try self.printer.printStyled(
+                                arena.allocator(),
+                                style.err,
+                                "invalid '{s}' value type, got '{s}' expected '{f}'\n",
+                                .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) },
+                            );
                             return Error.ParsingFailed;
                         },
                         error.UnexpectedEnd => {
-                            try self.diagnostics.Err(.{ .argument = null }, "unexpected end, '{s}' requires '{f}' value", .{ arg.name, PrintableArgType.make(arg) });
+                            try self.printer.printStyled(
+                                arena.allocator(),
+                                style.err,
+                                "unexpected end, '{s}' requires '{f}' value\n",
+                                .{ arg.name, PrintableArgType.make(arg) },
+                            );
                             return Error.ParsingFailed;
                         },
                         else => unreachable,
@@ -490,10 +530,14 @@ const TaskArgumentParser = struct {
                     for (flags) |flag| {
                         const arg = blk: {
                             if (self.short_alias.get(flag)) |arg_idx| {
-                                const arg = self.args.items[arg_idx];
-                                break :blk arg;
+                                break :blk self.args.items[arg_idx];
                             } else {
-                                try self.diagnostics.Err(.{ .argument = reader.pos }, "unknown argument '-{c}'", .{flag});
+                                try self.printer.printStyled(
+                                    arena.allocator(),
+                                    style.err,
+                                    "unknown argument '-{c}'\n",
+                                    .{flag},
+                                );
                                 return Error.ParsingFailed;
                             }
                         };
@@ -504,11 +548,21 @@ const TaskArgumentParser = struct {
 
                         CollectorAdapter.collect(arena.allocator(), &collector, &reader, arg) catch |err| return switch (err) {
                             error.InvalidType => {
-                                try self.diagnostics.Err(.{ .argument = reader.pos }, "invalid '{s}' value type, got '{s}' expected '{f}'", .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) });
+                                try self.printer.printStyled(
+                                    arena.allocator(),
+                                    style.err,
+                                    "invalid '{s}' value type, got '{s}' expected '{f}'\n",
+                                    .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) },
+                                );
                                 return Error.ParsingFailed;
                             },
                             error.UnexpectedEnd => {
-                                try self.diagnostics.Err(.{ .argument = null }, "unexpected end, '{s}' requires '{f}' value", .{ arg.name, PrintableArgType.make(arg) });
+                                try self.printer.printStyled(
+                                    arena.allocator(),
+                                    style.err,
+                                    "unexpected end, '{s}' requires '{f}' value\n",
+                                    .{ arg.name, PrintableArgType.make(arg) },
+                                );
                                 return Error.ParsingFailed;
                             },
                             else => unreachable,
@@ -517,21 +571,35 @@ const TaskArgumentParser = struct {
 
                     const arg = blk: {
                         if (self.short_alias.get(last)) |arg_idx| {
-                            const arg = self.args.items[arg_idx];
-                            break :blk arg;
+                            break :blk self.args.items[arg_idx];
                         } else {
-                            try self.diagnostics.Err(.{ .argument = reader.pos }, "unknown argument '-{c}'", .{last});
+                            try self.printer.printStyled(
+                                arena.allocator(),
+                                style.err,
+                                "unknown argument '-{c}'\n",
+                                .{last},
+                            );
                             return Error.ParsingFailed;
                         }
                     };
 
                     CollectorAdapter.collect(arena.allocator(), &collector, &reader, arg) catch |err| return switch (err) {
                         error.InvalidType => {
-                            try self.diagnostics.Err(.{ .argument = reader.pos }, "invalid '{s}' value type, got '{s}' expected '{f}'", .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) });
+                            try self.printer.printStyled(
+                                arena.allocator(),
+                                style.err,
+                                "invalid '{s}' value type, got '{s}' expected '{f}'\n",
+                                .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) },
+                            );
                             return Error.ParsingFailed;
                         },
                         error.UnexpectedEnd => {
-                            try self.diagnostics.Err(.{ .argument = null }, "unexpected end, '{s}' requires '{f}' value", .{ arg.name, PrintableArgType.make(arg) });
+                            try self.printer.printStyled(
+                                arena.allocator(),
+                                style.err,
+                                "unexpected end, '{s}' requires '{f}' value\n",
+                                .{ arg.name, PrintableArgType.make(arg) },
+                            );
                             return Error.ParsingFailed;
                         },
                         else => unreachable,
@@ -602,7 +670,12 @@ const TaskArgumentParser = struct {
             else if (arg.default) |def|
                 def
             else {
-                try self.diagnostics.Err(.{ .argument = null }, "'{s}' argument not provided", .{arg.name});
+                try self.printer.printStyled(
+                    arena.allocator(),
+                    style.err,
+                    "'{s}' argument not provided\n",
+                    .{arg.name},
+                );
                 return Error.ParsingFailed;
             };
             try out.put(arena.allocator(), arg.name, value);
@@ -615,7 +688,12 @@ const TaskArgumentParser = struct {
         if (self.task.group) |group| {
             for (group.args) |arg| {
                 if (out.contains(arg.name) == false) {
-                    try self.diagnostics.Err(.{ .argument = null }, "missing '{s}' value for '{s}' group", .{ arg.name, group.name orelse "<anonymous>" });
+                    try self.printer.printStyled(
+                        arena.allocator(),
+                        style.err,
+                        "missing '{s}' value for '{s}' group\n",
+                        .{ arg.name, group.name orelse "<anonymous>" },
+                    );
                     missing_argument = true;
                 }
             }
@@ -623,7 +701,13 @@ const TaskArgumentParser = struct {
 
         for (self.task.args) |arg| {
             if (out.contains(arg.name) == false) {
-                try self.diagnostics.Err(.{ .argument = null }, "missing '{s}' value for '{s}' task", .{ arg.name, self.task.name });
+                try self.printer.printStyled(
+                    arena.allocator(),
+                    style.err,
+                    "missing '{s}' value for '{s}' task\n",
+                    .{ arg.name, self.task.name },
+                );
+                missing_argument = true;
             }
         }
 
@@ -640,21 +724,20 @@ pub fn runTask(ctx: *const Context, task_id: []const u8, args: []const []const u
     const task = file.findTask(.parse(task_id)) orelse return TaskError.TaskNotFound;
 
     var call_stack: inter.CallStack = .init(
-        ctx.gpa,
-        ctx.diagnostics,
+        ctx.allocator,
         task,
     );
-    defer call_stack.deinit(ctx.gpa);
+    defer call_stack.deinit(ctx.allocator);
 
     var scope_stack: inter.ScopeStack = blk: {
         var parser: TaskArgumentParser = try .init(
-            ctx.gpa,
+            ctx.allocator,
             task,
-            ctx.diagnostics,
+            ctx.printer,
         );
-        defer parser.deinit(ctx.gpa);
+        defer parser.deinit(ctx.allocator);
 
-        var arena = std.heap.ArenaAllocator.init(ctx.gpa);
+        var arena = std.heap.ArenaAllocator.init(ctx.allocator);
         defer arena.deinit();
 
         var values = try parser.parseArguments(
@@ -663,20 +746,18 @@ pub fn runTask(ctx: *const Context, task_id: []const u8, args: []const []const u
         );
 
         break :blk try .init(
-            ctx.gpa,
-            ctx.diagnostics,
+            ctx.allocator,
             task,
             values.move(),
         );
     };
-    defer scope_stack.deinit(ctx.gpa);
+    defer scope_stack.deinit(ctx.allocator);
 
     var interpreter = inter.Interpreter.init(
-        ctx.gpa,
+        ctx.allocator,
         ctx.io,
         ctx.printer,
         &file.options,
-        ctx.diagnostics,
         &call_stack,
         &scope_stack,
         ctx.environ,

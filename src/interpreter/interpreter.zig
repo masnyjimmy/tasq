@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const lib = @import("lib");
-const Diagnostics = lib.Diagnostic.List;
 
 const compiler = @import("compiler");
 const ir = compiler.ir;
@@ -32,7 +31,6 @@ allocator: std.mem.Allocator,
 io: std.Io,
 printer: *Printer,
 options: *const ir.Options,
-diagnostics: *Diagnostics,
 status_code: u8 = 0,
 
 call_stack: *CallStack,
@@ -44,7 +42,6 @@ pub fn init(
     io: std.Io,
     printer: *Printer,
     options: *const ir.Options,
-    diagnostics: *Diagnostics,
     call_stack: *CallStack,
     scope_stack: *ScopeStack,
     environ: *const std.process.Environ.Map,
@@ -54,7 +51,6 @@ pub fn init(
         .io = io,
         .printer = printer,
         .options = options,
-        .diagnostics = diagnostics,
 
         .call_stack = call_stack,
         .scope_stack = scope_stack,

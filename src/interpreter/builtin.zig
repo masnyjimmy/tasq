@@ -43,7 +43,12 @@ fn handleEnv(self: *const Interpreter, args: []const Value) Error!Value {
     const value = if (self.environ.get(key)) |value|
         value
     else {
-        self.diagnostics.Err(.runtime, "'{s}' environment variable not found", .{key}) catch unreachable;
+        self.printer.printStyled(
+            self.allocator,
+            .{ .fg = .red },
+            "'{s}' environment variable not found",
+            .{key},
+        ) catch unreachable;
         return Error.FunctionFailed;
     };
 
