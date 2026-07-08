@@ -1,25 +1,6 @@
 const std = @import("std");
 
-pub const Span = struct {
-    start: u32,
-    len: u32,
-
-    pub const unknown: Span = .{
-        .start = 0,
-        .len = 0,
-    };
-
-    pub fn end(self: @This()) u32 {
-        return self.start + self.len;
-    }
-
-    pub fn Wrapped(comptime T: type) type {
-        return struct {
-            span: Span,
-            value: T,
-        };
-    }
-};
+const Span = @import("span.zig");
 
 pub const Severity = enum {
     err,

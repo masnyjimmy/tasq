@@ -1,8 +1,9 @@
 const std = @import("std");
 
 const Diagnostics = @import("Diagnostics.zig");
-const Span = Diagnostics.Span;
-pub const WithSpan = Span.Wrapped;
+const Span = @import("span.zig");
+
+const SpanId = Span.Registry.SpanId;
 
 const typing = @import("typing.zig");
 
