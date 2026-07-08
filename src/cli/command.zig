@@ -37,12 +37,7 @@ fn RunTask(ctx: *const Context) !void {
     const task = ctx.args[0];
     const args = ctx.args[1..];
 
-    task_mod.runTask(&ctx.app, task, args) catch |err| return switch (err) {
-        error.TaskNotFound => {
-            std.debug.panic("Task not found", .{});
-        },
-        else => err,
-    };
+    try task_mod.runTask(&ctx.app, task, args);
 }
 
 fn ShowUsage(ctx: *const Context) !void {
@@ -64,6 +59,44 @@ fn RunLsp(ctx: *const Context) !void {
     const lsp = @import("lsp");
 
     try lsp.run(ctx.app.allocator, ctx.app.io);
+}
+
+fn Dump(ctx: *const Context) !void {
+    const map = comptime lib.enums.generateEnumNameMap(enum { ast, ir });
+
+    switch (ctx.args.len) {
+        1 => {},
+        else => return ctx.fail("Invalid arguments, required [ast, ir]", .{}),
+    }
+
+    const target = map.get(ctx.args[0]) orelse return ctx.fail("Invalid arguments, required [ast, ir]", .{});
+
+    const cwd = std.Io.Dir.cwd();
+
+    var arena = std.heap.ArenaAllocator.init(ctx.app.allocator);
+    defer arena.deinit();
+
+    const source = try cwd.readFileAlloc(ctx.app.io, ctx.app.source_file_path, arena.allocator(), .unlimited);
+
+    const comp = @import("compiler");
+
+    var lexer = comp.Lexer.init(source);
+    var diagnostics: comp.Diagnostics = .init(arena.allocator());
+
+    var parser = comp.Parser.init(&arena, &lexer, &diagnostics);
+
+    const ast = try parser.parseFile();
+
+    if (target == .ast) {
+        lib.debug.dump(ast, 4);
+        return;
+    }
+
+    var sema = comp.Sema.init(&arena, &diagnostics);
+
+    const ir = try sema.analyse(ast);
+
+    lib.debug.dump(ir, 4);
 }
 
 pub fn buildCommand(allocator: std.mem.Allocator) !*Command {
@@ -110,6 +143,12 @@ pub fn buildCommand(allocator: std.mem.Allocator) !*Command {
         .brief = "choose stdio as transport layer",
         .short = null,
     }, .flag);
+
+    _ = try rootCmd.createSub(.{
+        .name = "--dump",
+        .brief = "dumps either ast tree or ir into stdout",
+        .run = .set(Dump),
+    });
 
     return rootCmd;
 }

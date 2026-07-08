@@ -99,14 +99,11 @@ fn main(self: *Interpreter, stmt: *const ir.Statement) !void {
 }
 
 fn handleDecl(self: *Interpreter, scope: *Scope, decl: *const ir.Decl) InterpreterError!Value {
-    std.debug.assert(self.getSymbol(decl.name) == null);
-
-    //TODO: consider this orelse Scope.findByStatic(..).define(..)
-    const decl_scope = self.currentScope().findByStatic(decl.scope) orelse unreachable;
+    const decl_scope = scope.findByStatic(decl.scope) orelse unreachable;
 
     const value = try self.resolveExpr(decl_scope, &decl.value);
 
-    try scope.define(.{
+    try decl_scope.define(.{
         .name = decl.name,
         .value = value,
     });

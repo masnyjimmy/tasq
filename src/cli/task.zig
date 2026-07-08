@@ -23,6 +23,19 @@ const TaskError = error{
     TaskNotFound,
 };
 
+const style = struct {
+    const err: Style = .{ .fg = .bright_red };
+    const head: Style = .{
+        .fg = .bright_yellow,
+        .bold = true,
+    };
+    const body: Style = .{ .fg = .bright_cyan };
+    const option_name: Style = .{ .fg = .bright_green };
+    const desc: Style = .{
+        .fg = .bright_blue,
+    };
+};
+
 const DESCRIPTION_TEXT_OFFSET = 10;
 
 pub fn compileRunfile(ctx: *const Context) !*const compiler.ir.File {
@@ -98,18 +111,6 @@ pub fn printTasksList(ctx: *const Context) !void {
 }
 
 pub fn printTaskUsage(ctx: *const Context, task_id: []const u8) !void {
-    const style = struct {
-        const head: Style = .{
-            .fg = .bright_yellow,
-            .bold = true,
-        };
-        const body: Style = .{ .fg = .bright_cyan };
-        const option_name: Style = .{ .fg = .bright_green };
-        const desc: Style = .{
-            .fg = .bright_blue,
-        };
-    };
-
     const file = try compileRunfile(ctx);
 
     const task = file.findTask(.parse(task_id)) orelse return TaskError.TaskNotFound;
@@ -317,10 +318,6 @@ const TaskArgumentParser = struct {
     args: std.ArrayList(*ir.Argument) = .empty,
     long_alias: std.StringHashMapUnmanaged(usize) = .empty,
     short_alias: std.AutoHashMapUnmanaged(u8, usize) = .empty,
-
-    const style = struct {
-        const err: Style = .{ .fg = .bright_red };
-    };
 
     pub const Error = error{
         ParsingFailed,
@@ -721,7 +718,10 @@ const TaskArgumentParser = struct {
 pub fn runTask(ctx: *const Context, task_id: []const u8, args: []const []const u8) !void {
     const file = try compileRunfile(ctx);
 
-    const task = file.findTask(.parse(task_id)) orelse return TaskError.TaskNotFound;
+    const task = file.findTask(.parse(task_id)) orelse {
+        try ctx.printer.printStyled(ctx.allocator, style.err, "Task '{s}' not found\n", .{task_id});
+        return TaskError.TaskNotFound;
+    };
 
     var call_stack: inter.CallStack = .init(
         ctx.allocator,
