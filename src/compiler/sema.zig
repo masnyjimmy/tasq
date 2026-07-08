@@ -20,7 +20,8 @@ const Scope = @import("scope.zig").Scope;
 const TaskId = @import("taskId.zig");
 
 const Diagnostics = @import("Diagnostics.zig");
-const Span = Diagnostics.Span;
+
+const Span = @import("span.zig");
 
 const lib = @import("lib");
 const enums = lib.enums;
@@ -32,11 +33,13 @@ const SemaError = error{
 
 pub const Sema = struct {
     arena: *std.heap.ArenaAllocator,
+    span_registry: *const Span.Registry,
     diagnostics: *Diagnostics,
 
-    pub fn init(arena: *std.heap.ArenaAllocator, diagnostics: *Diagnostics) Sema {
+    pub fn init(arena: *std.heap.ArenaAllocator, span_registry: *const Span.Registry, diagnostics: *Diagnostics) Sema {
         return Sema{
             .arena = arena,
+            .span_registry = span_registry,
             .diagnostics = diagnostics,
         };
     }
@@ -59,9 +62,10 @@ pub const Sema = struct {
 
         var tasks = try std.ArrayList(*ir.Task).initCapacity(self.arena.allocator(), file.tasks.len);
         for (file.tasks) |task| {
+            const task_span = self.span_registry.getSpan(task.id, .full);
             const ptr = self.collectTaskSignature(root_scope, task) catch |err| switch (err) {
                 SemaError.PlatformMismatch => {
-                    try self.diagnostics.hint(task.span, "skipping task, platform mismatch", .{});
+                    try self.diagnostics.hint(task_span, "skipping task, platform mismatch", .{});
                     continue;
                 },
                 else => return err,
@@ -69,7 +73,7 @@ pub const Sema = struct {
 
             try self.defineSymbol(root_scope, .{
                 .name = task.name.value,
-                .span = task.span,
+                .span = task_span,
                 .details = .{ .task = .{
                     .origin = ptr,
                 } },
@@ -80,9 +84,10 @@ pub const Sema = struct {
 
         var groups = try std.ArrayList(*ir.Group).initCapacity(self.arena.allocator(), file.groups.len);
         for (file.groups) |group| {
+            const group_span = self.span_registry.getSpan(group.id, .full);
             const ptr = self.collectGroupSignature(root_scope, group) catch |err| switch (err) {
                 SemaError.PlatformMismatch => {
-                    try self.diagnostics.hint(group.span, "skipping group, platform mismatch", .{});
+                    try self.diagnostics.hint(group_span, "skipping group, platform mismatch", .{});
                     continue;
                 },
                 else => return err,
@@ -91,7 +96,7 @@ pub const Sema = struct {
             if (group.name) |name| {
                 try self.defineSymbol(root_scope, .{
                     .name = name.value,
-                    .span = group.span,
+                    .span = group_span,
                     .details = .{
                         .group = .{
                             .origin = ptr,
@@ -178,9 +183,15 @@ pub const Sema = struct {
 
         fn resolveOptions(self: *OptionResolver) !void {
             for (self.sets) |set| {
+                const set_span = self.sema.span_registry.getSpan(set.id, .full);
+
                 var attributes = AttributesResolver.resolve(self.sema, .setting, set.attrs) catch |err| switch (err) {
                     SemaError.PlatformMismatch => {
-                        try self.sema.diagnostics.hint(set.span, "skipping settings, platform mismatch", .{});
+                        try self.sema.diagnostics.hint(
+                            set_span,
+                            "skipping settings, platform mismatch",
+                            .{},
+                        );
                         continue;
                     },
                     else => return err,
@@ -194,20 +205,33 @@ pub const Sema = struct {
 
         fn resolveOption(self: *OptionResolver, decls: []const ast.Set.SetDecl) !void {
             for (decls) |decl| {
+                const decl_span = self.sema.span_registry.getSpan(decl.id, .full);
                 const def = options.get(decl.name.value) orelse {
-                    try self.sema.diagnostics.err(decl.span, "unknown option '{s}'", .{decl.name.value});
+                    try self.sema.diagnostics.err(
+                        decl_span,
+                        "unknown option '{s}'",
+                        .{decl.name},
+                    );
                     return SemaError.SemanticError;
                 };
 
                 if (self.storage.contains(def.id)) {
-                    try self.sema.diagnostics.err(decl.span, "duplicate option '{s}'", .{decl.name.value});
+                    try self.sema.diagnostics.err(
+                        decl_span,
+                        "duplicate option '{s}'",
+                        .{decl.name},
+                    );
                     return SemaError.SemanticError;
                 }
 
                 const value: ast.MetaValue = decl.value orelse .{ .bool = true };
 
                 if (value.validateType(def.value_type) == false) {
-                    try self.sema.diagnostics.err(decl.span, "invalid '{s}' option value type, expected '{f}'", .{ decl.name.value, def.value_type });
+                    try self.sema.diagnostics.err(
+                        decl_span,
+                        "invalid '{s}' option value type, expected '{f}'",
+                        .{ decl.name, def.value_type },
+                    );
                     return SemaError.SemanticError;
                 }
 
@@ -218,10 +242,16 @@ pub const Sema = struct {
         fn getOptionValue(self: *OptionResolver, id: options.Type, value: ast.MetaValue) !OptionValue {
             switch (id) {
                 inline .shell, .script => |tag| {
-                    var out: std.ArrayList([]const u8) = try .initCapacity(self.sema.arena.allocator(), value.list.len);
+                    var out: std.ArrayList([]const u8) = try .initCapacity(
+                        self.sema.arena.allocator(),
+                        value.list.len,
+                    );
 
                     for (value.list) |val| {
-                        const string = try text.processString(self.sema.arena.allocator(), val.string);
+                        const string = try text.processString(
+                            self.sema.arena.allocator(),
+                            val.string,
+                        );
                         out.appendAssumeCapacity(string);
                     }
                     return @unionInit(
@@ -236,12 +266,13 @@ pub const Sema = struct {
 
     fn analyseDecl(self: *Sema, scope: *Scope, decl: ast.Decl) !*ir.Decl {
         const result = try self.analyseExpr(scope, decl.value);
+        const decl_span = self.span_registry.getSpan(decl.id, .full);
 
         //TODO: copy pattern in other origins
         const ptr = try self.arena.allocator().create(ir.Decl);
 
         ptr.* = .{
-            .name = decl.name.value,
+            .name = decl.name,
             .value = result.expr,
             .type = result.type,
             .scope = scope,
@@ -249,8 +280,8 @@ pub const Sema = struct {
         };
 
         try self.defineSymbol(scope, .{
-            .name = decl.name.value,
-            .span = decl.span,
+            .name = decl.name,
+            .span = decl_span,
             .details = .{
                 .binding = .{
                     .static = result.is_static,
@@ -272,8 +303,14 @@ pub const Sema = struct {
 
         fn resolveAttributes(self: *AttributesResolver, attributes: []const ast.Attribute, target: attrib.definitions.Target) !void {
             for (attributes) |attr| {
-                const def = attrib.definitions.get(attr.name.value, target) orelse {
-                    try self.sema.diagnostics.err(attr.span, "'{s}' is not valid attribute for this element", .{attr.name.value});
+                const attr_span = self.sema.span_registry.getSpan(attr.id, .full);
+
+                const def = attrib.definitions.get(attr.name, target) orelse {
+                    try self.sema.diagnostics.err(
+                        attr_span,
+                        "'{s}' is not valid attribute for this element",
+                        .{attr.name},
+                    );
                     return SemaError.SemanticError;
                 };
 
@@ -284,7 +321,11 @@ pub const Sema = struct {
                         std.debug.assert(def.unique == true);
 
                         if (self.platforms.contains(pt)) {
-                            try self.sema.diagnostics.err(attr.span, "'{s}' platform attribute duplicate", .{attr.name.value});
+                            try self.sema.diagnostics.err(
+                                attr_span,
+                                "'{s}' platform attribute duplicate",
+                                .{attr.name},
+                            );
                             return SemaError.SemanticError;
                         }
 
@@ -293,7 +334,11 @@ pub const Sema = struct {
                     else => {
                         // validate uniqueness
                         if (def.unique and self.attributes.contains(def.type)) {
-                            try self.sema.diagnostics.err(attr.span, "'{s}' attribute duplicate", .{attr.name.value});
+                            try self.sema.diagnostics.err(
+                                attr_span,
+                                "'{s}' attribute duplicate",
+                                .{attr.name},
+                            );
                             return SemaError.SemanticError;
                         }
 
@@ -303,15 +348,27 @@ pub const Sema = struct {
                                 if (val.validateType(vt)) break;
                             } else {
                                 const expected = try attrib.typesListToString(self.sema.arena.allocator(), def.value_types, def.allow_default);
-                                try self.sema.diagnostics.err(attr.span, "invalid '{s}' attribute value type, expected '{s}'", .{ attr.name.value, expected });
+                                try self.sema.diagnostics.err(
+                                    attr_span,
+                                    "invalid '{s}' attribute value type, expected '{s}'",
+                                    .{ attr.name, expected },
+                                );
                                 return SemaError.SemanticError;
                             }
                         } else if (def.allow_default == false) {
                             const expected = try attrib.typesListToString(self.sema.arena.allocator(), def.value_types, def.allow_default);
-                            try self.sema.diagnostics.err(attr.span, "'{s}' attribute doesn't support default value, expected '{s}'", .{ attr.name.value, expected });
+                            try self.sema.diagnostics.err(
+                                attr_span,
+                                "'{s}' attribute doesn't support default value, expected '{s}'",
+                                .{ attr.name, expected },
+                            );
                             return SemaError.SemanticError;
                         }
-                        try self.attributes.add(self.sema.arena.allocator(), def.type, attr.value);
+                        try self.attributes.add(
+                            self.sema.arena.allocator(),
+                            def.type,
+                            attr.value,
+                        );
                     },
                 }
             }
@@ -337,7 +394,10 @@ pub const Sema = struct {
     };
 
     fn analyseArgs(self: *Sema, scope: *Scope, args: []ast.Argument, group: bool) ![]*ir.Argument {
-        var out = try std.ArrayList(*ir.Argument).initCapacity(self.arena.allocator(), args.len);
+        var out = try std.ArrayList(*ir.Argument).initCapacity(
+            self.arena.allocator(),
+            args.len,
+        );
 
         // implicitly named when:
         //      any previous is named,
@@ -345,26 +405,35 @@ pub const Sema = struct {
         var phase: ArgPhase = .positional;
 
         for (args) |*arg| {
-            var attributes = AttributesResolver.resolve(self, .{ .argument = arg.type.value }, arg.attrs) catch |err| switch (err) {
+            const arg_span = self.span_registry.getSpan(arg.id, .full);
+            var attributes = AttributesResolver.resolve(
+                self,
+                .{ .argument = arg.type },
+                arg.attrs,
+            ) catch |err| switch (err) {
                 SemaError.PlatformMismatch => unreachable,
                 else => return err,
             };
             defer attributes.deinit(self.arena.allocator());
 
-            const name_required = group or arg.type.value.isNamedOnly();
+            const name_required = group or arg.type.isNamedOnly();
 
             // get default value,
             const default: ?typing.Value = blk: {
-                if (arg.type.value == .flag) {
-                    if (arg.default) |def| {
-                        try self.diagnostics.err(def.span(), "flag value have implicit default value", .{});
+                if (arg.type == .flag) {
+                    if (arg.default) |_| {
+                        try self.diagnostics.err(
+                            self.span_registry.getSpan(arg.id, .value),
+                            "flag value have implicit default value",
+                            .{},
+                        );
                         return SemaError.SemanticError;
                     }
                     break :blk .{ .bool = false };
                 }
 
                 if (arg.default) |def| {
-                    break :blk try self.assertLiteral(arg.type.value.typeOf(), def);
+                    break :blk try self.assertLiteral(arg.type.typeOf(), def);
                 }
 
                 break :blk null;
@@ -383,7 +452,7 @@ pub const Sema = struct {
                 };
 
                 if (implicit_names) {
-                    break :blk arg.name.value[0];
+                    break :blk arg.name[0];
                 }
 
                 break :blk null;
@@ -399,7 +468,7 @@ pub const Sema = struct {
                 };
 
                 if (implicit_names) {
-                    break :blk arg.name.value;
+                    break :blk arg.name;
                 }
 
                 break :blk null;
@@ -423,12 +492,20 @@ pub const Sema = struct {
 
                 if (!has_name) {
                     if (group) {
-                        try self.diagnostics.err(arg.span, "group arguments must be named", .{});
+                        try self.diagnostics.err(
+                            arg_span,
+                            "group arguments must be named",
+                            .{},
+                        );
                         return SemaError.SemanticError;
                     }
 
                     if (name_required) {
-                        try self.diagnostics.err(arg.span, "'{f}' type expect long or/and short attribute", .{arg.type.value});
+                        try self.diagnostics.err(
+                            arg_span,
+                            "'{f}' type expect long or/and short attribute",
+                            .{arg.type},
+                        );
                         return SemaError.SemanticError;
                     }
                 }
@@ -437,12 +514,17 @@ pub const Sema = struct {
             };
 
             //validate arg order
-            try self.validateArgOrder(arg, &phase, has_name, default != null);
+            try self.validateArgOrder(
+                arg,
+                &phase,
+                has_name,
+                default != null,
+            );
 
             const ptr = try self.arena.allocator().create(ir.Argument);
             ptr.* = .{
-                .name = arg.name.value,
-                .type = arg.type.value,
+                .name = arg.name,
+                .type = arg.type,
                 .default = default,
                 .is_positional = !has_name,
 
@@ -457,11 +539,11 @@ pub const Sema = struct {
             try self.defineSymbol(
                 scope,
                 .{
-                    .name = arg.name.value,
-                    .span = arg.span,
+                    .name = arg.name,
+                    .span = arg_span,
                     .details = .{
                         .argument = .{
-                            .type = arg.type.value.typeOf(),
+                            .type = arg.type.typeOf(),
                             .origin = ptr,
                         },
                     },
@@ -483,10 +565,12 @@ pub const Sema = struct {
     };
     // order positional > named-required > named-optional
     fn validateArgOrder(self: *Sema, arg: *const ast.Argument, phase: *ArgPhase, named: bool, optional: bool) !void {
+        const arg_span = self.span_registry.getSpan(arg, .full);
+
         const class = blk: {
             if (named == false) {
                 if (optional) {
-                    try self.diagnostics.err(arg.span, "positional arguments cannot have default values", .{});
+                    try self.diagnostics.err(arg_span, "positional arguments cannot have default values", .{});
                     return SemaError.SemanticError;
                 }
                 break :blk ArgPhase.positional;
@@ -503,18 +587,18 @@ pub const Sema = struct {
             .positional => {},
             .named_required => switch (class) {
                 .positional => {
-                    try self.diagnostics.err(arg.span, "positional argument cannot follow a named argument", .{});
+                    try self.diagnostics.err(arg_span, "positional argument cannot follow a named argument", .{});
                     return SemaError.SemanticError;
                 },
                 else => {},
             },
             .named_optional => switch (class) {
                 .positional => {
-                    try self.diagnostics.err(arg.span, "positional argument cannot follow a named argument", .{});
+                    try self.diagnostics.err(arg_span, "positional argument cannot follow a named argument", .{});
                     return SemaError.SemanticError;
                 },
                 .named_required => {
-                    try self.diagnostics.err(arg.span, "required argument cannot follow a optional argument", .{});
+                    try self.diagnostics.err(arg_span, "required argument cannot follow a optional argument", .{});
                     return SemaError.SemanticError;
                 },
                 else => {},
@@ -523,7 +607,7 @@ pub const Sema = struct {
         phase.* = class;
     }
 
-    fn assertLiteral(self: *Sema, expected_type: typing.Type, expr: ast.Expr) !typing.Value {
+    fn assertLiteral(self: *Sema, expected_type: typing.Type, expr: ast.Expr, span: Span) !typing.Value {
         const expr_type: typing.TypeTag = switch (expr) {
             .bool_lit => .bool,
             .number_lit => .number,
@@ -531,19 +615,19 @@ pub const Sema = struct {
             .string => |str| switch (str.value) {
                 .lit => .string,
                 .inter => {
-                    try self.diagnostics.err(expr.span(), "invalid type, expected '{f}' literal, found string interpolation expr", .{expected_type});
+                    try self.diagnostics.err(span, "invalid type, expected '{f}' literal, found string interpolation expr", .{expected_type});
                     return SemaError.SemanticError;
                 },
             },
             .list => .list,
             else => {
-                try self.diagnostics.err(expr.span(), "invalid value type, default value must be literal", .{});
+                try self.diagnostics.err(span, "invalid value type, default value must be literal", .{});
                 return SemaError.SemanticError;
             },
         };
 
         if (expr_type != expected_type) {
-            try self.diagnostics.err(expr.span(), "invalid value type, expected '{f}' literal, found {s}", .{ expected_type, @tagName(expr_type) });
+            try self.diagnostics.err(span, "invalid value type, expected '{f}' literal, found {s}", .{ expected_type, @tagName(expr_type) });
             return SemaError.SemanticError;
         }
 
@@ -557,7 +641,7 @@ pub const Sema = struct {
 
                 for (expr.list.value) |v| {
                     const lit = self.assertLiteral(items_type.*, v) catch |err| {
-                        try self.diagnostics.err(expr.span(), "invalid list items type", .{});
+                        try self.diagnostics.err(span, "invalid list items type", .{});
                         return err;
                     };
                     out.appendAssumeCapacity(lit);
@@ -585,7 +669,7 @@ pub const Sema = struct {
 
         ptr.* = .{
             .scope = groupScope,
-            .name = if (group.name) |name| name.value else null,
+            .name = group.name,
             .args = args,
             .decls = try decls.toOwnedSlice(self.arena.allocator()),
             .tasks = undefined, // yet
@@ -596,9 +680,11 @@ pub const Sema = struct {
 
         var tasks = try std.ArrayList(*ir.Task).initCapacity(self.arena.allocator(), group.tasks.len);
         for (group.tasks) |task| {
+            const task_span = self.span_registry.getSpan(task.id, .full);
+
             const task_ptr = self.collectTaskSignature(groupScope, task) catch |err| switch (err) {
                 SemaError.PlatformMismatch => {
-                    try self.diagnostics.hint(task.span, "skipping task, platform mismatch", .{});
+                    try self.diagnostics.hint(task_span, "skipping task, platform mismatch", .{});
                     continue;
                 },
                 else => return err,
@@ -608,8 +694,8 @@ pub const Sema = struct {
             try self.defineSymbol(
                 tasks_target_scope,
                 .{
-                    .name = task.name.value,
-                    .span = task.span,
+                    .name = task.name,
+                    .span = task_span,
                     .details = .{
                         .task = .{
                             .origin = task_ptr,
@@ -637,7 +723,7 @@ pub const Sema = struct {
         var attributes = try AttributesResolver.resolve(self, .task, task.attrs);
         defer attributes.deinit(self.arena.allocator());
 
-        const taskScope = try self.createScope(scope);
+        const task_scope = try self.createScope(scope);
 
         const is_script = attributes.contains(.script);
         const is_private = attributes.contains(.private);
@@ -646,18 +732,18 @@ pub const Sema = struct {
         else
             null;
 
-        const args = try self.analyseArgs(taskScope, task.args, false);
+        const args = try self.analyseArgs(task_scope, task.args, false);
 
         const ptr = try self.arena.allocator().create(ir.Task);
 
         ptr.* = .{
-            .name = task.name.value,
+            .name = task.name,
             .args = args,
             .script = is_script,
             .private = is_private,
             .desc = desc,
             .body = .{
-                .scope = taskScope,
+                .scope = task_scope,
                 .statements = undefined,
             },
         };
@@ -700,7 +786,8 @@ pub const Sema = struct {
     }
 
     fn analyseTaskCall(self: *Sema, scope: *Scope, call: ast.TaskCall) !ir.TaskCall {
-        const target_task_name = call.task.value;
+        const call_span = self.span_registry.getSpan(call.id, .full);
+        const target_task_name = call.task;
 
         // resolve task from scope
         const task: *ir.Task = blk: {
@@ -710,7 +797,7 @@ pub const Sema = struct {
                         std.debug.assert(symbol.details == .task);
                         break :blk symbol.details.task.origin;
                     } else {
-                        try self.diagnostics.err(call.span, "unknown task '{s}'", .{target_task_name});
+                        try self.diagnostics.err(call_span, "unknown task '{s}'", .{target_task_name});
                         return SemaError.SemanticError;
                     }
                 },
@@ -719,7 +806,7 @@ pub const Sema = struct {
                         std.debug.assert(symbol.details == .task);
                         break :blk symbol.details.task.origin;
                     } else {
-                        try self.diagnostics.err(call.span, "unknown task '::{s}'", .{target_task_name});
+                        try self.diagnostics.err(call_span, "unknown task '::{s}'", .{target_task_name});
                         return SemaError.SemanticError;
                     }
                 },
@@ -729,7 +816,7 @@ pub const Sema = struct {
                             std.debug.assert(symbol.details == .group);
                             break :grp symbol.details.group.origin;
                         } else {
-                            try self.diagnostics.err(call.span, "unknown group '{s}'", .{gname.value});
+                            try self.diagnostics.err(call_span, "unknown group '{s}'", .{gname});
                             return SemaError.SemanticError;
                         }
                     };
@@ -739,7 +826,7 @@ pub const Sema = struct {
                             std.debug.assert(symbol.details == .task);
                             break :tsk symbol.details.task.origin;
                         } else {
-                            try self.diagnostics.err(call.span, "unknown task '{s}::{s}'", .{ gname.value, target_task_name });
+                            try self.diagnostics.err(call_span, "unknown task '{s}::{s}'", .{ gname, target_task_name });
                             return SemaError.SemanticError;
                         }
                     };
@@ -750,35 +837,39 @@ pub const Sema = struct {
         };
 
         // validate args
-        var outArgs = ir.TaskCallArgs.init(self.arena.allocator());
+        var out_args = ir.TaskCallArgs.init(self.arena.allocator());
 
         // read positional
         const positionalCount = blk: {
             for (call.args, 0..) |arg, idx| {
                 if (arg.name != null) break :blk idx;
+                const arg_span = self.span_registry.getSpan(arg.id, .full);
 
                 const result = try self.analyseExpr(scope, arg.value);
 
                 if (idx >= task.args.len) {
-                    try self.diagnostics.err(arg.span, "invalid positional arguments count, got '{}', expected {}", .{ idx + 1, task.args.len });
+                    try self.diagnostics.err(arg_span, "invalid positional arguments count, got '{}', expected {}", .{ idx + 1, task.args.len });
                     return SemaError.SemanticError;
                 }
 
                 const t = task.args[idx];
 
                 if (!typing.Type.eq(t.type.typeOf(), result.type)) {
-                    try self.diagnostics.err(arg.span, "invalid type", .{});
+                    try self.diagnostics.err(arg_span, "invalid type", .{});
                     return SemaError.SemanticError;
                 }
 
-                try outArgs.put(t.name, result.expr);
+                try out_args.put(t.name, result.expr);
             }
             break :blk call.args.len;
         };
 
         // get rest of parameters from group and task
         const restArgs = totalArgs: {
-            var out = try std.ArrayList(*ir.Argument).initCapacity(self.arena.allocator(), task.args.len + if (task.group) |g| g.args.len else 0);
+            var out = try std.ArrayList(*ir.Argument).initCapacity(
+                self.arena.allocator(),
+                task.args.len + if (task.group) |g| g.args.len else 0,
+            );
             for (task.args[positionalCount..]) |arg| {
                 try out.append(self.arena.allocator(), arg);
             }
@@ -809,11 +900,13 @@ pub const Sema = struct {
         // bind positional arguments to task argument
         for (restArgs) |arg| {
             if (restCallArgs.fetchRemove(arg.name)) |in| {
-                const inArg = in.value;
-                const result = try self.analyseExpr(scope, inArg.value);
+                const in_arg = in.value;
+                const in_arg_span = self.span_registry.getSpan(in_arg.id, .full);
+
+                const result = try self.analyseExpr(scope, in_arg.value);
                 if (!typing.Type.eq(result.type, arg.type.typeOf())) {
                     try self.diagnostics.err(
-                        inArg.span,
+                        in_arg_span,
                         "invalid argument type, got '{s}', expected '{s}'",
                         .{
                             @tagName(result.type),
@@ -822,9 +915,9 @@ pub const Sema = struct {
                     );
                     return SemaError.SemanticError;
                 }
-                try outArgs.put(arg.name, result.expr);
+                try out_args.put(arg.name, result.expr);
             } else if (arg.default == null) {
-                try self.diagnostics.err(call.span, "missing argument '{s}'", .{arg.name});
+                try self.diagnostics.err(call_span, "missing argument '{s}'", .{arg.name});
                 return SemaError.SemanticError;
             }
         }
@@ -833,11 +926,12 @@ pub const Sema = struct {
         if (task.group) |g| {
             for (g.args) |arg| {
                 if (restCallArgs.fetchRemove(arg.name)) |in| {
-                    const inArg = in.value;
-                    const result = try self.analyseExpr(scope, inArg.value);
+                    const in_arg = in.value;
+
+                    const result = try self.analyseExpr(scope, in_arg.value);
                     if (!typing.Type.eq(result.type, arg.type.typeOf())) {
                         try self.diagnostics.err(
-                            inArg.span,
+                            self.span_registry.getSpan(in_arg.id, .full),
                             "invalid argument type, got '{s}', expected '{s}'",
                             .{
                                 @tagName(result.type),
@@ -847,7 +941,7 @@ pub const Sema = struct {
                         return SemaError.SemanticError;
                     }
                 } else if (arg.default == null) {
-                    try self.diagnostics.err(call.span, "missing group argument '{s}'", .{arg.name});
+                    try self.diagnostics.err(call_span, "missing group argument '{s}'", .{arg.name});
                     return SemaError.SemanticError;
                 }
             }
@@ -856,14 +950,21 @@ pub const Sema = struct {
         if (restCallArgs.unmanaged.size != 0) {
             var iter = restCallArgs.iterator();
             while (iter.next()) |v| {
-                try self.diagnostics.err(v.value_ptr.span, "invalid argument '{s}'", .{v.key_ptr.*});
+                try self.diagnostics.err(
+                    self.span_registry.getSpan(
+                        v.value_ptr.id,
+                        .full,
+                    ),
+                    "invalid argument '{s}'",
+                    .{v.key_ptr.*},
+                );
             }
             return SemaError.SemanticError;
         }
 
         return .{
             .task = task,
-            .args = outArgs,
+            .args = out_args,
         };
     }
 
@@ -876,7 +977,10 @@ pub const Sema = struct {
         const cond = try self.analyseExpr(scope, stmt.cond);
         const then = try self.analyseStatementBlock(scope, stmt.then);
 
-        const else_ = if (stmt.else_) |block| try self.analyseStatementBlock(scope, block) else null;
+        const else_ = if (stmt.else_) |block|
+            try self.analyseStatementBlock(scope, block)
+        else
+            null;
 
         return .{
             .cond = cond.expr,
@@ -890,15 +994,16 @@ pub const Sema = struct {
         is_static: bool,
     };
 
-    fn analyseString(self: *Sema, scope: *Scope, string: ast.StringExpr) SemaError!StringResult {
+    fn analyseString(self: *Sema, scope: *Scope, string: ast.StringExpr, span: Span) SemaError!StringResult {
         switch (string) {
             .lit => |str| {
-                //TODO: add Span to ast.String.lit
+                //TODO: improve span hanlding in strings
+
                 return .{
                     .is_static = true,
                     .string = .{
-                        .lit = text.processString(self.arena.allocator(), str.value) catch {
-                            try self.diagnostics.err(.unknown, "Invalid string escape sequence: {s}", .{str.value});
+                        .lit = text.processString(self.arena.allocator(), str) catch {
+                            try self.diagnostics.err(span, "Invalid string escape sequence: {s}", .{str.value});
                             return SemaError.SemanticError;
                         },
                     },
@@ -911,11 +1016,11 @@ pub const Sema = struct {
                 for (segs) |seg| {
                     switch (seg) {
                         .lit => |str| {
-                            try segments.append(self.arena.allocator(), .{ .lit = text.processString(self.arena.allocator(), str.value) catch {
+                            try segments.append(self.arena.allocator(), .{ .lit = text.processString(self.arena.allocator(), str) catch {
                                 try self.diagnostics.err(
-                                    .unknown,
+                                    span,
                                     "Invalid string escape sequence: {s}",
-                                    .{str.value},
+                                    .{str},
                                 );
                                 return SemaError.SemanticError;
                             } });
@@ -954,13 +1059,15 @@ pub const Sema = struct {
     fn analyseBuiltinCall(self: *Sema, scope: *Scope, call: ast.BuiltInCall) SemaError!BuiltinCallResult {
         const functions = @import("functions.zig");
 
-        const def = functions.getFunctionDef(call.name.value, call.args.len) catch |err| switch (err) {
+        const call_span = self.span_registry.getSpan(call.id, .full);
+
+        const def = functions.getFunctionDef(call.name, call.args.len) catch |err| switch (err) {
             error.UnknownFunction => {
-                try self.diagnostics.err(call.span, "unknown function '{s}'", .{call.name.value});
+                try self.diagnostics.err(call_span, "unknown function '{s}'", .{call.name});
                 return SemaError.SemanticError;
             },
             error.InvalidArguments => {
-                try self.diagnostics.err(call.span, "invalid arguments num", .{});
+                try self.diagnostics.err(call_span, "invalid arguments num", .{});
                 return SemaError.SemanticError;
             },
         };
@@ -971,7 +1078,11 @@ pub const Sema = struct {
             const arg = try self.analyseExpr(scope, expr);
 
             if (arg.type.eq(arg_def[1]) == false) {
-                try self.diagnostics.err(expr.span(), "invalid argument type, got '{f}' expected '{f}'", .{ arg.type, arg_def[1] });
+                try self.diagnostics.err(
+                    .{ .start = 0, .len = 0 }, //TODO: fix it
+                    "invalid argument type, got '{f}' expected '{f}'",
+                    .{ arg.type, arg_def[1] },
+                );
                 return SemaError.SemanticError;
             }
 
@@ -993,20 +1104,21 @@ pub const Sema = struct {
         is_static: bool,
     };
 
-    fn analyseExpr(self: *Sema, scope: *Scope, expr: ast.Expr) SemaError!ExprResult {
+    fn analyseExpr(self: *Sema, scope: *Scope, expr: ast.Expr, span: Span) SemaError!ExprResult {
+        //TODO: improve span handling
         return switch (expr) {
             .number_lit => |v| ExprResult{
-                .expr = .{ .number_lit = v.value },
+                .expr = .{ .number_lit = v },
                 .type = .number,
                 .is_static = true,
             },
             .bool_lit => |v| ExprResult{
-                .expr = .{ .bool_lit = v.value },
+                .expr = .{ .bool_lit = v },
                 .type = .bool,
                 .is_static = true,
             },
             .char_lit => |ch| {
-                const out = ch.value;
+                const out = ch;
 
                 return ExprResult{
                     .is_static = true,
@@ -1015,7 +1127,7 @@ pub const Sema = struct {
                 };
             },
             .string => |s| {
-                const res = try self.analyseString(scope, s.value);
+                const res = try self.analyseString(scope, s, span);
 
                 return .{
                     .expr = .{
@@ -1026,8 +1138,8 @@ pub const Sema = struct {
                 };
             },
             .list => |list| {
-                std.debug.assert(list.value.len != 0);
-                var out = try std.ArrayList(ir.Expr).initCapacity(self.arena.allocator(), list.value.len);
+                std.debug.assert(list.len != 0);
+                var out = try std.ArrayList(ir.Expr).initCapacity(self.arena.allocator(), list.len);
 
                 var is_static: bool = false;
 
@@ -1035,7 +1147,7 @@ pub const Sema = struct {
                 errdefer self.arena.allocator().destroy(list_type);
 
                 list_type.* = blk: {
-                    const first = try self.analyseExpr(scope, list.value[0]);
+                    const first = try self.analyseExpr(scope, list[0]);
                     if (first.is_static) is_static = true;
                     out.appendAssumeCapacity(first.expr);
                     break :blk first.type;
@@ -1044,7 +1156,11 @@ pub const Sema = struct {
                 for (list.value[1..]) |i| {
                     const curr = try self.analyseExpr(scope, i);
                     if (list_type.eq(curr.type) == false) {
-                        try self.diagnostics.err(expr.span(), "All list elements must be of same type", .{});
+                        try self.diagnostics.err(
+                            span,
+                            "All list elements must be of same type",
+                            .{},
+                        );
                         return SemaError.SemanticError;
                     }
                     if (curr.is_static) is_static = true;
@@ -1071,8 +1187,13 @@ pub const Sema = struct {
                 };
             },
             .ident => |name| {
-                const symbol = scope.resolve(name.value, .variable) orelse {
-                    try self.diagnostics.err(name.span, "undefined variable '{s}'", .{name.value});
+                const symbol = scope.resolve(name, .variable) orelse {
+                    //TODO: omfg
+                    try self.diagnostics.err(
+                        span,
+                        "undefined variable '{s}'",
+                        .{name},
+                    );
                     return SemaError.SemanticError;
                 };
 
@@ -1094,7 +1215,7 @@ pub const Sema = struct {
                 return .{
                     .expr = .{
                         .ident = .{
-                            .name = name.value,
+                            .name = name,
                             .symbol = symbol,
                         },
                     },
@@ -1108,10 +1229,18 @@ pub const Sema = struct {
 
                 const binary = @import("binary.zig");
 
-                const binary_result = binary.binaryResultType(b.op, left.type, right.type) catch |err| {
+                const binary_result = binary.binaryResultType(
+                    b.op,
+                    left.type,
+                    right.type,
+                ) catch |err| {
                     switch (err) {
                         binary.Error.TypeMismatch => {
-                            try self.diagnostics.err(b.span, "invalid operator '{f}' for types: {f} and {f}", .{ b.op, left.type, right.type });
+                            try self.diagnostics.err(
+                                span,
+                                "invalid operator '{f}' for types: {f} and {f}",
+                                .{ b.op, left.type, right.type },
+                            );
                             return SemaError.SemanticError;
                         },
                     }
@@ -1137,13 +1266,21 @@ pub const Sema = struct {
                 const result_type: ir.Type = switch (u.op) {
                     .not_op => blk: {
                         if (operand.type != .bool) {
-                            try self.diagnostics.err(u.span, "'not' requires a bool or flag", .{});
+                            try self.diagnostics.err(
+                                span,
+                                "'not' requires a bool or flag",
+                                .{},
+                            );
                         }
                         break :blk .bool;
                     },
                     .negate => blk: {
                         if (operand.type != .number) {
-                            try self.diagnostics.err(u.span, "unary '-' requires number", .{});
+                            try self.diagnostics.err(
+                                span,
+                                "unary '-' requires number",
+                                .{},
+                            );
                         }
                         break :blk operand.type;
                     },
@@ -1167,11 +1304,15 @@ pub const Sema = struct {
                 const else_ = try self.analyseExpr(scope, i.else_);
 
                 if (cond.type != .bool) {
-                    try self.diagnostics.err(i.span, "if condition must be a bool or flag", .{});
+                    try self.diagnostics.err(
+                        span,
+                        "if condition must be a bool or flag",
+                        .{},
+                    );
                 }
                 if (!typing.Type.eq(then.type, else_.type)) {
                     try self.diagnostics.err(
-                        i.span,
+                        span,
                         "if branches must have the same type: got {s} and {s}",
                         .{
                             @tagName(then.type),
@@ -1196,6 +1337,7 @@ pub const Sema = struct {
         };
     }
 
+    //TODO: not used anywhere, remove?
     fn checkBinaryTypes(self: *Sema, op: ast.BinaryOp, left: ir.Type, right: ir.Type) !ir.Type {
         return switch (op) {
             .add => switch (left) {
@@ -1237,17 +1379,17 @@ pub const Sema = struct {
         };
     }
 
-    fn typeMismatch(self: *Sema, span: lib.Span, expected: []const u8, got: ir.Type) !ir.Type {
+    fn typeMismatch(self: *Sema, span: Span, expected: []const u8, got: ir.Type) !ir.Type {
         try self.diagnostics.err(
-            .{ .span = span },
+            span,
             "type mismatch: expected {s}, got {s}",
             .{ expected, @tagName(got) },
         );
         return SemaError.SemanticError;
     }
 
-    fn alreadyDefined(self: *Sema, span: lib.Span, name: []const u8) !void {
-        try self.diagnostics.err(.{ .span = span }, "'{s} already defined'", .{name});
+    fn alreadyDefined(self: *Sema, span: Span, name: []const u8) !void {
+        try self.diagnostics.err(span, "'{s} already defined'", .{name});
         return SemaError.SemanticError;
     }
     // decl type | can be found in  | conflicts with
