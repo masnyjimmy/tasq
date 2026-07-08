@@ -8,6 +8,8 @@ const Workspace = compiler.Workspace;
 
 const Dispatcher = @This();
 
+const sem = @import("semantic_token.zig");
+
 allocator: std.mem.Allocator,
 workspace: *Workspace,
 
