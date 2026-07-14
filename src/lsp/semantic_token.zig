@@ -5,6 +5,7 @@ const compiler = @import("compiler");
 const ast = compiler.ast;
 
 const Span = compiler.Span;
+const NodeId = Span.Registry.NodeId;
 
 pub const TokenType = enum(u32) {
     keyword,
@@ -46,7 +47,7 @@ const RawToken = struct {
     ttype: u32,
     mods: u32 = 0,
 
-    pub fn make(span: Span, comptime ttype: TokenType, comptime mods: []const TokenModifier) RawToken {
+    pub fn make(span: Span, ttype: TokenType, comptime mods: []const TokenModifier) RawToken {
         return .{
             .start = span.start,
             .end = span.end(),
@@ -74,6 +75,7 @@ pub const Collector = struct {
     pub fn collect(allocator: std.mem.Allocator, file: *const ast.File, span_registry: *const Span.Registry) Error![]RawToken {
         var collector: Collector = .init(allocator, span_registry);
 
+        // handle flat spans first
         for (span_registry.spans.items) |span_item| {
             const tt = lib.enums.castEnum(span_item.type, TokenType) orelse unreachable;
 
@@ -93,7 +95,7 @@ pub const Collector = struct {
         };
     }
 
-    fn add(self: *Collector, span: Span, comptime ttype: TokenType, comptime mods: ?[]const TokenModifier) Error!void {
+    fn add(self: *Collector, span: Span, ttype: TokenType, comptime mods: ?[]const TokenModifier) Error!void {
         try self.tokens.append(self.allocator, .make(span, ttype, mods orelse &.{}));
     }
 
@@ -112,9 +114,11 @@ pub const Collector = struct {
     }
 
     fn walkGroup(self: *Collector, group: *const ast.Group) Error!void {
-        if (group.name) |_| {
-            const name_span = self.span_registry.getSpan(group.id, .name);
-            try self.add(name_span, .variable, null);
+        const span_node = self.span_registry.get(group.id);
+        const group_span_node = span_node.details.group;
+
+        if (group_span_node.name) |span| {
+            try self.add(span, .variable, null);
         }
 
         for (group.args) |*arg| {
@@ -135,8 +139,9 @@ pub const Collector = struct {
     }
 
     fn walkTask(self: *Collector, task: *const ast.Task) Error!void {
-        const name_span = self.span_registry.getSpan(task.id, .name);
-        try self.add(name_span, .variable, null);
+        const span_node = self.span_registry.get(task.id);
+
+        try self.add(span_node.details.task.name, .variable, null);
 
         for (task.args) |*arg| {
             try self.walkArgument(arg);
@@ -146,55 +151,93 @@ pub const Collector = struct {
             try self.walkAttribute(attr);
         }
 
-        for (task.body) |*stmt| {
-            try self.walkStatement(stmt);
+        const stmts_span_node_id = self.span_registry.get(span_node.details.task.body).details.wrap;
+        const stmts_spans = self.span_registry.get(stmts_span_node_id).details.block;
+
+        for (task.body, stmts_spans.stmts) |*stmt, stmt_node_id| {
+            try self.walkStatement(stmt, stmt_node_id);
         }
     }
 
-    fn walkStatement(self: *Collector, stmt: *const ast.Statement) Error!void {
+    fn walkStatement(self: *Collector, stmt: *const ast.Statement, node_id: NodeId) Error!void {
         switch (stmt.*) {
-            .process => |v| try self.walkStringExpr(&v),
+            .process => |v| try self.walkStringExpr(&v, node_id),
             .decl => |v| try self.walkDecl(&v),
-            else => {
-                //TODO: implement
-            },
+            .task_call => |v| try self.walkTaskCall(&v),
+            .if_stmt => |v| try self.walkIfStmt(&v),
         }
+    }
+    fn walkIfStmt(self: *Collector, if_stmt: *const ast.IfStmt) Error!void {
+        const span_node = self.span_registry.get(if_stmt.id);
+        const if_spans = span_node.details.if_stmt;
+
+        _ = if_spans;
+
+        //TODO: handle if needed
+    }
+
+    fn walkTaskCall(self: *Collector, task_call: *const ast.TaskCall) Error!void {
+        const span_node = self.span_registry.get(task_call.id);
+        const task_call_spans = span_node.details.task_call;
+
+        if (task_call_spans.group) |group| {
+            try self.add(group, .variable, null);
+        }
+
+        try self.add(task_call_spans.task, .variable, null);
+
+        for (task_call.args) |*arg| {
+            try self.walkTaskCallArgs(arg);
+        }
+    }
+
+    fn walkTaskCallArgs(self: *Collector, args: *const ast.TaskCallArg) Error!void {
+        const span_node = self.span_registry.get(args.id);
+        const arg_spans = span_node.details.task_call_arg;
+
+        if (arg_spans.name) |name| {
+            try self.add(name, .variable, null);
+        }
+
+        try self.walkExpr(&args.value, arg_spans.value);
     }
 
     fn walkArgument(self: *Collector, arg: *const ast.Argument) Error!void {
-        const name_span = self.span_registry.getSpan(arg.id, .name);
-        try self.add(name_span, .variable, null);
+        const span_node = self.span_registry.get(arg.id);
+
+        try self.add(span_node.details.argument.name, .variable, null);
 
         for (arg.attrs) |*attr| {
             try self.walkAttribute(attr);
         }
 
-        if (arg.default) |*def| {
-            try self.walkExpr(def);
-        }
+        // if (span_node.details.argument.default) |*def| {
+        //     try self.walkExpr(def);
+        // }
 
-        const type_span = self.span_registry.getSpan(arg.id, .extra);
-        try self.add(type_span, .type, null);
+        try self.add(span_node.details.argument.type, .type, null);
     }
 
     fn walkAttribute(self: *Collector, attr: *const ast.Attribute) Error!void {
-        const name_span = self.span_registry.getSpan(attr.id, .name);
-        try self.add(name_span, .variable, null);
+        const span_node = self.span_registry.get(attr.id);
+
+        try self.add(span_node.details.attribute.name, .variable, null);
 
         if (attr.value) |_| {
             //TODO: implement
+            // may be handles as flat spans?
         }
     }
 
     fn walkDecl(self: *Collector, decl: *const ast.Decl) Error!void {
-        const name_span = self.span_registry.getSpan(decl.id, .name);
-        try self.add(name_span, .variable, &.{TokenModifier.declaration});
-        try self.walkExpr(&decl.value);
+        const span_node = self.span_registry.get(decl.id).details.decl;
+        try self.add(span_node.name, .variable, &.{TokenModifier.declaration});
+        try self.walkExpr(&decl.value, span_node.value);
     }
 
-    fn walkExpr(_: *Collector, _: *const ast.Expr) Error!void {
+    fn walkExpr(_: *Collector, _: *const ast.Expr, _: NodeId) Error!void {
         // TODO: ensure that its already handled (keywords, operators, identifier, numbers, strings)
     }
 
-    fn walkStringExpr(self: *Collector, str: *const ast.StringExpr) Error!void {}
+    fn walkStringExpr(_: *Collector, _: *const ast.StringExpr, _: NodeId) Error!void {}
 };

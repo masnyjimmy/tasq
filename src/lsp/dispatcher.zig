@@ -227,8 +227,9 @@ pub fn @"textDocument/semanticTokens/full"(
 
     const source_view = self.workspace.view(file_id, .source);
     const ast_view = self.workspace.view(file_id, .tree);
+    const span_registry = self.workspace.view(file_id, .span);
 
-    const raw_tokens = try sem.Collector.collect(arena, ast_view.source);
+    const raw_tokens = try sem.Collector.collect(arena, ast_view.source, span_registry.source);
 
     _ = try sem.sortTokens(raw_tokens);
 
