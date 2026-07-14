@@ -10,8 +10,116 @@ pub fn end(self: @This()) u32 {
 }
 
 pub const Registry = struct {
-    pub const SpanId = enum(u32) { _ };
-    const Index = usize;
+    pub const NodeType = enum {
+        leaf,
+        wrap,
+        set,
+        set_decl,
+        group,
+        task,
+        argument,
+        attribute,
+        decl,
+        block,
+        if_stmt,
+        task_call,
+        task_call_arg,
+        builtin_call,
+        expr,
+    };
+
+    pub const SpanDetails = union(NodeType) {
+        leaf,
+        wrap: NodeId,
+
+        set: struct { body: Span },
+        set_decl: struct { name: Span, value: ?NodeId },
+
+        group: struct { name: ?Span, args: ?Span, body: Span },
+        task: struct { name: Span, args: ?Span, body: NodeId },
+
+        argument: struct { name: Span, type: Span, default: ?NodeId },
+        attribute: struct { name: Span, value: ?NodeId },
+
+        decl: struct { name: Span, value: NodeId },
+
+        block: struct { stmts: []const NodeId },
+        if_stmt: struct { cond: NodeId, then: NodeId, else_: ?NodeId },
+
+        task_call: struct { group: ?Span, task: Span, args: Span },
+        task_call_arg: struct { name: ?Span, value: NodeId },
+
+        builtin_call: struct { name: Span, args: []const NodeId },
+
+        /// binary   -> children = .{ left, right }        (op needs no span)
+        /// unary    -> children = .{ operand }
+        /// if_expr  -> children = .{ cond, then, else_ }
+        /// list     -> children = each item that has an id, in order
+        /// inter    -> children = each {{expr}} segment's id, in order
+        ///             (literal text segments go through `put`, not here)
+        expr: union(enum) {
+            binary: struct {
+                left: NodeId,
+                right: NodeId,
+            },
+            unary: struct {
+                operand: NodeId,
+            },
+            if_expr: struct {
+                cond: NodeId,
+                then: NodeId,
+                else_: NodeId,
+            },
+            list: []const NodeId,
+        },
+
+        pub fn span(self: SpanDetails) Span {
+            return switch (self) {
+                inline else => |v| if (@TypeOf(v) == Span) v else v.span,
+            };
+        }
+
+        pub fn deinit(self: *SpanDetails, allocator: std.mem.Allocator) void {
+            switch (self.*) {
+                .block => |v| {
+                    allocator.free(v.stmts);
+                },
+                .builtin_call => |v| {
+                    allocator.free(v.args);
+                },
+                .expr => |v| switch (v) {
+                    .list => |list| {
+                        allocator.free(list);
+                    },
+                    else => {},
+                },
+                else => {},
+            }
+        }
+    };
+
+    pub const SpanNode = struct {
+        span: Span,
+        details: SpanDetails,
+    };
+
+    pub fn Wrapped(comptime T: type) type {
+        return struct {
+            id: NodeId,
+            payload: T,
+
+            pub fn wrap(id: NodeId, value: T) @This() {
+                return .{
+                    .id = id,
+                    .payload = value,
+                };
+            }
+        };
+    }
+
+    pub const NodeId = enum(u32) {
+        _,
+    };
 
     const Type = enum {
         type,
@@ -26,62 +134,49 @@ pub const Registry = struct {
         span: Span,
     };
 
-    const Node = struct {
-        object: Span,
-        name: ?Span,
-        value: ?Span,
-        extra: ?Span, // TaskCallScope => group, Argument => type
-    };
-    const IndexMap = std.hash_map.AutoHashMapUnmanaged(SpanId, Node);
-
     allocator: std.mem.Allocator,
     spans: std.ArrayList(Item) = .empty,
-    nodes: std.hash_map.AutoHashMapUnmanaged(SpanId, Node),
-    next_id: u32 = 0,
+    nodes: std.ArrayList(SpanNode) = .empty,
 
-    fn getNextId(self: *Registry) SpanId {
-        defer self.next_id += 1;
-        return @enumFromInt(self.next_id);
+    pub fn init(allocator: std.mem.Allocator) Registry {
+        return .{ .allocator = allocator };
     }
+
+    pub fn deinit(self: *Registry) void {
+        self.spans.deinit(self.allocator);
+
+        for (self.nodes.items) |*item| {
+            item.details.deinit(self.allocator);
+        }
+
+        self.nodes.deinit(self.allocator);
+
+        self.* = undefined;
+    }
+    // utility functions to get registry managed array list
+    pub fn getArrayList(self: *Registry, comptime T: type, capacity: usize) !std.array_list.Managed(T) {
+        return .initCapacity(self.allocator, capacity);
+    }
+
+    /// Flat, untyped/highlighting spans (strings, keywords, ...).
     pub fn put(self: *Registry, st: Type, span: Span) !void {
-        std.debug.assert(st != .node);
-
-        try self.spans.append(self.allocator, span);
+        try self.spans.append(self.allocator, .{ .type = st, .span = span });
     }
 
-    // task,group,set,
-    pub fn putNode(self: *Registry, span: Span, name: ?Span, value: ?Span, extra: ?Span) !SpanId {
-        const id = self.getNextId();
-
-        try self.nodes.put(self.allocator, .{
-            .object = span,
-            .name = name,
-            .value = value,
-            .extra = extra,
+    pub fn addNode(self: *Registry, span: Span, details: SpanDetails) !NodeId {
+        const idx = self.nodes.items.len;
+        try self.nodes.append(self.allocator, .{
+            .span = span,
+            .details = details,
         });
-
-        try self.nodes.put(self.allocator, id, .{
-            .object = span,
-            .name = name,
-            .value = value,
-        });
-
-        return id;
+        return @enumFromInt(idx);
     }
 
-    // bellow functions asserts that those exists
-    // it will be known from either ast or ir,
+    pub fn get(self: *const Registry, id: NodeId) SpanNode {
+        return self.nodes.items[@intFromEnum(id)];
+    }
 
-    const NodeSpanType = enum { full, name, value, extra };
-
-    pub fn getSpan(self: *Registry, id: SpanId, comptime nstype: NodeSpanType) Span {
-        const node = self.nodes.get(id).?;
-
-        return switch (nstype) {
-            .full => node.object,
-            .name => node.name,
-            .value => node.value,
-            .extra => node.extra,
-        };
+    pub fn getSpan(self: *const Registry, id: NodeId) Span {
+        return self.get(id).span;
     }
 };
