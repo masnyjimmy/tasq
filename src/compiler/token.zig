@@ -79,11 +79,4 @@ pub const Token = struct {
     kind: TokenKind,
     span: Span,
     lexeme: []const u8,
-
-    pub fn sliceWithSpan(self: Token) WithSpan([]const u8) {
-        return .{
-            .span = self.span,
-            .value = self.lexeme,
-        };
-    }
 };
