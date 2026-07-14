@@ -1,7 +1,7 @@
 const ir = @import("ir.zig");
 
 const Diagnostics = @import("Diagnostics.zig");
-const Span = Diagnostics.Span;
+const Span = @import("span.zig");
 
 const BindingDetails = struct {
     static: bool,

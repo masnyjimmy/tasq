@@ -1,6 +1,5 @@
 const Diagnostics = @import("Diagnostics.zig");
-const Span = Diagnostics.Span;
-const WithSpan = Span.Wrapped;
+const Span = @import("span.zig");
 
 // ── Token kinds ───────────────────────────────────────────────────────────────
 
