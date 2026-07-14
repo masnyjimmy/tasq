@@ -1,6 +1,7 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const ir = @import("ir.zig");
+const Span = @import("span.zig");
 
 const Diagnostics = @import("Diagnostics.zig");
 
@@ -16,6 +17,7 @@ pub const FileState = struct {
     version: i32,
     source: []const u8, // owned
     arena: std.heap.ArenaAllocator,
+    span_registry: Span.Registry,
     tree: ?ast.File = null,
     ir: ?ir.File = null,
     diagnostics: Diagnostics,
@@ -25,6 +27,7 @@ pub const FileState = struct {
         allocator.free(self.source);
         self.arena.deinit();
         self.diagnostics.deinit();
+        self.span_registry.deinit();
     }
 };
 
@@ -32,12 +35,14 @@ const ViewType = enum {
     source,
     tree,
     ir,
+    span,
 
     pub fn Type(comptime self: ViewType) type {
         return switch (self) {
             .source => []const u8,
             .tree => *const ast.File,
             .ir => *const ir.File,
+            .span => *const Span.Registry,
         };
     }
 };
@@ -56,6 +61,7 @@ pub fn FileView(comptime view_type: ViewType) type {
                     .source => fs.source,
                     .tree => &fs.tree.?,
                     .ir => &fs.ir.?,
+                    .span => &fs.span_registry,
                 },
                 .diagnostics = &fs.diagnostics,
             };
@@ -97,6 +103,7 @@ pub fn openFile(self: *Workspace, allocator: std.mem.Allocator, uri: []const u8,
         .version = version,
         .source = try allocator.dupe(u8, text),
         .arena = .init(allocator),
+        .span_registry = .init(allocator),
         .diagnostics = .init(allocator),
     });
 
@@ -124,16 +131,28 @@ pub fn reparse(self: *Workspace, id: FileId) !void {
 
     const lex = @import("lexer.zig");
     const parse = @import("parser.zig");
-    var lexer: lex.Lexer = .init(file.source);
+    var lexer: lex.Lexer = .init(
+        file.source,
+        &file.span_registry,
+    );
 
-    var parser: parse.Parser = .init(&file.arena, &lexer, &file.diagnostics);
+    var parser: parse.Parser = try .init(
+        &file.arena,
+        &lexer,
+        &file.span_registry,
+        &file.diagnostics,
+    );
 
     const tree = try parser.parseFile();
 
     file.tree = tree;
 
     const Sema = @import("sema.zig").Sema;
-    var sema: Sema = .init(&file.arena, &file.diagnostics);
+    var sema: Sema = .init(
+        &file.arena,
+        &file.span_registry,
+        &file.diagnostics,
+    );
 
     file.ir = try sema.analyse(tree);
 }
