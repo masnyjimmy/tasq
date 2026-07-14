@@ -107,8 +107,18 @@ pub fn dump(
                     print(C_NUM ++ "{any}" ++ C_RESET, .{value_});
                 },
 
-                .@"enum" => {
-                    print(C_ENUM ++ ".{s}" ++ C_RESET, .{@tagName(value_)});
+                .@"enum" => |e| {
+                    // FIX: handle id like enums
+                    const has_field = inline for (e.fields) |field| {
+                        if (field.value == @intFromEnum(value_))
+                            break true;
+                    } else false;
+
+                    if (has_field) {
+                        print(C_ENUM ++ ".{s}" ++ C_RESET, .{@tagName(value_)});
+                    } else {
+                        print(C_ENUM ++ "{}" ++ C_RESET, .{@intFromEnum(value_)});
+                    }
                 },
 
                 .optional => {
