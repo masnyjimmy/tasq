@@ -54,12 +54,12 @@ pub const Lexer = struct {
 
     // ── Public interface ──────────────────────────────────────────────────────
 
-    pub fn next(self: *Lexer) Token {
+    pub fn next(self: *Lexer) !Token {
         while (true) {
             self.skipWhitespace();
 
             switch (self.peek()) {
-                0 => return self.makeToken(.eof, self.pos, 0),
+                0 => return try self.makeToken(.eof, self.pos, 0),
                 // Comments — skip and loop
                 '/' => {
                     if (self.peekAt(1) == '/') {
@@ -155,19 +155,23 @@ pub const Lexer = struct {
         /// Reads as string while handling escape sequences till terminator found.
         ///
         /// **Important**: terminator is not consumed!
-        pub fn lexString(self: *StringLexer, terminators: []const []const u8, allow_new_line: bool) Token {
+        pub fn lexString(
+            self: *StringLexer,
+            terminators: []const []const u8,
+            allow_new_line: bool,
+        ) !Token {
             const start = self.lexer.pos;
 
             while (true) {
                 for (terminators) |terminator| {
                     if (self.checkTerminator(terminator)) {
-                        return self.lexer.makeToken(.string, start, self.lexer.pos - start);
+                        return try self.lexer.makeToken(.string, start, self.lexer.pos - start);
                     }
                 }
 
                 switch (self.lexer.peek()) {
                     // new line is normal char if allowed
-                    0 => return self.lexer.makeToken(.unterminated_string, start, self.lexer.pos - start),
+                    0 => return try self.lexer.makeToken(.unterminated_string, start, self.lexer.pos - start),
                     '\n' => {
                         if (allow_new_line == false) {
                             return self.lexer.consumeInvalid();
@@ -175,7 +179,7 @@ pub const Lexer = struct {
                     },
                     // escape character => handle through lexCharacter,
                     '\\' => {
-                        const out = self.lexCharacter();
+                        const out = try self.lexCharacter();
                         if (out.kind == .invalid_char)
                             return out;
 
@@ -193,37 +197,37 @@ pub const Lexer = struct {
             unreachable;
         }
 
-        pub fn lexCharacter(self: *StringLexer) Token {
+        pub fn lexCharacter(self: *StringLexer) !Token {
             // TODO: handle non escape unicode characters
 
             return if (self.lexer.peek() == '\\') // if escape char
                 switch (self.lexer.peekAt(1)) {
                     // basic escape characters
-                    'n', 't', 'r', '\\', '\"', '\'', '0' => self.lexer.consumeN(.char, 2),
+                    'n', 't', 'r', '\\', '\"', '\'', '0' => try self.lexer.consumeN(.char, 2),
                     // hex escape (\xNN)
-                    'x' => self.lexHexEscape(),
+                    'x' => try self.lexHexEscape(),
                     // unicode codepoint escape \u{NNNN...}
-                    'u' => self.lexUnicodeEscape(),
+                    'u' => try self.lexUnicodeEscape(),
                     // invalid escape sequence
-                    else => self.lexer.consumeInvalid(),
+                    else => try self.lexer.consumeInvalid(),
                 }
             else // ascii character
-                self.lexer.consumeChar(.char);
+                try self.lexer.consumeChar(.char);
         }
 
-        fn lexHexEscape(self: *StringLexer) Token {
+        fn lexHexEscape(self: *StringLexer) !Token {
             inline for (2..4) |i| {
                 if (!std.ascii.isHex(self.lexer.peekAt(i))) {
-                    return self.lexer.consumeN(.invalid_char, 4);
+                    return try self.lexer.consumeN(.invalid_char, 4);
                 }
             }
 
-            return self.lexer.consumeN(.char, 4);
+            return try self.lexer.consumeN(.char, 4);
         }
 
-        fn lexUnicodeEscape(self: *StringLexer) Token {
+        fn lexUnicodeEscape(self: *StringLexer) !Token {
             if (self.lexer.peekAt(2) != '{') {
-                return self.lexer.consumeN(.invalid_char, 3);
+                return try self.lexer.consumeN(.invalid_char, 3);
             }
 
             var i: u32 = 3;
@@ -240,7 +244,7 @@ pub const Lexer = struct {
                 const digit = hexValue(ch);
 
                 if (codepoint > (@as(u32, 0x10FFFF) >> 4)) {
-                    return self.lexer.consumeN(.invalid_char, i + 1);
+                    return try self.lexer.consumeN(.invalid_char, i + 1);
                 }
 
                 codepoint = (codepoint << 4) | digit;
@@ -248,14 +252,14 @@ pub const Lexer = struct {
             }
 
             if (digits == 0) {
-                return self.lexer.consumeN(.invalid_char, i + 1);
+                return try self.lexer.consumeN(.invalid_char, i + 1);
             }
 
             if (codepoint > 0x10FFFF or (codepoint >= 0xD800 and codepoint <= 0xDFFF)) {
-                return self.lexer.consumeN(.invalid_char, i + 1);
+                return try self.lexer.consumeN(.invalid_char, i + 1);
             }
 
-            return self.lexer.consumeN(.char, i + 1);
+            return try self.lexer.consumeN(.char, i + 1);
         }
     };
 
@@ -305,7 +309,7 @@ pub const Lexer = struct {
 
     // ── Token constructors ────────────────────────────────────────────────────
 
-    fn makeToken(self: *Lexer, kind: TokenKind, start: u32, len: u32) Token {
+    fn makeToken(self: *Lexer, kind: TokenKind, start: u32, len: u32) !Token {
         const span: Span = .{
             .start = start,
             .len = len,
@@ -329,8 +333,8 @@ pub const Lexer = struct {
             .number => {
                 try self.span_registry.put(.number, span);
             },
+            else => {},
         }
-        std.debug.print("makeToken: {t}", .{kind});
 
         return .{
             .kind = kind,
@@ -342,30 +346,30 @@ pub const Lexer = struct {
         };
     }
 
-    fn consumeN(self: *Lexer, kind: TokenKind, n: u32) Token {
+    fn consumeN(self: *Lexer, kind: TokenKind, n: u32) !Token {
         const start = self.pos;
         self.pos += n;
 
-        return self.makeToken(kind, start, n);
+        return try self.makeToken(kind, start, n);
     }
 
-    fn consumeChar(self: *Lexer, kind: TokenKind) Token {
-        return self.consumeN(kind, 1);
+    fn consumeChar(self: *Lexer, kind: TokenKind) !Token {
+        return try self.consumeN(kind, 1);
     }
 
-    fn consumeTwo(self: *Lexer, kind: TokenKind) Token {
-        return self.consumeN(kind, 2);
+    fn consumeTwo(self: *Lexer, kind: TokenKind) !Token {
+        return try self.consumeN(kind, 2);
     }
 
-    fn consumeInvalid(self: *Lexer) Token {
+    fn consumeInvalid(self: *Lexer) !Token {
         const start = self.pos;
         self.pos += 1;
-        return self.makeToken(.invalid_char, start, 1);
+        return try self.makeToken(.invalid_char, start, 1);
     }
 
     // ── Scanners ──────────────────────────────────────────────────────────────
 
-    fn lexIdent(self: *Lexer) Token {
+    fn lexIdent(self: *Lexer) !Token {
         const start = self.pos;
         while (true) {
             switch (self.peek()) {
@@ -375,10 +379,10 @@ pub const Lexer = struct {
         }
         const text = self.source[start..self.pos];
         const kind = keywords.get(text) orelse .ident;
-        return self.makeToken(kind, start, self.pos - start);
+        return try self.makeToken(kind, start, self.pos - start);
     }
 
-    fn lexNumber(self: *Lexer) Token {
+    fn lexNumber(self: *Lexer) !Token {
         const start = self.pos;
 
         while (std.ascii.isDigit(self.peek())) {
@@ -394,10 +398,10 @@ pub const Lexer = struct {
             }
         }
 
-        return self.makeToken(.number, start, self.pos - start);
+        return try self.makeToken(.number, start, self.pos - start);
     }
 
-    fn lexString(self: *Lexer) Token {
+    fn lexString(self: *Lexer) !Token {
         const start = self.pos;
         self.pos += 1; // consume opening "
 
@@ -405,7 +409,7 @@ pub const Lexer = struct {
             switch (self.source[self.pos]) {
                 '"' => {
                     self.pos += 1; // consume closing "
-                    return self.makeToken(.string, start, self.pos - start);
+                    return try self.makeToken(.string, start, self.pos - start);
                 },
                 '\\' => {
                     // skip backslash + next char — escape validation is
@@ -415,17 +419,17 @@ pub const Lexer = struct {
                 },
                 '\n' => {
                     // do NOT consume the newline — let next call start cleanly
-                    return self.makeToken(.unterminated_string, start, self.pos - start);
+                    return try self.makeToken(.unterminated_string, start, self.pos - start);
                 },
                 else => self.pos += 1,
             }
         }
 
         // reached EOF without closing quote
-        return self.makeToken(.unterminated_string, start, self.pos - start);
+        return try self.makeToken(.unterminated_string, start, self.pos - start);
     }
 
-    fn lexBacktick(self: *Lexer) Token {
+    fn lexBacktick(self: *Lexer) !Token {
         const start = self.pos;
         self.pos += 1; // consume opening `
 
@@ -433,11 +437,11 @@ pub const Lexer = struct {
             switch (self.source[self.pos]) {
                 '`' => {
                     self.pos += 1; // consume closing `
-                    return self.makeToken(.backtick, start, self.pos - start);
+                    return try self.makeToken(.backtick, start, self.pos - start);
                 },
                 '\n' => {
                     // backtick lines must be single-line
-                    return self.makeToken(.unterminated_backtick, start, self.pos - start);
+                    return try self.makeToken(.unterminated_backtick, start, self.pos - start);
                 },
                 '\\' => {
                     // allow escaping backtick itself: \`
@@ -448,7 +452,7 @@ pub const Lexer = struct {
             }
         }
 
-        return self.makeToken(.unterminated_backtick, start, self.pos - start);
+        return try self.makeToken(.unterminated_backtick, start, self.pos - start);
     }
 
     // ── Char utils ────────────────────────────────────────────────────────────
