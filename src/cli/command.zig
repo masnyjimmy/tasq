@@ -79,11 +79,17 @@ fn Dump(ctx: *const Context) !void {
     const source = try cwd.readFileAlloc(ctx.app.io, ctx.app.source_file_path, arena.allocator(), .unlimited);
 
     const comp = @import("compiler");
+    var span_registry = comp.Span.Registry.init(ctx.app.allocator);
 
-    var lexer = comp.Lexer.init(source);
+    var lexer = comp.Lexer.init(source, &span_registry);
     var diagnostics: comp.Diagnostics = .init(arena.allocator());
 
-    var parser = comp.Parser.init(&arena, &lexer, &diagnostics);
+    var parser = try comp.Parser.init(
+        &arena,
+        &lexer,
+        &span_registry,
+        &diagnostics,
+    );
 
     const ast = try parser.parseFile();
 
@@ -92,7 +98,11 @@ fn Dump(ctx: *const Context) !void {
         return;
     }
 
-    var sema = comp.Sema.init(&arena, &diagnostics);
+    var sema = comp.Sema.init(
+        &arena,
+        &span_registry,
+        &diagnostics,
+    );
 
     const ir = try sema.analyse(ast);
 
