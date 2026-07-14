@@ -2,8 +2,9 @@ const std = @import("std");
 
 const Diagnostics = @import("Diagnostics.zig");
 const Span = @import("span.zig");
+const SNode = Span.Registry.Node;
 
-const SpanId = Span.Registry.SpanId;
+const NodeId = Span.Registry.NodeId;
 
 const typing = @import("typing.zig");
 
@@ -11,7 +12,7 @@ pub const ArgType = typing.ArgType;
 
 pub fn hasAttr(attrs: []const Attribute, name: []const u8) bool {
     for (attrs) |attr| {
-        if (std.mem.eql(u8, attr.name.value, name))
+        if (std.mem.eql(u8, attr.name, name))
             return true;
     }
     return false;
@@ -27,17 +28,22 @@ pub const File = struct {
 
 pub const Set = struct {
     pub const SetDecl = struct {
-        id: SpanId,
+        id: NodeId,
         name: []const u8,
         value: ?MetaValue,
+
+        pub fn nameSpan(node: *SNode) Span {
+            return node.getSpan(0);
+        }
     };
-    id: SpanId,
+    id: NodeId,
     attrs: []Attribute,
     body: []SetDecl,
 };
+
 pub const Group = struct {
-    id: SpanId,
-    name: []const u8,
+    id: NodeId,
+    name: ?[]const u8,
     attrs: []Attribute,
     args: []Argument,
     decls: []Decl,
@@ -45,7 +51,7 @@ pub const Group = struct {
 };
 
 pub const Task = struct {
-    id: SpanId,
+    id: NodeId,
     name: []const u8,
     attrs: []Attribute,
     args: []Argument,
@@ -53,7 +59,7 @@ pub const Task = struct {
 };
 
 pub const Argument = struct {
-    id: SpanId,
+    id: NodeId,
     name: []const u8,
     attrs: []Attribute,
     type: ArgType,
@@ -61,13 +67,13 @@ pub const Argument = struct {
 };
 
 pub const Attribute = struct {
-    id: SpanId,
+    id: NodeId,
     name: []const u8,
     value: ?MetaValue,
 };
 
 pub const Decl = struct {
-    id: SpanId,
+    id: NodeId,
     name: []const u8,
     value: Expr,
 };
@@ -84,7 +90,7 @@ pub const Statement = union(enum) {
 
 // 'IF' DOESNT CREATE SCOPE
 pub const IfStmt = struct {
-    id: SpanId,
+    id: NodeId,
     cond: Expr, // [Span] Node.object
     then: StatementBlock,
     else_: ?StatementBlock,
@@ -99,14 +105,14 @@ pub const TaskCallScope = union(enum) {
 };
 
 pub const TaskCall = struct {
-    id: SpanId,
+    id: NodeId,
     scope: TaskCallScope, // null for same-group calls
     task: []const u8, // [Span] This::name
     args: []TaskCallArg,
 };
 
 pub const TaskCallArg = struct {
-    id: SpanId,
+    id: NodeId,
     name: ?[]const u8,
     value: Expr,
 };
@@ -122,15 +128,10 @@ pub const Expr = union(enum) {
     binary: *BinaryExpr,
     unary: *UnaryExpr,
     if_expr: *IfExpr,
-
-    // TODO: consider if this can be removed
-    pub fn spanStart(self: Expr) u32 {
-        return self.span().start;
-    }
 };
 
 pub const BuiltInCall = struct {
-    id: SpanId,
+    id: NodeId,
     name: []const u8,
     args: []Expr,
 };
@@ -146,7 +147,6 @@ pub const BinaryExpr = struct {
     op: BinaryOp,
     left: Expr,
     right: Expr,
-    span: Span,
 };
 
 pub const BinaryOp = enum {
@@ -171,7 +171,6 @@ pub const BinaryOp = enum {
 pub const UnaryExpr = struct {
     op: UnaryOp,
     operand: Expr,
-    span: Span,
 };
 
 pub const UnaryOp = enum { not_op, negate };
@@ -180,7 +179,6 @@ pub const IfExpr = struct {
     cond: Expr,
     then: Expr,
     else_: Expr,
-    span: Span,
 };
 
 pub const MetaTypeTag = enum {
