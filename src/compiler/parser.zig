@@ -225,14 +225,19 @@ pub const Parser = struct {
                 .set_kw => {
                     const set = try self.parseSet(attrs, tok_start);
                     try options.append(self.arena.allocator(), set);
-                    continue;
                 },
                 .ident => {
                     if (attrs.len != 0) {
                         try self.addDiagnostic(.err, "unexpected attributes before declaration", .{});
-                        return error.UnexpectedToken;
                     }
-                    _ = try self.expect(.colon_eq);
+
+                    _ = self.expect(.colon_eq) catch |err| switch (err) {
+                        ParseError.UnexpectedToken => {
+                            _ = try self.synchronize();
+                            continue;
+                        },
+                        else => return err,
+                    };
 
                     const value = try self.parseExpr();
 
@@ -248,21 +253,32 @@ pub const Parser = struct {
                     };
 
                     try decls.append(self.arena.allocator(), decl);
-                    continue;
                 },
                 .group_kw => {
-                    const group = try self.parseGroup(attrs, tok_start);
+                    const group = self.parseGroup(attrs, tok_start) catch |err| switch (err) {
+                        ParseError.UnexpectedToken => {
+                            _ = try self.synchronize();
+                            continue;
+                        },
+                        else => return err,
+                    };
                     try groups.append(self.arena.allocator(), group);
-                    continue;
                 },
                 .task_kw => {
-                    const task = try self.parseTask(attrs, tok_start);
+                    const task = self.parseTask(attrs, tok_start) catch |err| switch (err) {
+                        ParseError.UnexpectedToken => {
+                            _ = try self.synchronize();
+                            continue;
+                        },
+                        else => return err,
+                    };
                     try tasks.append(self.arena.allocator(), task);
                     continue;
                 },
-                else => {
-                    try self.addDiagnostic(.err, "Unexpected token", .{});
-                    return error.UnexpectedToken;
+                else => |invalid_token| {
+                    try self.addDiagnostic(.err, "Unexpected token: '{s}'", .{@tagName(invalid_token)});
+                    // synchronize
+                    _ = try self.synchronize();
                 },
             }
         }
@@ -287,18 +303,42 @@ pub const Parser = struct {
         return try attributes.toOwnedSlice(self.arena.allocator());
     }
 
-    fn parseAttribute(self: *Parser) ![]ast.Attribute {
+    fn parseAttribute(self: *Parser) ParseError![]ast.Attribute {
         var attrs = try std.ArrayList(ast.Attribute).initCapacity(self.arena.allocator(), 1);
 
         while (true) {
             const attr_start = self.currentPos();
-            const name = try self.expect(.ident);
+            const name = self.expect(.ident) catch |err| switch (err) {
+                ParseError.UnexpectedToken => {
+                    switch (try self.synchronizeTo(&.{ .comma, .rbracket, .eof })) {
+                        .comma => {
+                            // skip lbracket and start over
+                            _ = try self.advance();
+                            continue;
+                        },
+                        else => break,
+                    }
+                },
+                else => return err,
+            };
 
             var value: ?ast.MetaValue = null;
             var value_id: ?SpanId = null;
 
             if (try self.eat(.colon)) |_| {
-                const wrapped = try self.parseMetaValue();
+                const wrapped = self.parseMetaValue() catch |err| switch (err) {
+                    ParseError.UnexpectedToken => {
+                        switch (try self.synchronizeTo(&.{ .comma, .rbracket, .eof })) {
+                            .comma => {
+                                // skip lbracket and start over
+                                _ = try self.advance();
+                                continue;
+                            },
+                            else => break,
+                        }
+                    },
+                    else => return err,
+                };
                 value = wrapped.payload;
                 value_id = wrapped.id;
             }
@@ -354,11 +394,10 @@ pub const Parser = struct {
                 .ident => {
                     if (temp_attrs.len != 0) {
                         try self.addDiagnostic(.err, "unexpected attributes before declaration", .{});
-                        return error.UnexpectedToken;
                     }
 
                     _ = try self.expect(.colon_eq);
-
+                    //TODO: skip declaration if expression is invalid instead of poison
                     const value = try self.parseExpr();
 
                     const id = try self.span_registry.addNode(
@@ -382,7 +421,7 @@ pub const Parser = struct {
                 },
                 else => {
                     try self.addDiagnostic(.err, "Unexpected token: {s}.", .{@tagName(tok.kind)});
-                    return error.UnexpectedToken;
+                    _ = try self.synchronizeTo(&.{ .task_kw, .rbrace, .eof });
                 },
             }
         }
@@ -477,7 +516,19 @@ pub const Parser = struct {
         errdefer child_ids.deinit();
 
         while (try self.eat(.rbrace) == null) {
-            const wrapped = try self.parseOneStatement();
+            const wrapped = self.parseOneStatement() catch |err| switch (err) {
+                ParseError.UnexpectedToken => {
+                    switch (try self.synchronizeTo(&.{ .backtick, .ident, .dcolon, .if_kw, .rbrace, .eof })) {
+                        .rbrace => {
+                            _ = try self.advance();
+                            break;
+                        },
+                        .eof => break,
+                        else => continue,
+                    }
+                },
+                else => return err,
+            };
             try child_ids.append(wrapped.id);
             try stmts.append(self.arena.allocator(), wrapped.payload);
         }
@@ -692,24 +743,84 @@ pub const Parser = struct {
         return try args.toOwnedSlice(self.arena.allocator());
     }
 
-    fn parseArguments(self: *Parser) ![]ast.Argument {
+    fn parseArguments(self: *Parser) ParseError![]ast.Argument {
         var arguments = try std.ArrayList(ast.Argument).initCapacity(self.arena.allocator(), 1);
 
         while (try self.eat(.rparen) == null) {
             const arg_start = self.currentPos();
             const attrs = try self.collectAttributes();
 
-            const name = try self.expect(.ident);
+            const name = self.expect(.ident) catch |err| switch (err) {
+                ParseError.UnexpectedToken => {
+                    switch (try self.synchronizeTo(&.{ .comma, .rparen, .lbrace, .eof })) {
+                        .comma => {
+                            _ = try self.advance();
+                            continue;
+                        },
+                        .rparen => {
+                            _ = try self.advance();
+                            break;
+                        },
+                        else => break,
+                    }
+                },
+                else => return err,
+            };
 
-            _ = try self.expect(.colon);
+            _ = self.expect(.colon) catch |err| switch (err) {
+                ParseError.UnexpectedToken => {
+                    switch (try self.synchronizeTo(&.{ .comma, .rparen, .lbrace, .eof })) {
+                        .comma => {
+                            _ = try self.advance();
+                            continue;
+                        },
+                        .rparen => {
+                            _ = try self.advance();
+                            break;
+                        },
+                        else => break,
+                    }
+                },
+                else => return err,
+            };
 
-            const arg_type = try self.parseArgType();
+            const arg_type = self.parseArgType() catch |err| switch (err) {
+                ParseError.UnexpectedToken => {
+                    switch (try self.synchronizeTo(&.{ .comma, .rparen, .lbrace, .eof })) {
+                        .comma => {
+                            _ = try self.advance();
+                            continue;
+                        },
+                        .rparen => {
+                            _ = try self.advance();
+                            break;
+                        },
+                        else => break,
+                    }
+                },
+                else => return err,
+            };
 
             var default: ?ast.Expr = null;
             var default_id: ?SpanId = null;
 
-            if (try self.eat(.eq)) |_| {
-                const wrapped = try self.parseExpr();
+            if (try self.eat(.eq)) |_| blk: {
+                const wrapped = self.parseExpr() catch |err| switch (err) {
+                    ParseError.UnexpectedToken => {
+                        switch (try self.synchronizeTo(&.{ .comma, .rparen, .lbrace, .eof })) {
+                            .comma => {
+                                _ = try self.advance();
+                                break :blk;
+                            },
+                            .rparen => {
+                                _ = try self.advance();
+                                break;
+                            },
+                            else => break,
+                        }
+                    },
+                    else => return err,
+                };
                 default = wrapped.payload;
                 default_id = wrapped.id;
             }
@@ -973,17 +1084,15 @@ pub const Parser = struct {
                 return .wrap(id, .{ .ident = tok.lexeme });
             },
             .number => {
-                const tok = try self.advance();
-                const val = std.fmt.parseFloat(f64, tok.lexeme) catch {
-                    try self.addDiagnostic(.err, "invalid float literal", .{});
-                    return ParseError.UnexpectedToken;
-                };
+                const tok = self.expect(.number) catch unreachable;
+                const val = std.fmt.parseFloat(f64, tok.lexeme) catch unreachable; // should be validated by lexer
 
                 const id = try self.span_registry.addNode(tok.span, .leaf);
                 return .wrap(id, .{ .number_lit = val });
             },
             .lbracket => { // list
                 const start = self.currentPos();
+                _ = self.expect(.lbracket) catch unreachable;
 
                 var items: std.ArrayList(ast.Expr) = .empty;
                 errdefer items.deinit(self.arena.allocator());
@@ -1268,11 +1377,6 @@ pub const Parser = struct {
                         _ = try self.expect(.rbracket);
                         break;
                     }
-                }
-
-                if (items.items.len == 0) {
-                    try self.addDiagnostic(.err, "list cannot be empty", .{});
-                    return ParseError.UnexpectedToken; //TODO: consider if its sensible
                 }
 
                 const id = try self.span_registry.addNode(
