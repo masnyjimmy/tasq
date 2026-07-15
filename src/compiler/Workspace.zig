@@ -92,7 +92,12 @@ pub fn deinit(self: *Workspace, allocator: std.mem.Allocator) void {
     self.next_id = undefined;
 }
 
-pub fn openFile(self: *Workspace, allocator: std.mem.Allocator, uri: []const u8, text: []const u8, version: i32) !FileId {
+pub const OpenResult = struct {
+    valid: bool,
+    id: FileId,
+};
+
+pub fn openFile(self: *Workspace, allocator: std.mem.Allocator, uri: []const u8, text: []const u8, version: i32) !OpenResult {
     std.debug.assert(self.getId(uri) == null);
 
     const id: FileId = @enumFromInt(self.next_id);
@@ -110,8 +115,12 @@ pub fn openFile(self: *Workspace, allocator: std.mem.Allocator, uri: []const u8,
         .diagnostics = .init(allocator),
     });
 
-    try self.reparse(id);
-    return id;
+    const valid = try self.reparse(id);
+
+    return .{
+        .valid = valid,
+        .id = id,
+    };
 }
 
 pub fn getId(self: *Workspace, uri: []const u8) ?FileId {
@@ -158,15 +167,18 @@ pub fn reparse(self: *Workspace, id: FileId) !void {
     );
 
     file.ir = try sema.analyse(tree);
+    std.log.debug("reparse end", .{});
+
+    return file.diagnostics.has_error == false;
 }
 
-pub fn changeFile(self: *Workspace, allocator: std.mem.Allocator, id: FileId, new_text: []const u8, version: i32) !void {
+pub fn changeFile(self: *Workspace, allocator: std.mem.Allocator, id: FileId, new_text: []const u8, version: i32) !bool {
     var file = self.files.getPtr(id).?;
     allocator.free(file.source);
     file.source = try allocator.dupe(u8, new_text);
     file.version = version;
 
-    try self.reparse(id);
+    return try self.reparse(id);
 }
 
 pub fn closeFile(self: *Workspace, allocator: std.mem.Allocator, id: FileId) !void {
