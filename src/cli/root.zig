@@ -5,6 +5,8 @@ const command = @import("command.zig");
 const conzole = @import("conzole");
 const compiler = @import("compiler");
 
+const TaskError = @import("task.zig").TaskError;
+
 pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process.Environ.Map, args: []const []const u8) !void {
     var buffer: [4096]u8 = undefined;
 
