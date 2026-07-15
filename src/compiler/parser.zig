@@ -12,6 +12,8 @@ const TokenKind = token.TokenKind;
 
 const Diagnostics = @import("Diagnostics.zig");
 
+const lib = @import("lib");
+
 const Span = @import("span.zig");
 const SpanId = Span.Registry.NodeId;
 const Wrapped = Span.Registry.Wrapped;
@@ -68,7 +70,7 @@ pub const Parser = struct {
         op: ast.BinaryOp,
         left: Wrapped(ast.Expr),
         right: Wrapped(ast.Expr),
-    ) !Wrapped(ast.Expr) {
+    ) ParseError!Wrapped(ast.Expr) {
         const node = try self.arena.allocator().create(ast.BinaryExpr);
         node.* = .{ .op = op, .left = left.payload, .right = right.payload };
 
@@ -122,7 +124,7 @@ pub const Parser = struct {
         return self.setNextFetchCurrent(tok);
     }
 
-    fn expect(self: *Parser, kind: TokenKind) !Token {
+    fn expect(self: *Parser, kind: TokenKind) ParseError!Token {
         if (self.next.kind == kind) return self.advance();
 
         try self.addDiagnostic(
@@ -131,7 +133,7 @@ pub const Parser = struct {
             .{ @tagName(kind), @tagName(self.next.kind) },
         );
 
-        return error.UnexpectedToken;
+        return ParseError.UnexpectedToken;
     }
 
     fn eat(self: *Parser, kind: TokenKind) !?Token {
@@ -148,7 +150,7 @@ pub const Parser = struct {
             self.lexer.pos = curr.span.end();
     }
 
-    fn readCharacter(self: *Parser) !Token {
+    fn readCharacter(self: *Parser) ParseError!Token {
         var lexer = self.lexer.stringLexer();
         const tok = try lexer.lexCharacter();
         if (tok.kind != .char) {
@@ -160,7 +162,7 @@ pub const Parser = struct {
         return tok;
     }
 
-    fn readString(self: *Parser, terminator: []const u8, comptime multiline: bool) !Token {
+    fn readString(self: *Parser, terminator: []const u8, comptime multiline: bool) ParseError!Token {
         var lexer = self.lexer.stringLexer();
         const tok = try lexer.lexString(&.{terminator}, multiline);
 
@@ -187,21 +189,26 @@ pub const Parser = struct {
         );
     }
 
-    fn synchronize(self: *Parser) void {
+    fn synchronize(self: *Parser) !TokenKind {
+        return try self.synchronizeTo(&.{
+            .task_kw, .group_kw, .set_kw, .rbrace, .eof,
+        });
+    }
+
+    fn synchronizeTo(self: *Parser, comptime tts: []const TokenKind) !TokenKind {
+        const to_map = comptime std.enums.EnumSet(TokenKind).initMany(tts);
+
         while (true) {
-            switch (self.peek()) {
-                TokenKind.task_kw,
-                TokenKind.group_kw,
-                TokenKind.set_kw,
-                TokenKind.rbrace,
-                TokenKind.eof,
-                => return,
-                else => _ = self.advance(),
+            const tk = self.peek();
+            if (to_map.contains(tk)) {
+                return tk;
             }
+
+            _ = try self.advance();
         }
     }
 
-    pub fn parseFile(self: *Parser) !ast.File {
+    pub fn parseFile(self: *Parser) ParseError!ast.File {
         const start = self.currentPos();
 
         var options = try std.ArrayList(ast.Set).initCapacity(self.arena.allocator(), 1);
@@ -269,7 +276,7 @@ pub const Parser = struct {
         };
     }
 
-    fn collectAttributes(self: *Parser) ![]ast.Attribute {
+    fn collectAttributes(self: *Parser) ParseError![]ast.Attribute {
         var attributes = try std.ArrayList(ast.Attribute).initCapacity(self.arena.allocator(), 1);
 
         while (try self.eat(.lbracket) != null) {
@@ -320,7 +327,7 @@ pub const Parser = struct {
         return attrs.toOwnedSlice(self.arena.allocator());
     }
 
-    fn parseGroup(self: *Parser, attrs: []ast.Attribute, start: u32) !ast.Group {
+    fn parseGroup(self: *Parser, attrs: []ast.Attribute, start: u32) ParseError!ast.Group {
         const name = try self.eat(.ident);
 
         var arguments: []ast.Argument = &.{};
@@ -401,7 +408,7 @@ pub const Parser = struct {
         };
     }
 
-    fn parseTask(self: *Parser, attrs: []ast.Attribute, start: u32) !ast.Task {
+    fn parseTask(self: *Parser, attrs: []ast.Attribute, start: u32) ParseError!ast.Task {
         const name = try self.expect(.ident);
 
         var arguments: []ast.Argument = &.{};
@@ -625,13 +632,13 @@ pub const Parser = struct {
                 });
             },
             else => {
-                try self.addDiagnostic(.err, "unexpected token: {s}", .{@tagName(self.next.kind)});
-                return error.UnexpectedToken;
+                try self.addDiagnostic(.err, "expected statement, found '{s}'", .{@tagName(self.next.kind)});
+                return ParseError.UnexpectedToken;
             },
         }
     }
 
-    fn parseTaskCallArgs(self: *Parser) ![]ast.TaskCallArg {
+    fn parseTaskCallArgs(self: *Parser) ParseError![]ast.TaskCallArg {
         var args = try std.ArrayList(ast.TaskCallArg).initCapacity(self.arena.allocator(), 1);
 
         _ = try self.expect(.lparen);
@@ -731,7 +738,7 @@ pub const Parser = struct {
         return try arguments.toOwnedSlice(self.arena.allocator());
     }
 
-    fn parseSet(self: *Parser, attributes: []ast.Attribute, start: u32) !ast.Set {
+    fn parseSet(self: *Parser, attributes: []ast.Attribute, start: u32) ParseError!ast.Set {
         var decls: std.ArrayList(ast.Set.SetDecl) = .empty;
         errdefer decls.deinit(self.arena.allocator());
 
@@ -761,7 +768,7 @@ pub const Parser = struct {
         };
     }
 
-    fn parseSetDecl(self: *Parser) !ast.Set.SetDecl {
+    fn parseSetDecl(self: *Parser) ParseError!ast.Set.SetDecl {
         const start = self.currentPos();
 
         const name = try self.expect(.ident);
@@ -790,7 +797,7 @@ pub const Parser = struct {
     /// ArgType doesn't need its own registry entry -- `argument.type` in the
     /// registry stores the whole type span directly, so this just hands
     /// back the span alongside the parsed value.
-    fn parseArgType(self: *Parser) !struct { span: Span, value: ast.ArgType } {
+    fn parseArgType(self: *Parser) ParseError!struct { span: Span, value: ast.ArgType } {
         const start = self.currentPos();
 
         const list_op_span: ?Span = blk: {
@@ -1124,7 +1131,7 @@ pub const Parser = struct {
         });
     }
 
-    fn parseStringExpr(self: *Parser, terminator: []const u8, comptime multiline: bool) !Wrapped(ast.StringExpr) {
+    fn parseStringExpr(self: *Parser, terminator: []const u8, comptime multiline: bool) ParseError!Wrapped(ast.StringExpr) {
         var out: std.ArrayList(ast.InterStringSeg) = .empty;
 
         var child_ids = try self.span_registry.getArrayList(SpanId, 1);
