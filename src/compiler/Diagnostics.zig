@@ -26,6 +26,7 @@ const Diagnostics = @This();
 
 allocator: std.mem.Allocator,
 records: std.ArrayList(Record) = .empty,
+has_error: bool = false,
 
 pub fn init(allocator: std.mem.Allocator) Diagnostics {
     return .{ .allocator = allocator };
@@ -41,9 +42,14 @@ pub fn deinit(self: *Diagnostics) void {
 
 pub fn clear(self: *Diagnostics) void {
     self.records.clearRetainingCapacity();
+    self.has_error = false;
 }
 
 pub fn append(self: *Diagnostics, severity: Severity, span: Span, comptime fmt: []const u8, args: anytype) !void {
+    if (severity == .err) {
+        self.has_error = true;
+    }
+
     try self.records.append(self.allocator, .{
         .span = span,
         .severity = severity,
