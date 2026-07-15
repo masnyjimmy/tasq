@@ -19,8 +19,9 @@ const lib = @import("lib");
 
 const Context = @import("context.zig");
 
-const TaskError = error{
+pub const TaskError = error{
     TaskNotFound,
+    CompilationFailed,
 };
 
 const style = struct {
@@ -49,14 +50,60 @@ pub fn compileRunfile(ctx: *const Context) !*const compiler.ir.File {
     );
     defer ctx.allocator.free(content);
 
-    const file_id = try ctx.workspace.openFile(
+    const result = try ctx.workspace.openFile(
         ctx.allocator,
         ctx.source_file_path,
         content,
         0,
     );
 
-    return ctx.workspace.view(file_id, .ir).source;
+    // print compilation diagnostics
+
+    var iter = ctx.workspace.files.iterator();
+
+    while (iter.next()) |kv| {
+        const file = kv.value_ptr;
+        const records = file.diagnostics.records.items;
+        const source = file.source;
+
+        for (records) |record| {
+            const lc = try lib.debug.lineColFromIndex(source, record.span.start);
+
+            try ctx.printer.printStyled(ctx.allocator, .{ .fg = .white }, "{[file]s}:{[line]}:{[col]}: ", .{
+                .file = file.uri,
+                .line = lc.line,
+                .col = lc.column,
+            });
+
+            const severity_color: conzole.terminal.Color = switch (record.severity) {
+                .err => .bright_red,
+                .hint => .bright_green,
+                .warn => .yellow,
+            };
+
+            try ctx.printer.printStyled(
+                ctx.allocator,
+                .{ .bold = true, .fg = severity_color },
+                "{f}: ",
+                .{record.severity},
+            );
+
+            try ctx.printer.printStyled(
+                ctx.allocator,
+                .{ .fg = .bright_white },
+                "{s}\n",
+                .{record.message},
+            );
+        }
+    }
+
+    try ctx.printer.writer.flush();
+
+    if (result.valid == false) {
+        return TaskError.CompilationFailed;
+    }
+
+    return ctx.workspace.view(result.id, .ir).source;
 }
 
 pub fn printTasksList(ctx: *const Context) !void {
