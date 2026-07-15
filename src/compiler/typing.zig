@@ -43,7 +43,7 @@ pub const Type = union(TypeTag) {
         writer: *std.Io.Writer,
     ) !void {
         switch (self) {
-            .list => |t| try writer.print("[]{}", .{t.*}),
+            .list => |t| try writer.print("[]{f}", .{t.*}),
             inline else => |_, tag| try writer.writeAll(@tagName(tag)),
         }
     }
