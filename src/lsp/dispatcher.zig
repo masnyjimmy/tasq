@@ -260,6 +260,48 @@ pub fn @"textDocument/semanticTokens/full"(
     return .{ .data = data.items };
 }
 
+pub fn @"textDocument/diagnostic"(
+    self: *Dispatcher,
+    arena: std.mem.Allocator,
+    params: lsp.types.document_diagnostic.Params,
+) !lsp.types.document_diagnostic.Report {
+    const file_id = self.workspace.getId(params.textDocument.uri) orelse {
+        std.log.warn("Diagnostics on non existent document: '{s}'", .{params.textDocument.uri});
+        return error.InvalidRequest;
+    };
+
+    const file = self.workspace.files.getPtr(file_id) orelse unreachable;
+
+    const diagnostics = file.diagnostics;
+
+    const result = try arena.alloc(lsp.types.Diagnostic, diagnostics.records.items.len);
+
+    for (diagnostics.records.items, result) |in, *out| {
+        out.* = .{
+            .message = in.message,
+            .range = lsp.offsets.locToRange(
+                file.source,
+                .{
+                    .start = in.span.start,
+                    .end = in.span.end(),
+                },
+                self.offset_encodings,
+            ),
+            .severity = switch (in.severity) {
+                .err => .Error,
+                .warn => .Warning,
+                .hint => .Hint,
+            },
+        };
+    }
+
+    return .{
+        .related_full_document_diagnostic_report = .{
+            .items = result,
+        },
+    };
+}
+
 pub fn onResponse(_: *Dispatcher, _: std.mem.Allocator, response: lsp.JsonRPCMessage.Response) void {
     std.log.warn("received unexpected response from client with id '{?}'!", .{response.id});
 }
