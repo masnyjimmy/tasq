@@ -170,7 +170,7 @@ pub const Collector = struct {
     fn walkTask(self: *Collector, task: *const ast.Task) Error!void {
         const span_node = self.span_registry.get(task.id);
 
-        try self.add(span_node.details.task.name, .variable, null);
+        try self.add(span_node.details.task.name, .function, null);
 
         for (task.args) |*arg| {
             try self.walkArgument(arg);
@@ -234,7 +234,7 @@ pub const Collector = struct {
     fn walkArgument(self: *Collector, arg: *const ast.Argument) Error!void {
         const span_node = self.span_registry.get(arg.id);
 
-        try self.add(span_node.details.argument.name, .variable, null);
+        try self.add(span_node.details.argument.name, .parameter, null);
 
         for (arg.attrs) |*attr| {
             try self.walkAttribute(attr);
@@ -244,7 +244,8 @@ pub const Collector = struct {
         //     try self.walkExpr(def);
         // }
 
-        try self.add(span_node.details.argument.type, .type, null);
+        // type already added
+        // try self.add(span_node.details.argument.type, .type, null);
     }
 
     fn walkAttribute(self: *Collector, attr: *const ast.Attribute) Error!void {
