@@ -133,10 +133,11 @@ pub fn view(self: *Workspace, id: FileId, comptime view_type: ViewType) FileView
     return .fromFileState(self, id, file);
 }
 
-pub fn reparse(self: *Workspace, id: FileId) !void {
+pub fn reparse(self: *Workspace, id: FileId) !bool {
     const file = self.files.getPtr(id).?;
 
     _ = file.arena.reset(.retain_capacity);
+    file.span_registry.clear();
     file.diagnostics.clear();
     file.tree = null;
     file.ir = null;
@@ -167,7 +168,6 @@ pub fn reparse(self: *Workspace, id: FileId) !void {
     );
 
     file.ir = try sema.analyse(tree);
-    std.log.debug("reparse end", .{});
 
     return file.diagnostics.has_error == false;
 }
