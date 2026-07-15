@@ -499,6 +499,26 @@ pub const Sema = struct {
 
             const int = attributes.contains(.int);
 
+            const min = if (attributes.getAssertOne(.min)) |value|
+                value.?.number
+            else
+                null;
+
+            const max = if (attributes.getAssertOne(.max)) |value|
+                value.?.number
+            else
+                null;
+
+            const min_items: ?i64 = if (attributes.getAssertOne(.min_items)) |value|
+                @intFromFloat(value.?.number)
+            else
+                null;
+
+            const max_items: ?i64 = if (attributes.getAssertOne(.max_items)) |value|
+                @intFromFloat(value.?.number)
+            else
+                null;
+
             // check if named
             const has_name = blk: {
                 const has_name = long != null or short != null;
@@ -533,6 +553,32 @@ pub const Sema = struct {
                 has_name,
                 default != null,
             );
+
+            // validate agains attributes
+            if (default) |def| {
+                const span = self.span_registry.getSpan(span_node.details.argument.default.?);
+
+                switch (def) {
+                    .number => |v| {
+                        if (min) |m| if (v < m) {
+                            try self.diagnostics.warn(span, "Default value is less than min", .{});
+                        };
+                        if (max) |m| if (v > m) {
+                            try self.diagnostics.warn(span, "Default value is greater than max", .{});
+                        };
+                    },
+                    .list => |list| {
+                        if (min_items) |m| if (list.items.len < m) {
+                            try self.diagnostics.warn(span, "Default value list items count is less than min_items", .{});
+                        };
+
+                        if (max_items) |m| if (list.items.len > m) {
+                            try self.diagnostics.warn(span, "Default value list items count is greater than max_items", .{});
+                        };
+                    },
+                    else => {},
+                }
+            }
 
             const ptr = try self.arena.allocator().create(ir.Argument);
             ptr.* = .{
