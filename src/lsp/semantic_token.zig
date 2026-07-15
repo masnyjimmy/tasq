@@ -85,9 +85,37 @@ pub const Collector = struct {
 
         try collector.walkFile(file);
 
-        return try collector.tokens.toOwnedSlice(allocator);
-    }
+        const validate = comptime switch (@import("builtin").mode) {
+            .Debug, .ReleaseSafe => true,
+            else => false,
+        };
 
+        const out = try collector.tokens.toOwnedSlice(allocator);
+
+        try sortTokens(out);
+
+        if (comptime validate) {
+            if (out.len == 0) return out;
+
+            var max_end: u32 = out[0].end;
+            var ttype = out[0].ttype;
+
+            for (out[1..]) |tok| {
+                if (tok.start < max_end) {
+                    std.debug.panic(
+                        "semantic token overlap: '{t}' [{d}, {d}] collides with a preceding token '{t}' ending at {d} -- some span was likely registered twice",
+                        .{ @as(TokenType, @enumFromInt(tok.ttype)), tok.start, tok.end, @as(TokenType, @enumFromInt(ttype)), max_end },
+                    );
+                }
+                max_end = @max(max_end, tok.end);
+                if (max_end == tok.end) {
+                    ttype = tok.ttype;
+                }
+            }
+
+            return out;
+        }
+    }
     fn init(allocator: std.mem.Allocator, span_registry: *const Span.Registry) Collector {
         return .{
             .allocator = allocator,
