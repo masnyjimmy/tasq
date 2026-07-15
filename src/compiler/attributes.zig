@@ -111,7 +111,15 @@ const attr_specs: []const Spec = &.{
         .valid_for = &.{.arguments(&.{ .string, .list_string })},
     },
     .{
-        .name = "max-items",
+        .name = "min_items",
+        .value_types = &.{.number},
+        .allow_default = false,
+        .unique = true,
+        .kind = .validation,
+        .valid_for = &.{.arguments(&.{ .list_string, .list_number })},
+    },
+    .{
+        .name = "max_items",
         .value_types = &.{.number},
         .allow_default = false,
         .unique = true,
