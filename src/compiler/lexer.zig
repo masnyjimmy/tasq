@@ -333,6 +333,9 @@ pub const Lexer = struct {
             .number => {
                 try self.span_registry.put(.number, span);
             },
+            .colon_eq, .eq_eq, .plus, .minus, .star, .slash, .bang_eq, .lt, .lt_eq, .gt, .gt_eq => {
+                try self.span_registry.put(.operator, span);
+            },
             else => {},
         }
 
