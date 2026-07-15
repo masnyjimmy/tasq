@@ -70,6 +70,12 @@ pub fn initialize(
                     .full = .{ .bool = true },
                 },
             },
+            .diagnosticProvider = .{
+                .diagnostic_options = .{
+                    .interFileDependencies = false,
+                    .workspaceDiagnostics = false,
+                },
+            },
         },
     };
 }
@@ -97,7 +103,7 @@ pub fn @"textDocument/didOpen"(
     if (self.workspace.getId(notification.textDocument.uri)) |file_id| {
         std.log.warn("Document opened twice: '{s}'", .{notification.textDocument.uri});
 
-        try self.workspace.changeFile(self.allocator, file_id, notification.textDocument.text, notification.textDocument.version);
+        _ = try self.workspace.changeFile(self.allocator, file_id, notification.textDocument.text, notification.textDocument.version);
         return;
     }
 
@@ -144,7 +150,7 @@ pub fn @"textDocument/didChange"(
         }
     }
     const new_text = try buffer.toOwnedSlice(self.allocator);
-    try self.workspace.changeFile(self.allocator, file_id, new_text, notification.textDocument.version);
+    _ = try self.workspace.changeFile(self.allocator, file_id, new_text, notification.textDocument.version);
 }
 
 pub fn @"textDocument/didClose"(
@@ -230,8 +236,6 @@ pub fn @"textDocument/semanticTokens/full"(
     const span_registry = self.workspace.view(file_id, .span);
 
     const raw_tokens = try sem.Collector.collect(arena, ast_view.source, span_registry.source);
-
-    _ = try sem.sortTokens(raw_tokens);
 
     var data: std.ArrayList(u32) = .empty;
     var prev_line: u32 = 0;
