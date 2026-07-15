@@ -15,6 +15,7 @@ pub const TokenType = enum(u32) {
     string,
     variable,
     parameter,
+    operator,
     type,
 
     pub fn getNames() []const []const u8 {
