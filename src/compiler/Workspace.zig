@@ -36,6 +36,7 @@ const ViewType = enum {
     tree,
     ir,
     span,
+    diagnostics,
 
     pub fn Type(comptime self: ViewType) type {
         return switch (self) {
@@ -43,6 +44,7 @@ const ViewType = enum {
             .tree => *const ast.File,
             .ir => *const ir.File,
             .span => *const Span.Registry,
+            .diagnostics => *const Diagnostics,
         };
     }
 };
@@ -62,6 +64,7 @@ pub fn FileView(comptime view_type: ViewType) type {
                     .tree => &fs.tree.?,
                     .ir => &fs.ir.?,
                     .span => &fs.span_registry,
+                    .diagnostics => &fs.diagnostics,
                 },
                 .diagnostics = &fs.diagnostics,
             };
