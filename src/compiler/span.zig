@@ -142,6 +142,11 @@ pub const Registry = struct {
         return .{ .allocator = allocator };
     }
 
+    pub fn clear(self: *Registry) void {
+        self.spans.clearRetainingCapacity();
+        self.nodes.clearRetainingCapacity();
+    }
+
     pub fn deinit(self: *Registry) void {
         self.spans.deinit(self.allocator);
 
