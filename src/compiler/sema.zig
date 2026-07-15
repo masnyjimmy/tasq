@@ -411,7 +411,8 @@ pub const Sema = struct {
         var phase: ArgPhase = .positional;
 
         for (args) |*arg| {
-            const arg_span = self.span_registry.getSpan(arg.id);
+            const span_node = self.span_registry.get(arg.id);
+
             var attributes = AttributesResolver.resolve(
                 self,
                 .{ .argument = arg.type },
@@ -439,10 +440,12 @@ pub const Sema = struct {
                 }
 
                 if (arg.default) |def| {
+                    const expr_node_id = span_node.details.argument.default.?;
+
                     break :blk try self.assertLiteral(
                         arg.type.typeOf(),
                         def,
-                        self.span_registry.getSpan(arg.id),
+                        expr_node_id,
                     );
                 }
 
@@ -503,7 +506,7 @@ pub const Sema = struct {
                 if (!has_name) {
                     if (group) {
                         try self.diagnostics.err(
-                            arg_span,
+                            span_node.span,
                             "group arguments must be named",
                             .{},
                         );
@@ -512,7 +515,7 @@ pub const Sema = struct {
 
                     if (name_required) {
                         try self.diagnostics.err(
-                            arg_span,
+                            span_node.span,
                             "'{f}' type expect long or/and short attribute",
                             .{arg.type},
                         );
@@ -550,7 +553,7 @@ pub const Sema = struct {
                 scope,
                 .{
                     .name = arg.name,
-                    .span = arg_span,
+                    .span = span_node.span,
                     .details = .{
                         .argument = .{
                             .type = arg.type.typeOf(),
@@ -617,7 +620,14 @@ pub const Sema = struct {
         phase.* = class;
     }
 
-    fn assertLiteral(self: *Sema, expected_type: typing.Type, expr: ast.Expr, span: Span) !typing.Value {
+    fn assertLiteral(
+        self: *Sema,
+        expected_type: typing.Type,
+        expr: ast.Expr,
+        node_id: NodeId,
+    ) !typing.Value {
+        const span_node = self.span_registry.get(node_id);
+
         const expr_type: typing.TypeTag = switch (expr) {
             .bool_lit => .bool,
             .number_lit => .number,
@@ -625,19 +635,19 @@ pub const Sema = struct {
             .string => |str| switch (str) {
                 .lit => .string,
                 .inter => {
-                    try self.diagnostics.err(span, "invalid type, expected '{f}' literal, found string interpolation expr", .{expected_type});
+                    try self.diagnostics.err(span_node.span, "invalid type, expected '{f}' literal, found string interpolation expr", .{expected_type});
                     return SemaError.SemanticError;
                 },
             },
             .list => .list,
             else => {
-                try self.diagnostics.err(span, "invalid value type, default value must be literal", .{});
+                try self.diagnostics.err(span_node.span, "invalid value type, default value must be literal", .{});
                 return SemaError.SemanticError;
             },
         };
 
         if (expr_type != expected_type) {
-            try self.diagnostics.err(span, "invalid value type, expected '{f}' literal, found {s}", .{ expected_type, @tagName(expr_type) });
+            try self.diagnostics.err(span_node.span, "invalid value type, expected '{f}' literal, found {s}", .{ expected_type, @tagName(expr_type) });
             return SemaError.SemanticError;
         }
 
@@ -648,14 +658,14 @@ pub const Sema = struct {
             .string => .{ .string = expr.string.lit },
             .list => |items_type| {
                 var out: std.ArrayList(typing.Value) = try .initCapacity(self.arena.allocator(), expr.list.len);
-
-                for (expr.list) |v| {
+                const spans = span_node.details.expr.list;
+                for (expr.list, spans) |v, item_node_id| {
                     const lit = self.assertLiteral(
                         items_type.*,
                         v,
-                        span,
+                        item_node_id,
                     ) catch |err| {
-                        try self.diagnostics.err(span, "invalid list items type", .{});
+                        try self.diagnostics.err(span_node.span, "invalid list items type", .{});
                         return err;
                     };
                     out.appendAssumeCapacity(lit);
@@ -785,9 +795,13 @@ pub const Sema = struct {
         const block_spans = self.span_registry.get(stmts_id).details.block;
 
         for (stmts, block_spans.stmts) |stmt, stmt_id| {
+            const result = self.analyseStatement(scope, stmt, stmt_id) catch |err| switch (err) {
+                SemaError.SemanticError => continue,
+                else => return err,
+            };
             try out.append(
                 self.arena.allocator(),
-                try self.analyseStatement(scope, stmt, stmt_id),
+                result,
             );
         }
 
