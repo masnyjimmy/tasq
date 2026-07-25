@@ -608,39 +608,57 @@ pub const Parser = struct {
                 });
             },
             .if_kw => {
+                const Helper = struct {
+                    fn statementToBlock(parser: *Parser, in: Wrapped(ast.Statement), span: Span) !Wrapped([]ast.Statement) {
+                        var spans = try parser.span_registry.getArrayList(SpanId, 1);
+                        spans.appendAssumeCapacity(in.id);
+
+                        const block = try parser.arena.allocator().alloc(ast.Statement, 1);
+                        block[0] = in.payload;
+
+                        const id = try parser.span_registry.addNode(
+                            span,
+                            .{
+                                .block = .{
+                                    .stmts = try spans.toOwnedSlice(),
+                                },
+                            },
+                        );
+
+                        return .wrap(id, block);
+                    }
+                };
+
                 const if_kw = try self.advance();
 
                 const cond = try self.parseExpr();
 
-                var then: []ast.Statement = undefined;
-                var then_id: SpanId = undefined;
+                const then, const then_id = then: {
+                    const wrapped = if (try self.eat(.lbrace)) |_|
+                        try self.parseStatements()
+                    else blk: {
+                        const start = self.currentPos();
+                        const single = try self.parseOneStatement();
+                        break :blk try Helper.statementToBlock(self, single, self.spanFrom(start));
+                    };
+
+                    break :then .{ wrapped.payload, wrapped.id };
+                };
+
                 var else_: ?[]ast.Statement = null;
                 var else_id: ?SpanId = null;
 
-                if (try self.eat(.lbrace)) |_| {
-                    const wrapped = try self.parseStatements();
-                    then = wrapped.payload;
-                    then_id = wrapped.id;
-                } else {
-                    const wrapped = try self.parseOneStatement();
-                    const arr = try self.arena.allocator().alloc(ast.Statement, 1);
-                    arr[0] = wrapped.payload;
-                    then = arr;
-                    then_id = wrapped.id;
-                }
-
                 if (try self.eat(.else_kw)) |_| {
-                    if (try self.eat(.lbrace)) |_| {
-                        const wrapped = try self.parseStatements();
-                        else_ = wrapped.payload;
-                        else_id = wrapped.id;
-                    } else {
+                    const wrapped = if (try self.eat(.lbrace)) |_|
+                        try self.parseStatements()
+                    else blk: {
+                        const start = self.currentPos();
                         const wrapped = try self.parseOneStatement();
-                        const arr = try self.arena.allocator().alloc(ast.Statement, 1);
-                        arr[0] = wrapped.payload;
-                        else_ = arr;
-                        else_id = wrapped.id;
-                    }
+                        break :blk try Helper.statementToBlock(self, wrapped, self.spanFrom(start));
+                    };
+
+                    else_ = wrapped.payload;
+                    else_id = wrapped.id;
                 }
 
                 const span = self.spanFrom(if_kw.span.start);
