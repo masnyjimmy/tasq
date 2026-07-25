@@ -315,14 +315,20 @@ pub const Sema = struct {
                         "'{s}' is not valid attribute for this element",
                         .{attr.name},
                     );
-                    return SemaError.SemanticError;
+                    continue;
                 };
-
+                // TODO: improve flow
                 switch (def.kind) {
                     .platform => {
                         const pt = lib.enums.castEnum(def.type, platform.Tag) orelse unreachable;
                         // platforms are always unique attributes
                         std.debug.assert(def.unique == true);
+
+                        if (attr.value != null) {
+                            try self.sema.diagnostics.err(attr_span, "platform attributes does not take value", .{});
+                            // dont skip cuz value can be just ignored
+                            // TODO: consider it warning instead
+                        }
 
                         if (self.platforms.contains(pt)) {
                             try self.sema.diagnostics.err(
@@ -330,7 +336,7 @@ pub const Sema = struct {
                                 "'{s}' platform attribute duplicate",
                                 .{attr.name},
                             );
-                            return SemaError.SemanticError;
+                            continue;
                         }
 
                         self.platforms.insert(pt);
@@ -343,7 +349,7 @@ pub const Sema = struct {
                                 "'{s}' attribute duplicate",
                                 .{attr.name},
                             );
-                            return SemaError.SemanticError;
+                            continue;
                         }
 
                         // validate value
@@ -357,7 +363,7 @@ pub const Sema = struct {
                                     "invalid '{s}' attribute value type, expected '{s}'",
                                     .{ attr.name, expected },
                                 );
-                                return SemaError.SemanticError;
+                                continue;
                             }
                         } else if (def.allow_default == false) {
                             const expected = try attrib.typesListToString(self.sema.arena.allocator(), def.value_types, def.allow_default);
@@ -366,7 +372,7 @@ pub const Sema = struct {
                                 "'{s}' attribute doesn't support default value, expected '{s}'",
                                 .{ attr.name, expected },
                             );
-                            return SemaError.SemanticError;
+                            continue;
                         }
                         try self.attributes.add(
                             self.sema.arena.allocator(),
