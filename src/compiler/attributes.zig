@@ -54,7 +54,7 @@ const attr_specs: []const Spec = &.{
     .{
         .name = "private",
         .value_types = &.{},
-        .allow_default = false,
+        .allow_default = true,
         .unique = true,
         .kind = .doc,
         .valid_for = &.{ .group, .task },
