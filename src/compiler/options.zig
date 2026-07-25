@@ -13,12 +13,6 @@ pub const options = OptionsGroup(&.{
             .list = &.string,
         },
     },
-    .{
-        .name = "script",
-        .value_type = .{
-            .list = &.string,
-        },
-    },
 });
 
 fn OptionsGroup(comptime specs: []const OptionSpec) type {
