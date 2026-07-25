@@ -463,7 +463,7 @@ const TaskArgumentParser = struct {
         };
 
         var idx: usize = 0;
-        var positional_end = true;
+        var positional_end = false;
 
         while (reader.read()) |tok| : (idx += 1) {
             switch (tok.type) {

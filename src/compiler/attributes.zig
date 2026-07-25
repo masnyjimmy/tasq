@@ -16,7 +16,6 @@ pub const Kind = enum {
     doc,
     modifier,
     validation,
-    script,
 };
 
 const platform_specs = blk: {
@@ -125,15 +124,6 @@ const attr_specs: []const Spec = &.{
         .unique = true,
         .kind = .validation,
         .valid_for = &.{.arguments(&.{ .list_string, .list_number })},
-    },
-    // script,
-    .{
-        .name = "script",
-        .value_types = &.{},
-        .allow_default = true,
-        .unique = true,
-        .kind = .script,
-        .valid_for = &.{.task},
     },
 };
 

@@ -796,7 +796,6 @@ pub const Sema = struct {
 
         const task_scope = try self.createScope(scope);
 
-        const is_script = attributes.contains(.script);
         const is_private = attributes.contains(.private);
         const desc = if (attributes.getAssertOne(.desc)) |value|
             value.?.string
@@ -810,7 +809,6 @@ pub const Sema = struct {
         ptr.* = .{
             .name = task.name,
             .args = args,
-            .script = is_script,
             .private = is_private,
             .desc = desc,
             .body = .{

@@ -465,37 +465,15 @@ pub const Parser = struct {
         // the registered body span (and the .wrap node below) includes the
         // brace itself -- inconsistent with parseGroup/parseSet, which both
         // capture body_start post-brace.
-        const body_start = self.currentPos();
 
-        const body: Wrapped([]ast.Statement) = blk: {
-            if (ast.hasAttr(attrs, "script")) {
-                self.resyncToRaw();
-                const script_start = self.currentPos();
-
-                const process = try self.parseStringExpr("}", true);
-
-                _ = try self.expect(.rbrace);
-
-                const process_stmts = try self.arena.allocator().alloc(ast.Statement, 1);
-                process_stmts[0] = .{ .process = process.payload };
-
-                // whole body as string, for highlighting purposes
-                try self.span_registry.put(.string, self.spanFrom(script_start));
-
-                break :blk .wrap(process.id, process_stmts);
-            }
-
-            break :blk try self.parseStatements();
-        };
-
-        const body_id = try self.span_registry.addNode(self.spanFrom(body_start), .{ .wrap = body.id });
+        const body = try self.parseStatements();
 
         const id = try self.span_registry.addNode(
             self.spanFrom(start),
             .{ .task = .{
                 .name = name.span,
                 .args = args_span,
-                .body = body_id,
+                .body = body.id,
             } },
         );
 

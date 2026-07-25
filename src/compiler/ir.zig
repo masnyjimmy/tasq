@@ -101,7 +101,6 @@ const ResolvedTaskAttributes = std.EnumMap(attrib.TaskAttributeType, attrib.Task
 pub const Task = struct {
     name: []const u8,
     args: []*Argument,
-    script: bool,
     private: bool,
     desc: ?[]const u8,
     body: StatementBlock,
