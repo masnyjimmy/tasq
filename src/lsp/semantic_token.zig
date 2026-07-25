@@ -17,6 +17,8 @@ pub const TokenType = enum(u32) {
     parameter,
     operator,
     type,
+    macro,
+    decorator,
 
     pub fn getNames() []const []const u8 {
         return std.meta.fieldNames(@This());
@@ -27,6 +29,11 @@ pub const TokenModifier = enum(u32) {
     declaration = 1 << 0,
     readonly = 1 << 1,
     default_library = 1 << 2,
+
+    attr_platform = 1 << 3,
+    attr_doc = 1 << 4,
+    attr_modifier = 1 << 5,
+    attr_validation = 1 << 6,
 
     pub fn getNames() []const []const u8 {
         return std.meta.fieldNames(@This());
