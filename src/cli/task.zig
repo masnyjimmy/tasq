@@ -448,8 +448,25 @@ const TaskArgumentParser = struct {
 
         var out: std.array_hash_map.String(Value) = .empty;
 
-        const CollectorAdapter = struct {
-            fn collect(a: std.mem.Allocator, c: *ArgsCollector, r: *ArgsReader, arg: *ir.Argument) ArgsCollector.Error!void {
+        const NumberHandler = struct {
+            fn handle(str: []const u8, int: bool) ArgsReader.Error!Value {
+                return if (int)
+                    .{ .number = @floatFromInt(try ArgsReader.parseAs(str, i64)) }
+                else
+                    .{ .number = try ArgsReader.parseAs(str, f64) };
+            }
+        };
+
+        // Collects a named (--long / -short) argument's value into `collector`,
+        // with unified error reporting for both failure modes.
+        const NamedCollector = struct {
+            fn collect(
+                parser: *TaskArgumentParser,
+                a: *std.heap.ArenaAllocator,
+                c: *ArgsCollector,
+                r: *ArgsReader,
+                arg: *ir.Argument,
+            ) Error!void {
                 const @"type": conzole.args.Type = switch (arg.type) {
                     .flag => .flag,
                     .string => .string,
@@ -458,14 +475,65 @@ const TaskArgumentParser = struct {
                     .list_number => if (arg.int) .list_int else .list_number,
                 };
 
-                try c.interceptNext(a, r, arg.name, @"type");
+                c.interceptNext(a.allocator(), r, arg.name, @"type") catch |err| return switch (err) {
+                    error.InvalidType => {
+                        try parser.printer.printStyled(
+                            a.allocator(),
+                            style.err,
+                            "invalid '{s}' value type, got '{s}' expected '{f}'\n",
+                            .{ arg.name, r.args[r.pos - 1], PrintableArgType.make(arg) },
+                        );
+                        return Error.ParsingFailed;
+                    },
+                    error.UnexpectedEnd => {
+                        try parser.printer.printStyled(
+                            a.allocator(),
+                            style.err,
+                            "unexpected end, '{s}' requires '{f}' value\n",
+                            .{ arg.name, PrintableArgType.make(arg) },
+                        );
+                        return Error.ParsingFailed;
+                    },
+                    else => unreachable,
+                };
             }
         };
 
-        var idx: usize = 0;
+        // Looks up a named argument by its long/short alias, reporting
+        // "unknown argument" consistently.
+        const AliasLookup = struct {
+            fn long(parser: *TaskArgumentParser, a: *std.heap.ArenaAllocator, name: []const u8) Error!*ir.Argument {
+                if (parser.long_alias.get(name)) |arg_idx| {
+                    return parser.args.items[arg_idx];
+                }
+                try parser.printer.printStyled(
+                    a.allocator(),
+                    style.err,
+                    "unknown argument '--{s}'\n",
+                    .{name},
+                );
+                return Error.ParsingFailed;
+            }
+
+            fn short(parser: *TaskArgumentParser, a: *std.heap.ArenaAllocator, name: u8) Error!*ir.Argument {
+                if (parser.short_alias.get(name)) |arg_idx| {
+                    return parser.args.items[arg_idx];
+                }
+                try parser.printer.printStyled(
+                    a.allocator(),
+                    style.err,
+                    "unknown argument '-{c}'\n",
+                    .{name},
+                );
+                return Error.ParsingFailed;
+            }
+        };
+
+        var positional_idx: usize = 0;
         var positional_end = false;
 
-        while (reader.read()) |tok| : (idx += 1) {
+        while (reader.read()) |tok| {
+            lib.debug.dump(tok, 4);
             switch (tok.type) {
                 .value => {
                     if (positional_end) {
@@ -478,8 +546,10 @@ const TaskArgumentParser = struct {
                         return Error.ParsingFailed;
                     }
 
-                    // get argument
-                    const arg = self.args.items[idx];
+                    const arg = self.args.items[positional_idx];
+                    positional_idx += 1;
+
+                    lib.debug.dump(arg.*, 4);
 
                     //TODO: consider named-positional allowed
                     // removing this condition almost make it work
@@ -494,15 +564,6 @@ const TaskArgumentParser = struct {
                         );
                         return Error.ParsingFailed;
                     }
-
-                    const NumberHandler = struct {
-                        fn handle(str: []const u8, int: bool) ArgsReader.Error!Value {
-                            return if (int)
-                                .{ .number = @floatFromInt(try ArgsReader.parseAs(str, i64)) }
-                            else
-                                .{ .number = try ArgsReader.parseAs(str, f64) };
-                        }
-                    };
 
                     const value: Value = switch (arg.type) {
                         .number => NumberHandler.handle(tok.payload, arg.int) catch |err| return switch (err) {
@@ -525,135 +586,33 @@ const TaskArgumentParser = struct {
                 },
                 .long => {
                     positional_end = true;
-                    defer idx += 1;
 
-                    const arg = blk: {
-                        if (self.long_alias.get(tok.payload)) |arg_idx| {
-                            break :blk self.args.items[arg_idx];
-                        } else {
-                            try self.printer.printStyled(
-                                arena.allocator(),
-                                style.err,
-                                "unknown argument '--{s}'\n",
-                                .{tok.payload},
-                            );
-                            return Error.ParsingFailed;
-                        }
-                    };
-                    //TODO: add way to receive actual token from collector,
-
-                    CollectorAdapter.collect(arena.allocator(), &collector, &reader, arg) catch |err| return switch (err) {
-                        error.InvalidType => {
-                            try self.printer.printStyled(
-                                arena.allocator(),
-                                style.err,
-                                "invalid '{s}' value type, got '{s}' expected '{f}'\n",
-                                .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) },
-                            );
-                            return Error.ParsingFailed;
-                        },
-                        error.UnexpectedEnd => {
-                            try self.printer.printStyled(
-                                arena.allocator(),
-                                style.err,
-                                "unexpected end, '{s}' requires '{f}' value\n",
-                                .{ arg.name, PrintableArgType.make(arg) },
-                            );
-                            return Error.ParsingFailed;
-                        },
-                        else => unreachable,
-                    };
+                    const arg = try AliasLookup.long(self, arena, tok.payload);
+                    try NamedCollector.collect(self, arena, &collector, &reader, arg);
                 },
                 .short => {
                     positional_end = true;
-                    defer idx += 1;
 
                     const flags = tok.payload[0 .. tok.payload.len - 1];
                     const last = tok.payload[tok.payload.len - 1];
 
                     for (flags) |flag| {
-                        const arg = blk: {
-                            if (self.short_alias.get(flag)) |arg_idx| {
-                                break :blk self.args.items[arg_idx];
-                            } else {
-                                try self.printer.printStyled(
-                                    arena.allocator(),
-                                    style.err,
-                                    "unknown argument '-{c}'\n",
-                                    .{flag},
-                                );
-                                return Error.ParsingFailed;
-                            }
-                        };
+                        const arg = try AliasLookup.short(self, arena, flag);
 
                         if (arg.type != .flag) {
                             std.debug.panic("TODO: handle invalid short flag pos", .{});
                         }
 
-                        CollectorAdapter.collect(arena.allocator(), &collector, &reader, arg) catch |err| return switch (err) {
-                            error.InvalidType => {
-                                try self.printer.printStyled(
-                                    arena.allocator(),
-                                    style.err,
-                                    "invalid '{s}' value type, got '{s}' expected '{f}'\n",
-                                    .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) },
-                                );
-                                return Error.ParsingFailed;
-                            },
-                            error.UnexpectedEnd => {
-                                try self.printer.printStyled(
-                                    arena.allocator(),
-                                    style.err,
-                                    "unexpected end, '{s}' requires '{f}' value\n",
-                                    .{ arg.name, PrintableArgType.make(arg) },
-                                );
-                                return Error.ParsingFailed;
-                            },
-                            else => unreachable,
-                        };
+                        try NamedCollector.collect(self, arena, &collector, &reader, arg);
                     }
 
-                    const arg = blk: {
-                        if (self.short_alias.get(last)) |arg_idx| {
-                            break :blk self.args.items[arg_idx];
-                        } else {
-                            try self.printer.printStyled(
-                                arena.allocator(),
-                                style.err,
-                                "unknown argument '-{c}'\n",
-                                .{last},
-                            );
-                            return Error.ParsingFailed;
-                        }
-                    };
-
-                    CollectorAdapter.collect(arena.allocator(), &collector, &reader, arg) catch |err| return switch (err) {
-                        error.InvalidType => {
-                            try self.printer.printStyled(
-                                arena.allocator(),
-                                style.err,
-                                "invalid '{s}' value type, got '{s}' expected '{f}'\n",
-                                .{ arg.name, reader.args[reader.pos - 1], PrintableArgType.make(arg) },
-                            );
-                            return Error.ParsingFailed;
-                        },
-                        error.UnexpectedEnd => {
-                            try self.printer.printStyled(
-                                arena.allocator(),
-                                style.err,
-                                "unexpected end, '{s}' requires '{f}' value\n",
-                                .{ arg.name, PrintableArgType.make(arg) },
-                            );
-                            return Error.ParsingFailed;
-                        },
-                        else => unreachable,
-                    };
+                    const arg = try AliasLookup.short(self, arena, last);
+                    try NamedCollector.collect(self, arena, &collector, &reader, arg);
                 },
             }
         }
 
-        // translate to Value
-
+        // translate collected named-argument payloads into Values
         var values = try collector.collect(arena.allocator());
 
         const ArgPayloadConverter = struct {
@@ -666,49 +625,32 @@ const TaskArgumentParser = struct {
                         for (v, items) |src, *desc| {
                             desc.* = .{ .number = @floatFromInt(src) };
                         }
-
-                        return .{
-                            .list = .{
-                                .items = items,
-                                .items_type = &.number,
-                            },
-                        };
+                        return .{ .list = .{ .items = items, .items_type = &.number } };
                     },
                     .number => |v| .{ .number = v },
                     .list_number => |v| {
                         const items = try a.alloc(Value, v.len);
-
                         for (v, items) |src, *dest| {
                             dest.* = .{ .number = src };
                         }
-
-                        return .{
-                            .list = .{
-                                .items = items,
-                                .items_type = &.number,
-                            },
-                        };
+                        return .{ .list = .{ .items = items, .items_type = &.number } };
                     },
                     .string => |v| .{ .string = v },
                     .list_string => |v| {
                         const items = try a.alloc(Value, v.len);
-
                         for (v, items) |src, *dest| {
                             dest.* = .{ .string = src };
                         }
-
-                        return .{
-                            .list = .{
-                                .items = items,
-                                .items_type = &.string,
-                            },
-                        };
+                        return .{ .list = .{ .items = items, .items_type = &.string } };
                     },
                 };
             }
         };
 
         for (self.args.items) |arg| {
+            // already resolved directly while parsing (positional argument)
+            if (out.contains(arg.name)) continue;
+
             const value = if (values.get(arg.name)) |value|
                 try ArgPayloadConverter.convert(arena.allocator(), value)
             else if (arg.default) |def|
@@ -726,7 +668,6 @@ const TaskArgumentParser = struct {
         }
 
         // validate if everything provided
-
         var missing_argument: bool = false;
 
         if (self.task.group) |group| {
@@ -757,6 +698,8 @@ const TaskArgumentParser = struct {
 
         if (missing_argument)
             return Error.ParsingFailed;
+
+        lib.debug.dump(out, 4);
 
         return out.move();
     }
