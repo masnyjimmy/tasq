@@ -39,7 +39,7 @@ pub const TokenModifier = enum(u32) {
         return std.meta.fieldNames(@This());
     }
 
-    fn modsToInt(comptime mods: []const TokenModifier) u32 {
+    fn modsToInt(mods: []const TokenModifier) u32 {
         var out: u32 = 0;
 
         for (mods) |mod| {
@@ -55,7 +55,7 @@ const RawToken = struct {
     ttype: u32,
     mods: u32 = 0,
 
-    pub fn make(span: Span, ttype: TokenType, comptime mods: []const TokenModifier) RawToken {
+    pub fn make(span: Span, ttype: TokenType, mods: []const TokenModifier) RawToken {
         return .{
             .start = span.start,
             .end = span.end(),
@@ -131,7 +131,7 @@ pub const Collector = struct {
         };
     }
 
-    fn add(self: *Collector, span: Span, ttype: TokenType, comptime mods: ?[]const TokenModifier) Error!void {
+    fn add(self: *Collector, span: Span, ttype: TokenType, mods: ?[]const TokenModifier) Error!void {
         try self.tokens.append(self.allocator, .make(span, ttype, mods orelse &.{}));
     }
 
