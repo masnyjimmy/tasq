@@ -32,3 +32,5 @@ pub const Diagnostics = @import("Diagnostics.zig");
 pub const Span = @import("span.zig");
 
 pub const Workspace = @import("Workspace.zig");
+
+pub const attributes = @import("attributes.zig");
