@@ -147,12 +147,22 @@ pub const Collector = struct {
             try self.walkDecl(decl);
         }
 
+        for (file.options) |*opt| {
+            try self.walkSet(opt);
+        }
+
         for (file.groups) |*group| {
             try self.walkGroup(group);
         }
 
         for (file.tasks) |*task| {
             try self.walkTask(task);
+        }
+    }
+
+    fn walkSet(self: *Collector, set: *const ast.Set) Error!void {
+        for (set.attrs) |*attr| {
+            try self.walkAttribute(attr);
         }
     }
 
