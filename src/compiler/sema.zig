@@ -456,35 +456,33 @@ pub const Sema = struct {
 
             // TODO: verify if unicode char, (if meta value will hold other)
             const short = blk: {
-                if (attributes.getAssertOne(.short)) |attr| if (attr) |value| {
-                    break :blk switch (value) {
-                        .char => |ch| ch,
-                        .null => null,
-                        else => unreachable,
-                    };
+                const default_value = arg.name[0];
+
+                const attr = attributes.getAssertOne(.short) orelse
+                    break :blk if (implicit_names) default_value else null;
+
+                const value = attr orelse break :blk default_value;
+
+                break :blk switch (value) {
+                    .char => |ch| ch,
+                    .null => null,
+                    else => unreachable,
                 };
-
-                if (implicit_names) {
-                    break :blk arg.name[0];
-                }
-
-                break :blk null;
             };
 
             const long = blk: {
-                if (attributes.getAssertOne(.long)) |attr| if (attr) |value| {
-                    break :blk switch (value) {
-                        .string => |str| str,
-                        .null => null,
-                        else => unreachable,
-                    };
+                const default_value = arg.name;
+
+                const attr = attributes.getAssertOne(.long) orelse
+                    break :blk if (implicit_names) default_value else null;
+
+                const value = attr orelse break :blk default_value;
+
+                break :blk switch (value) {
+                    .string => |str| str,
+                    .null => null,
+                    else => unreachable,
                 };
-
-                if (implicit_names) {
-                    break :blk arg.name;
-                }
-
-                break :blk null;
             };
 
             const desc = if (attributes.getAssertOne(.desc)) |value|
