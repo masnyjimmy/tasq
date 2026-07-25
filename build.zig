@@ -49,7 +49,7 @@ pub fn build(b: *std.Build) void {
     lsp_mod.addImport("compiler", compiler_mod);
 
     const cli_mod = b.createModule(.{
-        .root_source_file = b.path("src/cli//root.zig"),
+        .root_source_file = b.path("src/cli/root.zig"),
         .target = target,
         .optimize = optimize,
     });
