@@ -19,6 +19,7 @@ pub const TokenType = enum(u32) {
     type,
     macro,
     decorator,
+    namespace,
 
     pub fn getNames() []const []const u8 {
         return std.meta.fieldNames(@This());
@@ -31,9 +32,10 @@ pub const TokenModifier = enum(u32) {
     default_library = 1 << 2,
 
     attr_platform = 1 << 3,
-    attr_doc = 1 << 4,
-    attr_modifier = 1 << 5,
-    attr_validation = 1 << 6,
+    attr_current_platform = 1 << 4,
+    attr_doc = 1 << 5,
+    attr_modifier = 1 << 6,
+    attr_validation = 1 << 7,
 
     pub fn getNames() []const []const u8 {
         return std.meta.fieldNames(@This());
@@ -72,6 +74,11 @@ fn lessThan(_: void, l: RawToken, r: RawToken) bool {
 pub fn sortTokens(tokens: []RawToken) !void {
     std.mem.sortUnstable(RawToken, tokens, {}, lessThan);
 }
+
+const CURRENT_PLATFORM_ATTRIBUTE_ID = blk: {
+    const attr_def = compiler.attributes.definitions.get(@tagName(compiler.platform.tag), null).?;
+    break :blk attr_def.type;
+};
 
 pub const Collector = struct {
     allocator: std.mem.Allocator,
@@ -260,7 +267,11 @@ pub const Collector = struct {
         const attr_def = compiler.attributes.definitions.get(attr.name, null) orelse return;
 
         const mod: TokenModifier = blk: {
-            switch (attr_def.kind) {
+            break :blk switch (attr_def.kind) {
+                .platform => if (attr_def.type == CURRENT_PLATFORM_ATTRIBUTE_ID)
+                    TokenModifier.attr_current_platform
+                else
+                    TokenModifier.attr_platform,
                 inline else => |tag| {
                     const name = "attr_" ++ @tagName(tag);
                     const ti = @typeInfo(TokenModifier).@"enum";
@@ -269,7 +280,7 @@ pub const Collector = struct {
                             break :blk @enumFromInt(f.value);
                     } else unreachable;
                 },
-            }
+            };
         };
 
         try self.add(span_node.details.attribute.name, .decorator, &.{mod});
