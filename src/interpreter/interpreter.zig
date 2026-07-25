@@ -81,7 +81,7 @@ fn main(self: *Interpreter, stmt: *const ir.Statement) !void {
 
             try self.handleProcess(process);
         },
-        .if_stmt => |if_stmt| {
+        .if_stmt => |*if_stmt| {
             const cond = try self.resolveExpr(scope, &if_stmt.cond);
 
             if (cond.bool) {
