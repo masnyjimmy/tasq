@@ -362,7 +362,17 @@ pub const Parser = struct {
             }
         }
 
-        _ = try self.expect(.rbracket);
+        _ = self.expect(.rbracket) catch |err| switch (err) {
+            ParseError.UnexpectedToken => {
+                switch (try self.synchronizeTo(&.{.rbracket})) {
+                    .rbracket => {
+                        _ = try self.advance();
+                    },
+                    else => {},
+                }
+            },
+            else => return err,
+        };
 
         return attrs.toOwnedSlice(self.arena.allocator());
     }
