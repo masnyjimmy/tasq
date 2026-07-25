@@ -833,8 +833,7 @@ pub const Sema = struct {
     fn analyseStatements(self: *Sema, scope: *Scope, stmts: []ast.Statement, block_id: NodeId) ![]ir.Statement {
         var out = try std.ArrayList(ir.Statement).initCapacity(self.arena.allocator(), stmts.len);
 
-        const stmts_id = self.span_registry.get(block_id).details.wrap;
-        const block_spans = self.span_registry.get(stmts_id).details.block;
+        const block_spans = self.span_registry.get(block_id).details.block;
 
         for (stmts, block_spans.stmts) |stmt, stmt_id| {
             const result = self.analyseStatement(scope, stmt, stmt_id) catch |err| switch (err) {
