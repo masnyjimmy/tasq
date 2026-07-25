@@ -206,17 +206,20 @@ fn Attributes(comptime specs: []const Spec) type {
             }
         };
 
-        pub fn get(name: []const u8, target: Target) ?Definition {
+        pub fn get(name: []const u8, target: ?Target) ?Definition {
             const def = blk: {
                 const @"type" = name_map.get(name) orelse return null;
                 break :blk defs[@intFromEnum(@"type")];
             };
 
             // validate
-            for (def.valid_for) |vf| {
-                if (target.validate(&vf)) break;
-            } else {
-                return null;
+
+            if (target) |t| {
+                for (def.valid_for) |vf| {
+                    if (t.validate(&vf)) break;
+                } else {
+                    return null;
+                }
             }
 
             return def;
