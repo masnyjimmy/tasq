@@ -171,7 +171,7 @@ pub const Collector = struct {
         const group_span_node = span_node.details.group;
 
         if (group_span_node.name) |span| {
-            try self.add(span, .variable, null);
+            try self.add(span, .namespace, null);
         }
 
         for (group.args) |*arg| {
