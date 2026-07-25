@@ -257,7 +257,22 @@ pub const Collector = struct {
     fn walkAttribute(self: *Collector, attr: *const ast.Attribute) Error!void {
         const span_node = self.span_registry.get(attr.id);
 
-        try self.add(span_node.details.attribute.name, .variable, null);
+        const attr_def = compiler.attributes.definitions.get(attr.name, null) orelse return;
+
+        const mod: TokenModifier = blk: {
+            switch (attr_def.kind) {
+                inline else => |tag| {
+                    const name = "attr_" ++ @tagName(tag);
+                    const ti = @typeInfo(TokenModifier).@"enum";
+                    inline for (ti.fields) |f| {
+                        if (std.mem.eql(u8, f.name, name))
+                            break :blk @enumFromInt(f.value);
+                    } else unreachable;
+                },
+            }
+        };
+
+        try self.add(span_node.details.attribute.name, .decorator, &.{mod});
 
         if (attr.value) |_| {
             //TODO: implement
