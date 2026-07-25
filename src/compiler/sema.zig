@@ -51,7 +51,7 @@ pub const Sema = struct {
         return ptr;
     }
 
-    fn firstPass(self: *Sema, file: ast.File) !ir.File {
+    fn firstPass(self: *Sema, file: *const ast.File) !ir.File {
 
         // create scope
         const root_scope = try self.createScope(null);
@@ -62,7 +62,7 @@ pub const Sema = struct {
         for (file.decls) |decl| try decls.append(self.arena.allocator(), try self.analyseDecl(root_scope, decl));
 
         var tasks = try std.ArrayList(*ir.Task).initCapacity(self.arena.allocator(), file.tasks.len);
-        for (file.tasks) |task| {
+        for (file.tasks) |*task| {
             const task_span = self.span_registry.getSpan(task.id);
             const ptr = self.collectTaskSignature(root_scope, task) catch |err| switch (err) {
                 SemaError.PlatformMismatch => {
@@ -84,7 +84,7 @@ pub const Sema = struct {
         }
 
         var groups = try std.ArrayList(*ir.Group).initCapacity(self.arena.allocator(), file.groups.len);
-        for (file.groups) |group| {
+        for (file.groups) |*group| {
             const group_span = self.span_registry.getSpan(group.id);
             const ptr = self.collectGroupSignature(root_scope, group) catch |err| switch (err) {
                 SemaError.PlatformMismatch => {
@@ -117,22 +117,24 @@ pub const Sema = struct {
         };
     }
 
-    fn secondPass(self: *Sema, outFile: *ir.File, inFile: ast.File) !void {
-        for (outFile.tasks, inFile.tasks) |out, in| {
-            try self.analyseTaskBody(out, in);
+    fn secondPass(self: *Sema, file: *ir.File) !void {
+        // some tasks / body maybe be skipped from ir beacuse of platform attributes
+
+        for (file.tasks) |task| {
+            try self.analyseTaskBody(task, task.ast_ref.*);
         }
 
-        for (outFile.groups, inFile.groups) |outGroup, inGroup| {
-            for (outGroup.tasks, inGroup.tasks) |out, in| {
-                try self.analyseTaskBody(out, in);
+        for (file.groups) |group| {
+            for (group.tasks) |task| {
+                try self.analyseTaskBody(task, task.ast_ref.*);
             }
         }
     }
-
+    //TODO: consider taking ast_file as ptr
     pub fn analyse(self: *Sema, ast_file: ast.File) !ir.File {
-        var file = try self.firstPass(ast_file);
+        var file = try self.firstPass(&ast_file);
 
-        try self.secondPass(&file, ast_file);
+        try self.secondPass(&file);
 
         return file;
     }
@@ -729,7 +731,7 @@ pub const Sema = struct {
         };
     }
 
-    fn collectGroupSignature(self: *Sema, scope: *Scope, group: ast.Group) !*ir.Group {
+    fn collectGroupSignature(self: *Sema, scope: *Scope, group: *const ast.Group) !*ir.Group {
         const groupScope = try self.createScope(scope);
 
         const args = try self.analyseArgs(groupScope, group.args, true);
@@ -740,18 +742,18 @@ pub const Sema = struct {
         const ptr = try self.arena.allocator().create(ir.Group);
 
         ptr.* = .{
-            .scope = groupScope,
             .name = group.name,
             .args = args,
             .decls = try decls.toOwnedSlice(self.arena.allocator()),
             .tasks = undefined, // yet
+            .scope = groupScope,
             .desc = "<not supported yet>", // TODO: add support
         };
 
         const tasks_target_scope = if (group.name) |_| groupScope else scope;
 
         var tasks = try std.ArrayList(*ir.Task).initCapacity(self.arena.allocator(), group.tasks.len);
-        for (group.tasks) |task| {
+        for (group.tasks) |*task| {
             const task_span = self.span_registry.getSpan(task.id);
 
             const task_ptr = self.collectTaskSignature(groupScope, task) catch |err| switch (err) {
@@ -792,7 +794,7 @@ pub const Sema = struct {
         target.body.statements = try self.analyseStatements(target.body.scope, task.body, node.details.task.body);
     }
 
-    fn collectTaskSignature(self: *Sema, scope: *Scope, task: ast.Task) !*ir.Task {
+    fn collectTaskSignature(self: *Sema, scope: *Scope, task: *const ast.Task) !*ir.Task {
         var attributes = try AttributesResolver.resolve(self, .task, task.attrs);
         defer attributes.deinit(self.arena.allocator());
 
@@ -809,6 +811,7 @@ pub const Sema = struct {
         const ptr = try self.arena.allocator().create(ir.Task);
 
         ptr.* = .{
+            .ast_ref = task,
             .name = task.name,
             .args = args,
             .private = is_private,

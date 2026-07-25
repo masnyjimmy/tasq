@@ -99,6 +99,7 @@ pub const Group = struct {
 const ResolvedTaskAttributes = std.EnumMap(attrib.TaskAttributeType, attrib.TaskAttributeValue);
 
 pub const Task = struct {
+    ast_ref: *const ast.Task,
     name: []const u8,
     args: []*Argument,
     private: bool,
