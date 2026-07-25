@@ -533,7 +533,6 @@ const TaskArgumentParser = struct {
         var positional_end = false;
 
         while (reader.read()) |tok| {
-            lib.debug.dump(tok, 4);
             switch (tok.type) {
                 .value => {
                     if (positional_end) {
@@ -548,8 +547,6 @@ const TaskArgumentParser = struct {
 
                     const arg = self.args.items[positional_idx];
                     positional_idx += 1;
-
-                    lib.debug.dump(arg.*, 4);
 
                     //TODO: consider named-positional allowed
                     // removing this condition almost make it work
@@ -698,8 +695,6 @@ const TaskArgumentParser = struct {
 
         if (missing_argument)
             return Error.ParsingFailed;
-
-        lib.debug.dump(out, 4);
 
         return out.move();
     }
