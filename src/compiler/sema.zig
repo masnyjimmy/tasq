@@ -146,7 +146,6 @@ pub const Sema = struct {
 
         while (iter.next()) |opt| switch (opt.value.*) {
             .shell => |shell| out.shell = shell,
-            .script => |script| out.script = script,
         };
 
         return out;
@@ -157,7 +156,6 @@ pub const Sema = struct {
 
         const OptionValue = union(options.Type) {
             shell: []const []const u8,
-            script: []const []const u8,
         };
 
         const Storage = std.EnumMap(options.Type, OptionValue);
@@ -242,7 +240,7 @@ pub const Sema = struct {
 
         fn getOptionValue(self: *OptionResolver, id: options.Type, value: ast.MetaValue) !OptionValue {
             switch (id) {
-                inline .shell, .script => |tag| {
+                inline .shell => |tag| {
                     var out: std.ArrayList([]const u8) = try .initCapacity(
                         self.sema.arena.allocator(),
                         value.list.len,
