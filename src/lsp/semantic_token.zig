@@ -187,8 +187,7 @@ pub const Collector = struct {
             try self.walkAttribute(attr);
         }
 
-        const stmts_span_node_id = self.span_registry.get(span_node.details.task.body).details.wrap;
-        const stmts_spans = self.span_registry.get(stmts_span_node_id).details.block;
+        const stmts_spans = self.span_registry.get(span_node.details.task.body).details.block;
 
         for (task.body, stmts_spans.stmts) |*stmt, stmt_node_id| {
             try self.walkStatement(stmt, stmt_node_id);
