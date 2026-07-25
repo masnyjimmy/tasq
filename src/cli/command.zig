@@ -80,6 +80,7 @@ fn Dump(ctx: *const Context) !void {
 
     const comp = @import("compiler");
     var span_registry = comp.Span.Registry.init(ctx.app.allocator);
+    defer span_registry.deinit();
 
     var lexer = comp.Lexer.init(source, &span_registry);
     var diagnostics: comp.Diagnostics = .init(arena.allocator());
