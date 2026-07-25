@@ -10,6 +10,7 @@ const enums = lib.enums;
 pub const Tag = enum {
     windows,
     linux,
+    ios,
 };
 
 pub const tag = enums.castEnum(builtin.os.tag, Tag) orelse @compileError("unsupported platform");
