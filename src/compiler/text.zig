@@ -46,11 +46,22 @@ const LiteralParser = struct {
             '\\' => return try self.readEscapeCodepoint(),
 
             else => {
-                // For now this treats one byte as one character.
-                // If you later want full UTF-8 raw char support, decode UTF-8 here.
-                const ch = self.input[self.pos];
-                self.pos += 1;
-                return @as(u21, ch);
+                const first = self.input[self.pos];
+                const len = std.unicode.utf8ByteSequenceLength(first) catch return error.InvalidStringFormat;
+                if (self.pos + len > self.input.len) return error.InvalidStringFormat;
+
+                const bytes = self.input[self.pos .. self.pos + len];
+
+                const cp: u21 = switch (len) {
+                    1 => bytes[0],
+                    2 => std.unicode.utf8Decode2(bytes[0..2].*) catch return error.InvalidStringFormat,
+                    3 => std.unicode.utf8Decode3(bytes[0..3].*) catch return error.InvalidStringFormat,
+                    4 => std.unicode.utf8Decode4(bytes[0..4].*) catch return error.InvalidStringFormat,
+                    else => return error.InvalidStringFormat,
+                };
+
+                self.pos += len;
+                return cp;
             },
         }
     }
