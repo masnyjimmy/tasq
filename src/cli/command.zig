@@ -62,14 +62,36 @@ fn RunLsp(ctx: *const Context) !void {
 }
 
 fn Dump(ctx: *const Context) !void {
-    const map = comptime lib.enums.generateEnumNameMap(enum { ast, ir });
+    const Target = enum {
+        source,
+        tree,
+        ir,
+
+        const string = blk: {
+            var out: []const u8 = "";
+
+            const ti = @typeInfo(@This()).@"enum";
+            const last = ti.fields.len - 1;
+
+            for (ti.fields, 0..) |f, idx| {
+                out = out ++ f.name;
+
+                if (idx != last)
+                    out = out ++ ", ";
+            }
+
+            break :blk out;
+        };
+
+        const map = lib.enums.generateEnumNameMap(@This());
+    };
 
     switch (ctx.args.len) {
         1 => {},
-        else => return ctx.fail("Invalid arguments, required [ast, ir]", .{}),
+        else => return ctx.fail("Invalid arguments, required [{s}]", .{Target.string}),
     }
 
-    const target = map.get(ctx.args[0]) orelse return ctx.fail("Invalid arguments, required [ast, ir]", .{});
+    const target = Target.map.get(ctx.args[0]) orelse return ctx.fail("Invalid arguments, required [{s}]", .{Target.string});
 
     const cwd = std.Io.Dir.cwd();
 
@@ -77,6 +99,11 @@ fn Dump(ctx: *const Context) !void {
     defer arena.deinit();
 
     const source = try cwd.readFileAlloc(ctx.app.io, ctx.app.source_file_path, arena.allocator(), .unlimited);
+
+    if (target == .source) {
+        try ctx.app.printer.print(arena.allocator(), "{s}", .{source});
+        return;
+    }
 
     const comp = @import("compiler");
     var span_registry = comp.Span.Registry.init(ctx.app.allocator);
@@ -94,7 +121,7 @@ fn Dump(ctx: *const Context) !void {
 
     const ast = try parser.parseFile();
 
-    if (target == .ast) {
+    if (target == .tree) {
         lib.debug.dump(ast, 4);
         return;
     }
