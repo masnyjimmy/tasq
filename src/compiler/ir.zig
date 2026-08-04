@@ -70,7 +70,6 @@ pub const File = struct {
 
 pub const Options = struct {
     shell: []const []const u8,
-    script: []const []const u8,
 };
 
 // pub const SetDecl = struct {
