@@ -432,7 +432,8 @@ pub const Sema = struct {
             const name_required = group or arg.type.isNamedOnly();
 
             // get default value,
-            const default: ?typing.Value = blk: {
+
+            const default: ?typing.Value, const implicit_default: bool = blk: {
                 if (arg.type == .flag) {
                     if (arg.default) |_| {
                         try self.diagnostics.err(
@@ -442,20 +443,26 @@ pub const Sema = struct {
                         );
                         return SemaError.SemanticError;
                     }
-                    break :blk .{ .bool = false };
+                    break :blk .{
+                        .{ .bool = false },
+                        true,
+                    };
                 }
 
                 if (arg.default) |def| {
                     const expr_node_id = span_node.details.argument.default.?;
 
-                    break :blk try self.assertLiteral(
-                        arg.type.typeOf(),
-                        def,
-                        expr_node_id,
-                    );
+                    break :blk .{
+                        try self.assertLiteral(
+                            arg.type.typeOf(),
+                            def,
+                            expr_node_id,
+                        ),
+                        false,
+                    };
                 }
 
-                break :blk null;
+                break :blk .{ null, false };
             };
 
             const implicit_names = default != null or name_required;
@@ -557,9 +564,9 @@ pub const Sema = struct {
                 has_name,
                 default != null,
             );
-
             // validate agains attributes
-            if (default) |def| {
+            if (default) |def| blk: {
+                if (implicit_default) break :blk; // FIX: implicit default does not have span and no specific attributes
                 const span = self.span_registry.getSpan(span_node.details.argument.default.?);
 
                 switch (def) {
@@ -1298,7 +1305,6 @@ pub const Sema = struct {
                     );
                     return SemaError.SemanticError;
                 };
-
                 const details: struct {
                     static: bool,
                     type: ir.Type,
