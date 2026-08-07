@@ -1,8 +1,9 @@
 .zig-cache
-.vscode
+.vscode/*
+!.vscode/launch.example.json
 zig-out
 zig-pkg
 .VSCodeCounter
-private
+private/
 tasq
 test
