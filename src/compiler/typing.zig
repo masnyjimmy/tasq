@@ -49,6 +49,33 @@ pub const Type = union(TypeTag) {
     }
 };
 
+pub const ValueContext = struct {
+    pub fn hash(_: @This(), value: Value) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hashValue(&hasher, value);
+        return hasher.final();
+    }
+
+    pub fn eql(_: @This(), a: Value, b: Value) bool {
+        return Value.eql(a, b);
+    }
+
+    fn hashValue(hasher: *std.hash.Wyhash, value: Value) void {
+        const tag = std.meta.activeTag(value);
+        hasher.update(@tagName(tag));
+        switch (value) {
+            .string => |s| hasher.update(s),
+            .char => |c| hasher.update(std.mem.asBytes(&c)),
+            .bool => |b| hasher.update(std.mem.asBytes(&b)),
+            .number => |n| {
+                std.debug.assert(n == 0 or std.math.isNormal(n));
+                hasher.update(std.mem.asBytes(&n));
+            },
+            .list => |l| for (l.items) |item| hashValue(hasher, item),
+        }
+    }
+};
+
 pub const Value = union(TypeTag) {
     pub const List = struct {
         items_type: *const Type,
@@ -111,6 +138,32 @@ pub const Value = union(TypeTag) {
                 try writer.writeAll("]");
             },
         }
+    }
+
+    pub fn eql(a: Value, b: Value) bool {
+        const t: TypeTag = blk: {
+            const a_tag = std.meta.activeTag(a);
+            const b_tag = std.meta.activeTag(b);
+
+            if (a_tag != b_tag)
+                return false;
+
+            break :blk a_tag;
+        };
+
+        return switch (t) {
+            .string => std.mem.eql(u8, a.string, b.string),
+            .char => a.char == b.char,
+            .number => a.number == b.number,
+            .bool => a.bool == b.bool,
+            .list => {
+                for (a.list.items, b.list.items) |l, r| {
+                    if (!eql(l, r))
+                        return false;
+                }
+                return true;
+            },
+        };
     }
 };
 

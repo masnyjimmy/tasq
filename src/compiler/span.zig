@@ -22,6 +22,8 @@ pub const Registry = struct {
         decl,
         block,
         if_stmt,
+        switch_stmt,
+        switch_case,
         task_call,
         task_call_arg,
         builtin_call,
@@ -44,7 +46,11 @@ pub const Registry = struct {
         decl: struct { name: Span, value: NodeId },
 
         block: struct { stmts: []const NodeId },
+
         if_stmt: struct { cond: NodeId, then: NodeId, else_: ?NodeId },
+
+        switch_stmt: struct { subject: NodeId },
+        switch_case: struct { pattern: NodeId, body: NodeId },
 
         task_call: struct { group: ?Span, task: Span, args: Span },
         task_call_arg: struct { name: ?Span, value: NodeId },

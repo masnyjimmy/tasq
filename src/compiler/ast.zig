@@ -85,7 +85,25 @@ pub const Statement = union(enum) {
     task_call: TaskCall, // build  or  go.build
     decl: Decl, // declaration
     if_stmt: IfStmt,
+    switch_stmt: SwitchStmt,
     // for_stmt: forStmt,
+};
+
+pub const SwitchStmt = struct {
+    pub const Pattern = union(enum) {
+        expr: Expr,
+        else_,
+    };
+
+    pub const Case = struct {
+        id: NodeId,
+        pattern: Pattern,
+        body: StatementBlock,
+    };
+
+    id: NodeId,
+    subject: Expr,
+    cases: []const Case,
 };
 
 // 'IF' DOESNT CREATE SCOPE

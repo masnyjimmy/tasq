@@ -25,6 +25,7 @@ const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "flag", .flag_type },
     .{ "number", .number_type },
     .{ "null", .null_kw },
+    .{ "switch", .switch_kw },
     // .{ "for", .for_kw },
 });
 
@@ -113,7 +114,12 @@ pub const Lexer = struct {
 
                 // Two-char symbols
                 '=' => {
-                    if (self.peekAt(1) == '=') return self.consumeTwo(.eq_eq);
+                    switch (self.peekAt(1)) {
+                        '=' => return self.consumeTwo(.eq_eq),
+                        '>' => return self.consumeTwo(.fat_arrow),
+                        else => {},
+                    }
+
                     return self.consumeChar(.eq);
                 },
                 '!' => {

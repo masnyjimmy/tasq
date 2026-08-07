@@ -92,6 +92,14 @@ fn main(self: *Interpreter, stmt: *const ir.Statement) !void {
                 try self.scope_stack.pushBlock(self.allocator, else_.scope);
             }
         },
+        .switch_stmt => |*switch_stmt| {
+            const target = try self.resolveExpr(scope, &switch_stmt.subject);
+
+            const block = switch_stmt.cases.getPtr(target) orelse &switch_stmt.else_case;
+
+            try self.call_stack.push(self.allocator, null, block);
+            try self.scope_stack.pushBlock(self.allocator, block.scope);
+        },
         else => {
             try self.printer.printStyled(self.allocator, .{ .bold = true, .fg = .bright_red }, "unsupported yet\n", .{});
         },

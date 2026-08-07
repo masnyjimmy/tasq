@@ -148,6 +148,20 @@ pub const Statement = union(enum) {
     process: ProcessStmt,
     task_call: TaskCall,
     if_stmt: IfStmt,
+    switch_stmt: SwitchStmt,
+};
+
+pub const SwitchStmt = struct {
+    pub const CasesStorage = std.hash_map.HashMapUnmanaged(
+        typing.Value,
+        StatementBlock,
+        typing.ValueContext,
+        60,
+    );
+
+    subject: Expr,
+    cases: CasesStorage,
+    else_case: StatementBlock,
 };
 
 pub const Decl = struct {

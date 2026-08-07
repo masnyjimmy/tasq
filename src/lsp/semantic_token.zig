@@ -217,6 +217,7 @@ pub const Collector = struct {
             .decl => |v| try self.walkDecl(&v),
             .task_call => |v| try self.walkTaskCall(&v),
             .if_stmt => |v| try self.walkIfStmt(&v),
+            .switch_stmt => unreachable,
         }
     }
     fn walkIfStmt(self: *Collector, if_stmt: *const ast.IfStmt) Error!void {

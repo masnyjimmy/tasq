@@ -849,7 +849,7 @@ pub const Sema = struct {
         };
     }
 
-    fn analyseStatements(self: *Sema, scope: *Scope, stmts: []ast.Statement, block_id: NodeId) ![]ir.Statement {
+    fn analyseStatements(self: *Sema, scope: *Scope, stmts: []ast.Statement, block_id: NodeId) SemaError![]ir.Statement {
         var out = try std.ArrayList(ir.Statement).initCapacity(self.arena.allocator(), stmts.len);
 
         const block_spans = self.span_registry.get(block_id).details.block;
@@ -868,16 +868,104 @@ pub const Sema = struct {
         return try out.toOwnedSlice(self.arena.allocator());
     }
 
-    fn analyseStatement(self: *Sema, scope: *Scope, stmt: ast.Statement, node_id: NodeId) !ir.Statement {
+    fn analyseStatement(self: *Sema, scope: *Scope, stmt: ast.Statement, node_id: NodeId) SemaError!ir.Statement {
         return switch (stmt) {
             .decl => |d| .{ .decl = try self.analyseDecl(scope, d) },
             .process => |p| .{ .process = try self.analyzeProcess(scope, p, node_id) },
             .task_call => |c| .{ .task_call = try self.analyseTaskCall(scope, c) },
             .if_stmt => |s| .{ .if_stmt = try self.analyseIfStmt(scope, s) },
+            .switch_stmt => |s| .{ .switch_stmt = try self.analyseSwitchStmt(scope, s) },
         };
     }
 
-    fn analyseTaskCall(self: *Sema, scope: *Scope, call: ast.TaskCall) !ir.TaskCall {
+    fn analyseSwitchStmt(self: *Sema, scope: *Scope, switch_stmt: ast.SwitchStmt) !ir.SwitchStmt {
+        const span_node = self.span_registry.get(switch_stmt.id).details.switch_stmt;
+
+        const subject = try self.analyseExpr(
+            scope,
+            switch_stmt.subject,
+            span_node.subject,
+        );
+
+        var cases: ir.SwitchStmt.CasesStorage = .empty;
+        try cases.ensureTotalCapacity(self.arena.allocator(), @intCast(switch_stmt.cases.len));
+
+        var else_case: ?ir.StatementBlock = null;
+
+        const Validator = struct {
+            fn validateNumber(number: f64) bool {
+                return number == 0 or std.math.isNormal(number);
+            }
+
+            fn validate(v: typing.Value) bool {
+                return switch (v) {
+                    .number => |n| validateNumber(n),
+                    .list => |l| for (l.items) |item| {
+                        if (validate(item) == false)
+                            return false;
+                    } else true,
+                    else => true,
+                };
+            }
+        };
+
+        for (switch_stmt.cases) |case| {
+            const case_node = self.span_registry.get(case.id).details.switch_case;
+            switch (case.pattern) {
+                .expr => |expr| {
+                    const pattern = try self.assertLiteral(
+                        subject.type,
+                        expr,
+                        case_node.pattern,
+                    );
+                    if (Validator.validate(pattern) == false) {
+                        try self.diagnostics.err(
+                            self.span_registry.getSpan(case_node.pattern),
+                            "incompatible case literal value: '{f}'",
+                            .{pattern},
+                        );
+                        continue;
+                    }
+                    if (cases.contains(pattern)) {
+                        try self.diagnostics.err(
+                            self.span_registry.getSpan(case_node.pattern),
+                            "duplicate pattern",
+                            .{},
+                        );
+                        continue;
+                    }
+                    try cases.put(
+                        self.arena.allocator(),
+                        pattern,
+                        try self.analyseStatementBlock(scope, case.body, case_node.body),
+                    );
+                },
+                .else_ => {
+                    if (else_case) |_| {
+                        try self.diagnostics.err(self.span_registry.getSpan(case.id), "Duplicate else case", .{});
+                        continue;
+                    }
+
+                    else_case = try self.analyseStatementBlock(
+                        scope,
+                        case.body,
+                        case_node.body,
+                    );
+                },
+            }
+        }
+
+        return .{
+            .subject = subject.expr,
+            .cases = cases,
+            .else_case = else_case orelse {
+                try self.diagnostics.err(self.span_registry.getSpan(switch_stmt.id), "Missing else case", .{});
+                return SemaError.SemanticError;
+            },
+        };
+    }
+
+    fn analyseTaskCall(self: *Sema, scope: *Scope, call: ast.TaskCall) SemaError!ir.TaskCall {
         const node = self.span_registry.get(call.id);
         const target_task_name = call.task;
 

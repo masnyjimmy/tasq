@@ -688,6 +688,76 @@ pub const Parser = struct {
                     },
                 });
             },
+            .switch_kw => {
+                const switch_kw = self.expect(.switch_kw) catch unreachable;
+
+                _ = try self.expect(.lparen);
+
+                const subject = try self.parseExpr();
+
+                _ = try self.expect(.rparen);
+
+                _ = try self.expect(.lbrace);
+
+                var cases: std.ArrayList(ast.SwitchStmt.Case) = try .initCapacity(self.arena.allocator(), 0);
+
+                while (try self.eat(.rbrace) == null) {
+                    const start = self.currentPos();
+
+                    const pattern: ast.SwitchStmt.Pattern, const pattern_span = blk: {
+                        if (try self.eat(.else_kw)) |kw| {
+                            const id = try self.span_registry.addNode(kw.span, .leaf);
+                            break :blk .{ .else_, id };
+                        }
+
+                        const expr = try self.parseExpr();
+                        break :blk .{ .{ .expr = expr.payload }, expr.id };
+                    };
+
+                    _ = try self.expect(.fat_arrow);
+
+                    const block = try self.parseStatementBlock(true);
+
+                    const id = try self.span_registry.addNode(
+                        self.spanFrom(start),
+                        .{ .switch_case = .{
+                            .pattern = pattern_span,
+                            .body = block.id,
+                        } },
+                    );
+
+                    try cases.append(
+                        self.arena.allocator(),
+                        .{
+                            .id = id,
+                            .pattern = pattern,
+                            .body = block.payload,
+                        },
+                    );
+
+                    if (try self.eat(.comma) == null) {
+                        _ = try self.expect(.rbrace);
+                        break;
+                    }
+                }
+
+                const id = try self.span_registry.addNode(
+                    self.spanFrom(switch_kw.span.start),
+                    .{
+                        .switch_stmt = .{
+                            .subject = subject.id,
+                        },
+                    },
+                );
+
+                return .wrap(id, .{
+                    .switch_stmt = .{
+                        .id = id,
+                        .subject = subject.payload,
+                        .cases = try cases.toOwnedSlice(self.arena.allocator()),
+                    },
+                });
+            },
             else => {
                 try self.addDiagnostic(.err, "expected statement, found '{s}'", .{@tagName(self.next.kind)});
                 return ParseError.UnexpectedToken;
@@ -695,6 +765,40 @@ pub const Parser = struct {
         }
     }
 
+    fn parseStatementBlock(self: *Parser, comptime allow_single: bool) ParseError!Wrapped(ast.StatementBlock) {
+        const start = self.currentPos();
+
+        const lbrace = if (allow_single)
+            try self.eat(.lbrace)
+        else
+            try self.expect(.lbrace);
+
+        var stmts: std.ArrayList(ast.Statement) = try .initCapacity(self.arena.allocator(), 0);
+        var spans_nodes = try self.span_registry.getArrayList(SpanId, 0);
+
+        if (lbrace) |_| {
+            while (try self.eat(.rbrace) == null) {
+                const stmt = try self.parseOneStatement();
+                try spans_nodes.append(stmt.id);
+                try stmts.append(self.arena.allocator(), stmt.payload);
+            }
+        } else {
+            const stmt = try self.parseOneStatement();
+            try spans_nodes.append(stmt.id);
+            try stmts.append(self.arena.allocator(), stmt.payload);
+        }
+
+        const id = try self.span_registry.addNode(
+            self.spanFrom(start),
+            .{
+                .block = .{
+                    .stmts = try spans_nodes.toOwnedSlice(),
+                },
+            },
+        );
+
+        return .wrap(id, try stmts.toOwnedSlice(self.arena.allocator()));
+    }
     fn parseTaskCallArgs(self: *Parser) ParseError![]ast.TaskCallArg {
         var args = try std.ArrayList(ast.TaskCallArg).initCapacity(self.arena.allocator(), 1);
 

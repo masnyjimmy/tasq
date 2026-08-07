@@ -22,6 +22,7 @@ pub const TokenKind = enum {
     or_kw,
     not_kw,
     for_kw,
+    switch_kw,
 
     // Type keywords
     string_type,
@@ -49,6 +50,7 @@ pub const TokenKind = enum {
     quote, // "
     backtick, // `,
     eq, // =
+    fat_arrow, // =>
     colon_eq, // :=
     plus, // +
     minus, // -
