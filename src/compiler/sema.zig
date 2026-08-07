@@ -717,9 +717,14 @@ pub const Sema = struct {
                 var out: std.ArrayList(typing.Value) = try .initCapacity(self.arena.allocator(), expr.list.len);
                 const spans = span_node.details.expr.list;
                 for (expr.list, spans) |v, item_node_id| {
+                    if (v.is_spread) {
+                        try self.diagnostics.err(span_node.span, "list spread is not literal", .{});
+                        return SemaError.SemanticError;
+                    }
+
                     const lit = self.assertLiteral(
                         items_type.*,
-                        v,
+                        v.expr.*,
                         item_node_id,
                     ) catch |err| {
                         try self.diagnostics.err(span_node.span, "invalid list items type", .{});
@@ -1246,41 +1251,102 @@ pub const Sema = struct {
             },
             .list => |list| {
                 std.debug.assert(list.len != 0);
-                var out = try std.ArrayList(ir.Expr).initCapacity(self.arena.allocator(), list.len);
+
+                const ItemsHelper = struct {
+                    const Result = struct {
+                        item: ir.Expr.List.Item,
+                        type: ir.Type,
+                        is_static: bool,
+                    };
+                    pub fn analyseItem(sema: *Sema, s: *Scope, n: NodeId, item: ast.Expr.ListItem) !Result {
+                        const result = try sema.analyseExpr(s, item.expr.*, n);
+
+                        if (item.is_spread and result.type != .list) {
+                            try sema.diagnostics.err(
+                                sema.span_registry.getSpan(n),
+                                "cannot spread value of type '{f}'; expected a list",
+                                .{result.type},
+                            );
+                            try sema.diagnostics.hint(
+                                sema.span_registry.getSpan(n),
+                                "remove '...' operator to put item",
+                                .{},
+                            );
+                            // pretend there was no spread operator to be able to continue
+                            const expr_ptr = try sema.arena.allocator().create(ir.Expr);
+                            expr_ptr.* = result.expr;
+                            return .{
+                                .item = .{
+                                    .expr = expr_ptr,
+                                    .is_spread = item.is_spread,
+                                },
+                                .type = result.type,
+                                .is_static = result.is_static,
+                            };
+                        }
+
+                        const expr_ptr = try sema.arena.allocator().create(ir.Expr);
+                        expr_ptr.* = result.expr;
+
+                        return .{
+                            .item = .{
+                                .expr = expr_ptr,
+                                .is_spread = item.is_spread,
+                            },
+                            .type = if (item.is_spread)
+                                result.type.list.*
+                            else
+                                result.type,
+                            .is_static = result.is_static,
+                        };
+                    }
+                };
+
+                var out = try std.ArrayList(ir.Expr.List.Item).initCapacity(self.arena.allocator(), list.len);
 
                 var list_spans = span_node.details.expr.list;
 
-                var is_static: bool = false;
+                var is_static: bool = true;
 
                 const list_type = try self.arena.allocator().create(typing.Type);
                 errdefer self.arena.allocator().destroy(list_type);
 
                 list_type.* = blk: {
-                    const first = try self.analyseExpr(scope, list[0], list_spans[0]);
-                    if (first.is_static) is_static = true;
-                    out.appendAssumeCapacity(first.expr);
+                    const first = try ItemsHelper.analyseItem(
+                        self,
+                        scope,
+                        node_id,
+                        list[0],
+                    );
+
+                    if (!first.is_static) is_static = false;
+
+                    try out.append(self.arena.allocator(), first.item);
+
                     break :blk first.type;
                 };
 
-                for (list[1..], list_spans[1..]) |i, item_span_id| {
-                    const curr = try self.analyseExpr(scope, i, item_span_id);
-                    if (list_type.eq(curr.type) == false) {
+                for (list[1..], list_spans[1..]) |item, item_span_id| {
+                    const result = try ItemsHelper.analyseItem(self, scope, node_id, item);
+
+                    if (!result.is_static) is_static = false;
+
+                    if (list_type.eq(result.type) == false) {
                         try self.diagnostics.err(
                             self.span_registry.getSpan(item_span_id),
-                            "All list elements must be of same type",
-                            .{},
+                            "Invalid item type. All list items must be same type, expected {f} got {f}",
+                            .{ list_type.*, result.type },
                         );
-                        return SemaError.SemanticError;
                     }
-                    if (curr.is_static) is_static = true;
-                    out.appendAssumeCapacity(curr.expr);
+
+                    try out.append(self.arena.allocator(), result.item);
                 }
 
                 return .{
                     .expr = .{
                         .list = .{
                             .items_type = list_type.*,
-                            .items = try out.toOwnedSlice(self.arena.allocator()),
+                            .items = out.items, // not using 'toOwnedSlice' as its allocated by arena and it will waste more memory
                         },
                     },
                     .type = .{ .list = list_type },

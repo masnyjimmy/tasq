@@ -43,6 +43,7 @@ pub const TokenKind = enum {
     colon, // :
     dcolon, // ::
     dot, // .
+    triple_dot, // ...
     comma, // ,
     apostrophe, // '
     quote, // "

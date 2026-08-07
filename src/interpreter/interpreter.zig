@@ -142,13 +142,19 @@ fn resolveExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Interpre
             var result: std.ArrayList(Value) = try .initCapacity(scope.arena.allocator(), list.items.len);
             errdefer result.deinit(scope.arena.allocator());
 
-            for (list.items) |item|
-                result.appendAssumeCapacity(try self.resolveExpr(scope, &item));
+            for (list.items) |item| {
+                if (item.is_spread) {
+                    const spread = try self.resolveExpr(scope, item.expr);
+                    try result.appendSlice(scope.arena.allocator(), spread.list.items);
+                } else {
+                    try result.append(scope.arena.allocator(), try self.resolveExpr(scope, item.expr));
+                }
+            }
 
             return .{
                 .list = .{
                     .items_type = &list.items_type,
-                    .items = result.toOwnedSliceAssert(),
+                    .items = try result.toOwnedSlice(scope.arena.allocator()),
                 },
             };
         },

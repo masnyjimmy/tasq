@@ -187,9 +187,13 @@ pub const IfStmt = struct {
 //========== expressions =============
 
 pub const Expr = union(enum) {
-    const List = struct {
+    pub const List = struct {
+        pub const Item = struct {
+            expr: *Expr,
+            is_spread: bool,
+        };
         items_type: Type,
-        items: []const Expr,
+        items: []const Item,
     };
 
     string: String,

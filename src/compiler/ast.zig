@@ -118,11 +118,16 @@ pub const TaskCallArg = struct {
 };
 
 pub const Expr = union(enum) {
+    pub const ListItem = struct {
+        expr: *Expr,
+        is_spread: bool,
+    };
+
     bool_lit: bool,
     number_lit: f64,
     char_lit: u21,
     string: StringExpr,
-    list: []const Expr,
+    list: []const ListItem,
     builtin_call: BuiltInCall,
     ident: []const u8,
     binary: *BinaryExpr,

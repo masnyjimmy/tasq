@@ -99,7 +99,13 @@ pub const Lexer = struct {
                 '\'' => return self.consumeChar(.apostrophe),
                 '"' => return self.consumeChar(.quote),
                 '`' => return self.consumeChar(.backtick),
-                '.' => return self.consumeChar(.dot),
+                '.' => {
+                    if (self.peekAt(1) == '.' and self.peekAt(2) == '.') {
+                        return self.consumeN(.triple_dot, 3);
+                    }
+
+                    return self.consumeChar(.dot);
+                },
                 '+' => return self.consumeChar(.plus),
                 '-' => return self.consumeChar(.minus),
                 '*' => return self.consumeChar(.star),
@@ -333,7 +339,7 @@ pub const Lexer = struct {
             .number => {
                 try self.span_registry.put(.number, span);
             },
-            .colon_eq, .eq_eq, .plus, .minus, .star, .slash, .bang_eq, .lt, .lt_eq, .gt, .gt_eq => {
+            .colon_eq, .eq_eq, .plus, .minus, .star, .slash, .bang_eq, .lt, .lt_eq, .gt, .gt_eq, .triple_dot => {
                 try self.span_registry.put(.operator, span);
             },
             else => {},

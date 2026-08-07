@@ -1100,16 +1100,31 @@ pub const Parser = struct {
                 const start = self.currentPos();
                 _ = self.expect(.lbracket) catch unreachable;
 
-                var items: std.ArrayList(ast.Expr) = .empty;
+                var items: std.ArrayList(ast.Expr.ListItem) = .empty;
                 errdefer items.deinit(self.arena.allocator());
 
                 var child_ids = try self.span_registry.getArrayList(SpanId, 2);
                 errdefer child_ids.deinit();
 
                 while (try self.eat(.rbracket) == null) {
+                    const spread = try self.eat(.triple_dot);
+
                     const wrapped = try self.parseExpr();
-                    try child_ids.append(wrapped.id);
-                    try items.append(self.arena.allocator(), wrapped.payload);
+
+                    const span_id = if (spread) |s|
+                        try self.span_registry.addNode(self.spanFrom(s.span.start), .{ .wrap = wrapped.id })
+                    else
+                        wrapped.id;
+
+                    try child_ids.append(span_id);
+
+                    const expr_ptr = try self.arena.allocator().create(ast.Expr);
+                    expr_ptr.* = wrapped.payload;
+
+                    try items.append(self.arena.allocator(), .{
+                        .expr = expr_ptr,
+                        .is_spread = spread != null,
+                    });
 
                     if (try self.eat(.comma) == null) {
                         _ = try self.expect(.rbracket);
