@@ -62,6 +62,8 @@ fn RunLsp(ctx: *const Context) !void {
 }
 
 fn Dump(ctx: *const Context) !void {
+    const compiler = @import("compiler");
+
     const Target = enum {
         source,
         tree,
@@ -94,46 +96,63 @@ fn Dump(ctx: *const Context) !void {
     const target = Target.map.get(ctx.args[0]) orelse return ctx.fail("Invalid arguments, required [{s}]", .{Target.string});
 
     const cwd = std.Io.Dir.cwd();
+    const source = try cwd.readFileAlloc(ctx.app.io, ctx.app.source_file_path, ctx.app.allocator, .unlimited);
+    defer ctx.app.allocator.free(source);
 
-    var arena = std.heap.ArenaAllocator.init(ctx.app.allocator);
-    defer arena.deinit();
+    var diagnostics: compiler.Diagnostics = .init(ctx.app.allocator);
+    defer diagnostics.deinit();
 
-    const source = try cwd.readFileAlloc(ctx.app.io, ctx.app.source_file_path, arena.allocator(), .unlimited);
+    const Dumper = struct {
+        fn dump(c: *const Context, d: *compiler.Diagnostics, t: Target, s: []const u8) !void {
+            var arena = std.heap.ArenaAllocator.init(c.app.allocator);
+            defer arena.deinit();
 
-    if (target == .source) {
-        try ctx.app.printer.print(arena.allocator(), "{s}", .{source});
-        return;
-    }
+            if (t == .source) {
+                try c.app.printer.print(arena.allocator(), "{s}", .{s});
+                return;
+            }
 
-    const comp = @import("compiler");
-    var span_registry = comp.Span.Registry.init(ctx.app.allocator);
-    defer span_registry.deinit();
+            var span_registry = compiler.Span.Registry.init(c.app.allocator);
+            defer span_registry.deinit();
 
-    var lexer = comp.Lexer.init(source, &span_registry);
-    var diagnostics: comp.Diagnostics = .init(arena.allocator());
+            var lexer = compiler.Lexer.init(s, &span_registry);
 
-    var parser = try comp.Parser.init(
-        &arena,
-        &lexer,
-        &span_registry,
+            var parser = try compiler.Parser.init(
+                &arena,
+                &lexer,
+                &span_registry,
+                d,
+            );
+
+            const ast = try parser.parseFile();
+
+            if (t == .tree) {
+                lib.debug.dump(ast, 4);
+                return;
+            }
+
+            var sema = compiler.Sema.init(
+                &arena,
+                &span_registry,
+                d,
+            );
+
+            const ir = try sema.analyse(ast);
+            lib.debug.dump(ir, 4);
+        }
+    };
+
+    try Dumper.dump(ctx, &diagnostics, target, source);
+
+    const dd = @import("dump_diagnostics.zig");
+
+    try dd.dump_diagnostics(
+        ctx.app.allocator,
+        source,
+        ctx.app.source_file_path,
         &diagnostics,
+        ctx.app.printer,
     );
-
-    const ast = try parser.parseFile();
-
-    if (target == .tree) {
-        lib.debug.dump(ast, 4);
-        return;
-    }
-
-    var sema = comp.Sema.init(
-        &arena,
-        &span_registry,
-        &diagnostics,
-    );
-
-    const ir = try sema.analyse(ast);
-    lib.debug.dump(ir, 4);
 }
 
 pub fn buildCommand(allocator: std.mem.Allocator) !*Command {
