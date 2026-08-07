@@ -133,7 +133,6 @@ fn Dump(ctx: *const Context) !void {
     );
 
     const ir = try sema.analyse(ast);
-
     lib.debug.dump(ir, 4);
 }
 

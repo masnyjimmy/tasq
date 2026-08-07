@@ -16,7 +16,7 @@ pub const Scope = struct {
     parent: ?*Scope,
     // kind: Kind,
     // symbols
-    symbols: std.ArrayList(Symbol) = .empty,
+    symbols: std.ArrayList(*Symbol) = .empty,
     // indexes
     variables: IndexesStorage = .empty,
     tasks: IndexesStorage = .empty,
@@ -32,11 +32,23 @@ pub const Scope = struct {
     }
 
     pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
+        self.variables.deinit(gpa);
+        self.tasks.deinit(gpa);
+        self.groups.deinit(gpa);
+
+        for (self.symbols.items) |item| {
+            gpa.free(item);
+        }
+
         self.symbols.deinit(gpa);
     }
 
     pub fn define(self: *Scope, gpa: std.mem.Allocator, symbol: Symbol) !void {
         const index = self.symbols.items.len;
+
+        const ptr = try gpa.create(Symbol);
+        errdefer gpa.destroy(ptr);
+        ptr.* = symbol;
 
         const symbol_type = symbol.typeOf();
 
@@ -55,7 +67,7 @@ pub const Scope = struct {
             },
         }
 
-        try self.symbols.append(gpa, symbol);
+        try self.symbols.append(gpa, ptr);
     }
 
     var one = false;
@@ -67,7 +79,7 @@ pub const Scope = struct {
         };
 
         return if (index) |i|
-            &self.symbols.items[i]
+            self.symbols.items[i]
         else
             null;
     }
