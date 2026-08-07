@@ -189,7 +189,7 @@ fn resolveExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Interpre
         },
         .unary => |unary| {
             const operand = try self.resolveExpr(scope, &unary.operand);
-            std.debug.assert(unary.operand == .bool_lit);
+            std.debug.assert(operand.typeOf() == .bool);
 
             switch (unary.op) {
                 .not_op => {
