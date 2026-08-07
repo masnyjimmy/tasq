@@ -1,0 +1,21 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceRoot}/zig-out/bin/tasq",
+            // Uncomment if tasks.json is present
+            // "preLaunchTask": "Build zig",
+            "args": [
+                "dump", "tree"
+            ],
+            "postRunCommands": [
+                "command script import ${workspaceFolder}/tools/lldb/pretty_printers.py",
+                "type category enable zig.lang zig.std zig"
+            ],
+            "cwd": "${workspaceRoot}"
+        }
+    ],
+}
