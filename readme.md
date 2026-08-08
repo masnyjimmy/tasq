@@ -16,15 +16,16 @@
    - [4.1 Operators](#41-operators)
    - [4.2 String Interpolation](#42-string-interpolation)
    - [4.3 If Expression](#43-if-expression)
-   - [4.4 Built-in Functions](#44-built-in-functions)
+   - [4.4 Switch Expression](#44-switch-expression)
+   - [4.5 Built-in Functions](#45-built-in-functions)
 5. [Settings](#5-settings)
 6. [Tasks](#6-tasks)
    - [6.1 Arguments](#61-arguments)
    - [6.2 Argument Ordering](#62-argument-ordering)
    - [6.3 Task Body](#63-task-body)
    - [6.4 Process Calls](#64-process-calls)
-   - [6.5 Script Tasks](#65-script-tasks)
-   - [6.6 Conditional Statements](#66-conditional-statements)
+   - [6.5 Conditional Statements](#65-conditional-statements)
+   - [6.6 Switch Statement](#66-switch-statement)
 7. [Task Calls](#7-task-calls)
 8. [Groups](#8-groups)
    - [8.1 Named Groups](#81-named-groups)
@@ -34,7 +35,6 @@
     - [10.1 Platform Attributes](#101-platform-attributes)
     - [10.2 Documentation Attributes](#102-documentation-attributes)
     - [10.3 Modifier Attributes](#103-modifier-attributes)
-    - [10.4 Script Attribute](#104-script-attribute)
 11. [Quick Reference](#11-quick-reference)
 12. [Planned Features](#12-planned-features)
 
@@ -53,8 +53,6 @@ At the root (top) level, a tasq file may contain the following elements, in any 
 | Task definitions | Executable units of work |
 | Group definitions | Containers that share arguments across tasks |
 
-**Rule:** Each setting may only be declared once across the entire file.
-
 ---
 
 ## 2. Type System
@@ -72,6 +70,7 @@ Runtime types are used for bindings and expressions evaluated at runtime.
 | `number` | Integer or floating-point value | `42`, `3.14` |
 | `string` | UTF-8 text value | `"hello"` |
 | `list[T]` | Homogeneous ordered collection of type `T` | `[1, 2, 3]`, `[[1,2],[3,4]]` |
+| `noreturn` | Special type given to a built-in function call that never produces a value (it always diverges — e.g. by aborting the program) | *(none — cannot be written as a literal)* |
 
 **Rules:**
 
@@ -79,6 +78,7 @@ Runtime types are used for bindings and expressions evaluated at runtime.
 - All binding types are **inferred** from the assigned expression. No explicit type annotation is written for bindings.
 - `list[T]` may be **nested** — `T` can itself be a list type (e.g. `list[list[number]]`). All elements must share the same type.
 - A `list[T]` literal must **not be empty** at a point where its element type cannot be determined from context, since `T` cannot be inferred from an empty literal.
+- `noreturn` can never be assigned to a binding directly and has no literal form. It only ever appears as the return type of certain built-in functions (see [§4.5](#45-built-in-functions)). When a `noreturn`-typed branch appears alongside other branches — in an `if` expression ([§4.3](#43-if-expression)) or `switch` expression ([§4.4](#44-switch-expression)) — it unifies with whatever type the other branches produce, since a diverging branch never actually yields a value to compare. If **every** branch is `noreturn`, the expression as a whole is `noreturn`.
 
 ### 2.2 Meta Types
 
@@ -138,6 +138,13 @@ name := <expression>
 - Within the same scope, binding names must be unique.
 - Inside a task body, arguments are treated as regular immutable bindings of their corresponding runtime type.
 
+**Evaluation order:**
+
+- Bindings declared in a **static context** (file root scope or group body) are evaluated **lazily** — only when first referenced, not necessarily in the order they're written.
+- Bindings declared inside a **task body** are evaluated **eagerly, in statement order**, like any other statement in the task.
+
+One practical consequence: a static binding whose expression would diverge (e.g. it calls `@error(...)`, see [§4.5](#45-built-in-functions)) only does so if something actually ends up referencing it. An unused static binding's expression is never evaluated.
+
 **Examples:**
 
 ```
@@ -172,7 +179,7 @@ Expressions produce a typed value. They are used in binding declarations, task c
 | Boolean | `and` `or` | `bool` | `bool` |
 | Boolean negation | `!` | `bool` | `bool` |
 | Unary minus | `-<expr>` | `number` | `number` |
-| List spread | `[list..., item, ...]` | list: `list[T]`, items: `T` | `list[T]` |
+| List spread | `[...list, item, ...]` | list: `list[T]`, items: `T` | `list[T]` |
 
 **Rules:**
 
@@ -183,7 +190,7 @@ Expressions produce a typed value. They are used in binding declarations, task c
 
 ```
 base  := [1, 2, 3]
-extra := [base..., 4, 5]  // [1, 2, 3, 4, 5]
+extra := [...base, 4, 5]  // [1, 2, 3, 4, 5]
 ```
 
 ### 4.2 String Interpolation
@@ -218,7 +225,7 @@ if (<condition>) <expression> else <expression>
 **Rules:**
 
 - The `else` branch is **required** when `if` is used as an expression.
-- Both branches must produce the same runtime type; the result type is inferred from them.
+- Both branches must produce the same runtime type; the result type is inferred from them — **unless** one of the branches has type `noreturn` (e.g. a call to `@error(...)`), in which case the result type is inferred from the other branch alone (see [§2.1](#21-runtime-types)).
 - `else if` chains are supported.
 
 **Examples:**
@@ -227,11 +234,44 @@ if (<condition>) <expression> else <expression>
 mode    := if (@os() == "windows") "win" else "unix"
 timeout := if (debug) 0 else 30
 label   := if (score > 90) "A" else if (score > 80) "B" else "C"
+target  := if (@exists("./config.toml")) "./config.toml" else @error("missing config.toml")
 ```
 
-> The `if` **statement** form (with block bodies for control flow inside a task) is described in [§6.6 Conditional Statements](#66-conditional-statements).
+> The `if` **statement** form (with block bodies for control flow inside a task) is described in [§6.5 Conditional Statements](#65-conditional-statements).
 
-### 4.4 Built-in Functions
+### 4.4 Switch Expression
+
+`switch` can be used as an expression that evaluates to a value, matching a subject against a series of patterns.
+
+```
+switch(<subject>) {
+    <pattern> => <expr>,
+    <pattern> => <expr>,
+    else => <expr>,
+}
+```
+
+**Rules:**
+
+- `<subject>` is evaluated once and compared against each `<pattern>` in declaration order using equality semantics.
+- The `else` branch is **required** when `switch` is used as an expression, since every possible subject value must produce a result.
+- Every branch's `<expr>` must produce the same runtime type — **except** branches with type `noreturn` (e.g. `@error(...)`), which unify with whatever type the other branches produce (see [§2.1](#21-runtime-types)). This is how a `switch` expression can use `@error(...)` in the `else` branch (or any branch) when there's no sensible fallback value.
+- If every branch, including `else`, has type `noreturn`, the whole `switch` expression has type `noreturn`.
+
+**Example:**
+
+```
+rgb := switch(color) {
+    "red"   => "#ff0000",
+    "green" => "#00ff00",
+    "blue"  => "#0000ff",
+    else    => @error("Invalid color"),
+}
+```
+
+> The `switch` **statement** form (with block bodies for control flow inside a task) is described in [§6.6 Switch Statement](#66-switch-statement).
+
+### 4.5 Built-in Functions
 
 Built-in functions are called with an `@` prefix and may appear inside any expression.
 
@@ -241,7 +281,8 @@ Built-in functions are called with an `@` prefix and may appear inside any expre
 | `@env(name: string, default: string)` | `string` | Returns the value of `name`, or `default` if it is not defined. |
 | `@exists(path: string)` | `bool` | Returns `true` if a file or directory exists at `path`. |
 | `@os()` | `string` | Returns the current platform: `"windows"`, `"linux"`, or `"macos"`. |
-| `@status_code()` | `number` | Returns the exit status code of the most recently executed process. Errors if no process has been run yet in the current task. |
+| `@status_code()` | `number` | Returns the exit status of the most recently executed process. Errors if no process has been run yet in the current task. |
+| `@error(message: string)` | `noreturn` | Immediately aborts execution and reports `message`. Never produces a value; see [§2.1 Runtime Types](#21-runtime-types) for how a `noreturn` branch unifies with other branches in `if`/`switch` expressions. |
 
 > Additional built-in functions will be added in future versions.
 
@@ -249,7 +290,7 @@ Built-in functions are called with an `@` prefix and may appear inside any expre
 
 ## 5. Settings
 
-Settings configure global interpreter behaviour. They are declared at **file root** and each setting may appear **at most once** across the entire file.
+Settings configure global interpreter behaviour. They are declared at **file root**, and **each setting may only be declared once across the entire file**.
 
 ### Syntax
 
@@ -282,13 +323,13 @@ A platform attribute may be applied to a setting declaration to restrict it to a
 
 ```
 [windows]
-set shell = ["cmd", "/C"]
+set script = ["cmd", "/C"]
 
 [linux]
-set shell = ["bash", "-c"]
+set script = ["bash", "-c"]
 
 [macos]
-set shell = ["zsh", "-c"]
+set script = ["zsh", "-c"]
 ```
 
 ### Available Settings
@@ -296,7 +337,6 @@ set shell = ["zsh", "-c"]
 | Setting | Meta Type | Description |
 |---------|-----------|-------------|
 | `script` | `list[string]` | Command and arguments used to invoke each backtick process call. Example: `["sh", "-c"]`. |
-| `shell` | `list[string]` | Command and arguments used to run `[script]`-attributed task bodies. Example: `["bash", "-c"]`. |
 
 > Additional settings will be added in future versions.
 
@@ -388,6 +428,7 @@ A task body may contain any combination of the following:
 | Binding declaration | `name := <expr>` |
 | Process call | `` `shell command` `` |
 | Conditional statement | `if / else if / else` |
+| Switch statement | `switch(...) { ... }` |
 | Task call | `name(...)` / `::name(...)` / `group::name(...)` |
 
 ### 6.4 Process Calls
@@ -402,24 +443,7 @@ A single shell process is invoked by enclosing a command in backticks. String in
 
 Each backtick block is **one process invocation**. The command is run using the interpreter configured in the `script` setting.
 
-### 6.5 Script Tasks
-
-Applying the `[script]` attribute to a task makes its **entire body** a verbatim shell script. Backtick delimiters are not used; the content is passed as-is to the shell configured in the `shell` setting.
-
-```
-[script]
-task build {
-    set -e
-    cargo fmt --check
-    cargo clippy
-    cargo build --release
-    echo "Done."
-}
-```
-
-> When `[script]` is applied, the task body contains only shell script text. tasq-language constructs (binding declarations, task calls, `if` statements) are not available inside the body.
-
-### 6.6 Conditional Statements
+### 6.5 Conditional Statements
 
 `if` used as a **statement** provides conditional control flow inside a task body. Unlike the `if` expression (§4.3), branches contain blocks of statements rather than single expressions, and the `else` branch is optional.
 
@@ -438,6 +462,47 @@ if (<condition>) {
 - Multiple `else if` branches are allowed.
 
 > **Planned:** Loop constructs (`for`, `while`) are not yet supported. See [§12 Planned Features](#12-planned-features).
+
+### 6.6 Switch Statement
+
+`switch` used as a **statement** provides multi-way control flow inside a task body, matching a subject against a series of patterns.
+
+```
+switch(<subject>) {
+    <pattern> => <body>,
+    <pattern> => <body>,
+    else => <body>,
+}
+```
+
+Where `<body>` is either a single statement or a block of statements enclosed in `{ }`:
+
+```
+<pattern> => <statement>,
+<pattern> => {
+    <statement>
+    <statement>
+    ...
+},
+```
+
+**Rules:**
+
+- Used as a statement, `switch` does not produce a value and cannot appear inside an expression.
+- `<subject>` is evaluated once and compared against each `<pattern>` in declaration order.
+- The `else` branch is **optional**. If no pattern matches the subject and no `else` branch is present, execution simply continues after the `switch`.
+
+**Example:**
+
+```
+switch(color) {
+    "red" => {
+        `echo "warm color"`
+    },
+    "blue" => `echo "cool color"`,
+    else => @error("Invalid color"),
+}
+```
 
 ---
 
@@ -668,8 +733,9 @@ task open {
 | Attribute | Meta Type | Description |
 |-----------|-----------|-------------|
 | `[desc: "text"]` | `string` | Human-readable description displayed in help output. |
+| `[private]` | *(none)* | Hides the task or group from CLI help/listing output. A private task can still be called normally — by name from another task, or directly from the command line — it is simply omitted from generated documentation. |
 
-**Valid on:** `group` definitions, `task` definitions, task/group argument declarations.
+**Valid on:** `group` definitions, `task` definitions, task/group argument declarations. `[private]` is valid on `group` and `task` definitions only.
 
 **Example:**
 
@@ -683,6 +749,21 @@ task build(
     target: string,
 ) {
     `cargo build --release --jobs {{jobs}} --target {{target}}`
+}
+```
+
+**`[private]` example:**
+
+```
+// Internal helper task — callable, but hidden from `tasq --help`
+[private]
+task _prepare_workspace {
+    `mkdir -p .cache/build`
+}
+
+task build {
+    _prepare_workspace()
+    `cargo build --release`
 }
 ```
 
@@ -744,30 +825,6 @@ task create_user(
 
 ---
 
-### 10.4 Script Attribute
-
-| Attribute | Description |
-|-----------|-------------|
-| `[script]` | The entire task body is interpreted as a verbatim shell script, run using the interpreter configured in the `shell` setting. Backtick delimiters are not used inside the body. |
-
-**Valid on:** `task` definitions only.
-
-**Example:**
-
-```
-[script]
-task ci {
-    set -euo pipefail
-    echo "Running CI pipeline..."
-    cargo fmt --check
-    cargo clippy -- -D warnings
-    cargo test --all-features
-    echo "Pipeline passed."
-}
-```
-
----
-
 ## 11. Quick Reference
 
 ### Operator Summary
@@ -780,7 +837,7 @@ task ci {
 | `and` `or` | Boolean | `bool` | `bool` |
 | `!` | Negation | `bool` | `bool` |
 | `-x` | Unary minus | `number` | `number` |
-| `[a..., b]` | List spread | `list[T]` + `T` items | `list[T]` |
+| `[...a, b]` | List spread | `list[T]` + `T` items | `list[T]` |
 
 ### Scope Resolution Summary
 
@@ -796,9 +853,9 @@ task ci {
 |-----------|:------:|:-------:|:--------:|:-----:|
 | `[windows]` `[linux]` `[macos]` | ✓ | ✓ | | ✓ |
 | `[desc]` | ✓ | ✓ | ✓ | |
+| `[private]` | ✓ | ✓ | | |
 | `[long]` `[short]` | | | ✓ | |
 | `[int]` `[min]` `[max]` `[pattern]` `[max_items]` | | | ✓ | |
-| `[script]` | ✓ | | | |
 
 ### Type System at a Glance
 
