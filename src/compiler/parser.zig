@@ -704,7 +704,7 @@ pub const Parser = struct {
                 while (try self.eat(.rbrace) == null) {
                     const start = self.currentPos();
 
-                    const pattern: ast.SwitchStmt.Pattern, const pattern_span = blk: {
+                    const pattern: ast.SwitchPattern, const pattern_span = blk: {
                         if (try self.eat(.else_kw)) |kw| {
                             const id = try self.span_registry.addNode(kw.span, .leaf);
                             break :blk .{ .else_, id };
@@ -1282,6 +1282,81 @@ pub const Parser = struct {
                 ptr.* = if_expr.payload;
 
                 return .wrap(if_expr.id, .{ .if_expr = ptr });
+            },
+            .switch_kw => {
+                const switch_kw = self.expect(.switch_kw) catch unreachable;
+
+                _ = try self.expect(.lparen);
+                const subject = try self.parseExpr();
+                _ = try self.expect(.rparen);
+
+                _ = try self.expect(.lbrace);
+
+                var cases: std.ArrayList(ast.SwitchExpr.Case) = try .initCapacity(self.arena.allocator(), 0);
+
+                while (try self.eat(.rbrace) == null) {
+                    const start = self.currentPos();
+
+                    const pattern: ast.SwitchPattern, const pattern_span = blk: {
+                        if (try self.eat(.else_kw)) |kw| {
+                            break :blk .{
+                                .else_,
+                                try self.span_registry.addNode(
+                                    kw.span,
+                                    .leaf,
+                                ),
+                            };
+                        }
+
+                        const expr = try self.parseExpr();
+
+                        break :blk .{
+                            .{ .expr = expr.payload },
+                            expr.id,
+                        };
+                    };
+
+                    _ = try self.expect(.fat_arrow);
+
+                    const value = try self.parseExpr();
+
+                    if (try self.eat(.comma) == null) {
+                        _ = try self.expect(.rbrace);
+                    }
+
+                    const id = try self.span_registry.addNode(
+                        self.spanFrom(start),
+                        .{
+                            .switch_case = .{
+                                .pattern = pattern_span,
+                                .body = value.id,
+                            },
+                        },
+                    );
+
+                    try cases.append(self.arena.allocator(), .{
+                        .id = id,
+                        .pattern = pattern,
+                        .value = value.payload,
+                    });
+                }
+
+                const id = try self.span_registry.addNode(
+                    self.spanFrom(switch_kw.span.start),
+                    .{
+                        .switch_stmt = .{
+                            .subject = subject.id,
+                        },
+                    },
+                );
+
+                const ptr = try self.arena.allocator().create(ast.SwitchExpr);
+                ptr.* = .{
+                    .subject = subject.payload,
+                    .cases = try cases.toOwnedSlice(self.arena.allocator()),
+                };
+
+                return .wrap(id, .{ .switch_expr = ptr });
             },
             .at => {
                 const builtin_call = try self.parseBuiltInCall();

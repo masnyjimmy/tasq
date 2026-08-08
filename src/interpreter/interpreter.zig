@@ -188,6 +188,13 @@ fn resolveExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Interpre
             else
                 try self.resolveExpr(scope, &if_expr.else_);
         },
+        .switch_expr => |switch_expr| {
+            const target = try self.resolveExpr(scope, &switch_expr.subject);
+
+            const value = switch_expr.cases.get(target) orelse switch_expr.else_case;
+
+            return try self.resolveExpr(scope, &value);
+        },
         .binary => |binary| {
             const left = try self.resolveExpr(scope, &binary.left);
             const right = try self.resolveExpr(scope, &binary.right);

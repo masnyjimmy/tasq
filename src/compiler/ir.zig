@@ -219,6 +219,7 @@ pub const Expr = union(enum) {
     binary: *BinaryExpr,
     unary: *UnaryExpr,
     if_expr: *IfExpr,
+    switch_expr: *SwitchExpr,
     builtin_call: BuiltinCall,
 };
 
@@ -255,4 +256,16 @@ pub const IfExpr = struct {
     then: Expr,
     else_: Expr,
     type: Type, // both branches must match — filled by sema
+};
+
+pub const SwitchExpr = struct {
+    pub const CasesStorage = std.hash_map.HashMapUnmanaged(
+        typing.Value,
+        Expr,
+        typing.ValueContext,
+        60,
+    );
+    subject: Expr,
+    cases: CasesStorage,
+    else_case: Expr,
 };

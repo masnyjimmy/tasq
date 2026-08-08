@@ -89,15 +89,15 @@ pub const Statement = union(enum) {
     // for_stmt: forStmt,
 };
 
-pub const SwitchStmt = struct {
-    pub const Pattern = union(enum) {
-        expr: Expr,
-        else_,
-    };
+pub const SwitchPattern = union(enum) {
+    expr: Expr,
+    else_,
+};
 
+pub const SwitchStmt = struct {
     pub const Case = struct {
         id: NodeId,
-        pattern: Pattern,
+        pattern: SwitchPattern,
         body: StatementBlock,
     };
 
@@ -151,6 +151,18 @@ pub const Expr = union(enum) {
     binary: *BinaryExpr,
     unary: *UnaryExpr,
     if_expr: *IfExpr,
+    switch_expr: *SwitchExpr,
+};
+
+pub const SwitchExpr = struct {
+    pub const Case = struct {
+        id: NodeId,
+        pattern: SwitchPattern,
+        value: Expr,
+    };
+
+    subject: Expr,
+    cases: []const Case,
 };
 
 pub const BuiltInCall = struct {
