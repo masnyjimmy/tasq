@@ -25,7 +25,9 @@ const ScopeStack = @import("scope_stack.zig");
 
 pub const Interpreter = @This();
 
-const InterpreterError = std.Io.Writer.Error || binary_mod.Error || std.mem.Allocator.Error;
+const InterpreterError = std.Io.Writer.Error || binary_mod.Error || std.mem.Allocator.Error || error{
+    Abort,
+};
 
 allocator: std.mem.Allocator,
 io: std.Io,
@@ -62,11 +64,15 @@ pub fn init(
 pub fn run(self: *Interpreter) !void {
     while (try self.call_stack.advance(self.allocator)) |res| {
         switch (res) {
-            .statement => |stmt| try self.main(stmt),
+            .statement => |stmt| self.main(stmt) catch |err| switch (err) {
+                InterpreterError.Abort => return,
+                else => return err,
+            },
             .frame_end => self.scope_stack.pop(self.allocator),
         }
     }
 }
+
 fn main(self: *Interpreter, stmt: *const ir.Statement) !void {
     const scope = self.currentScope();
     switch (stmt.*) {
@@ -234,8 +240,11 @@ fn resolveExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Interpre
             for (call.args, args) |in, *out| {
                 out.* = try self.resolveExpr(scope, &in);
             }
-            // should't ever error
-            return builtin.callFunction(self, call.id, args) catch unreachable;
+
+            return builtin.callFunction(self, call.id, args) catch |err| return switch (err) {
+                builtin.Error.Abort => InterpreterError.Abort,
+                else => unreachable,
+            };
         },
     };
 }

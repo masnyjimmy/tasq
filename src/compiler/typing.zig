@@ -12,6 +12,7 @@ pub const TypeTag = enum {
     number,
     bool,
     list,
+    noreturn,
 };
 
 pub const Type = union(TypeTag) {
@@ -20,8 +21,18 @@ pub const Type = union(TypeTag) {
     number,
     bool,
     list: *const Type,
+    noreturn,
+
+    pub fn unify(left: Type, right: Type) ?Type {
+        if (left == .noreturn) return right;
+        if (right == .noreturn) return left;
+        if (eq(left, right) == false) return null;
+        return left;
+    }
 
     pub fn eq(left: Type, right: Type) bool {
+        std.debug.assert(left != .noreturn and right != .noreturn);
+
         const tag = blk: {
             const L = @as(TypeTag, left);
             const R = @as(TypeTag, right);
@@ -72,6 +83,7 @@ pub const ValueContext = struct {
                 hasher.update(std.mem.asBytes(&n));
             },
             .list => |l| for (l.items) |item| hashValue(hasher, item),
+            else => unreachable,
         }
     }
 };
@@ -87,6 +99,7 @@ pub const Value = union(TypeTag) {
     number: f64,
     bool: bool,
     list: List,
+    noreturn,
 
     pub fn clone(self: *const Value, allocator: std.mem.Allocator) std.mem.Allocator.Error!Value {
         return switch (self.*) {
@@ -137,6 +150,7 @@ pub const Value = union(TypeTag) {
                 }
                 try writer.writeAll("]");
             },
+            .noreturn => try writer.print("<noreturn>", .{}),
         }
     }
 
@@ -163,6 +177,7 @@ pub const Value = union(TypeTag) {
                 }
                 return true;
             },
+            else => unreachable,
         };
     }
 };

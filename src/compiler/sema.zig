@@ -740,6 +740,10 @@ pub const Sema = struct {
                     },
                 };
             },
+            .noreturn => {
+                try self.diagnostics.err(span_node.span, "noreturn is not literal", .{});
+                return SemaError.SemanticError;
+            },
         };
     }
 
@@ -892,23 +896,6 @@ pub const Sema = struct {
 
         var else_case: ?ir.StatementBlock = null;
 
-        const Validator = struct {
-            fn validateNumber(number: f64) bool {
-                return number == 0 or std.math.isNormal(number);
-            }
-
-            fn validate(v: typing.Value) bool {
-                return switch (v) {
-                    .number => |n| validateNumber(n),
-                    .list => |l| for (l.items) |item| {
-                        if (validate(item) == false)
-                            return false;
-                    } else true,
-                    else => true,
-                };
-            }
-        };
-
         for (switch_stmt.cases) |case| {
             const case_node = self.span_registry.get(case.id).details.switch_case;
             switch (case.pattern) {
@@ -918,7 +905,7 @@ pub const Sema = struct {
                         expr,
                         case_node.pattern,
                     );
-                    if (Validator.validate(pattern) == false) {
+                    if (SwitchPatternValidator.validate(pattern) == false) {
                         try self.diagnostics.err(
                             self.span_registry.getSpan(case_node.pattern),
                             "incompatible case literal value: '{f}'",
@@ -1251,35 +1238,41 @@ pub const Sema = struct {
     };
 
     fn analyseBuiltinCall(self: *Sema, scope: *Scope, call: ast.BuiltInCall) SemaError!BuiltinCallResult {
-        const functions = @import("functions.zig");
+        const call_spans = self.span_registry.get(call.id);
 
-        const call_span_node = self.span_registry.get(call.id);
-
-        const def = functions.getFunctionDef(call.name, call.args.len) catch |err| switch (err) {
-            error.UnknownFunction => {
-                try self.diagnostics.err(call_span_node.span, "unknown function '{s}'", .{call.name});
+        const def = funcs.definitions.get(call.name, call.args.len) catch |err| switch (err) {
+            funcs.definitions.Error.UnknownFunction => {
+                try self.diagnostics.err(
+                    call_spans.span,
+                    "Unknown builtin function '{s}'",
+                    .{call.name},
+                );
                 return SemaError.SemanticError;
             },
-            error.InvalidArguments => {
-                try self.diagnostics.err(call_span_node.span, "invalid arguments num", .{});
+            funcs.definitions.Error.InvalidArguments => {
+                try self.diagnostics.err(
+                    self.span_registry.getSpan(call.id),
+                    "Invalid arguments number ({}) for '{s}' function",
+                    .{ call.args.len, call.name },
+                );
                 return SemaError.SemanticError;
             },
         };
 
         var args = try std.ArrayList(ir.Expr).initCapacity(self.arena.allocator(), call.args.len);
 
-        for (call.args, def.args, call_span_node.details.builtin_call.args) |expr, arg_def, call_arg_span_node_id| {
+        for (call.args, def.args, call_spans.details.builtin_call.args) |arg_expr, arg_def, arg_span| {
             const arg = try self.analyseExpr(
                 scope,
-                expr,
-                call_arg_span_node_id, //TODO: implement handling span
+                arg_expr,
+                arg_span, //TODO: implement handling span
             );
 
-            if (arg.type.eq(arg_def[1]) == false) {
+            if (arg.type.eq(arg_def.type) == false) {
                 try self.diagnostics.err(
-                    .{ .start = 0, .len = 0 }, //TODO: fix it
+                    self.span_registry.getSpan(arg_span),
                     "invalid argument type, got '{f}' expected '{f}'",
-                    .{ arg.type, arg_def[1] },
+                    .{ arg.type, arg_def.type },
                 );
                 return SemaError.SemanticError;
             }
@@ -1337,7 +1330,9 @@ pub const Sema = struct {
                     .is_static = res.is_static,
                 };
             },
-            .list => |list| {
+            .list => |l| {
+                var list = l;
+
                 std.debug.assert(list.len != 0);
 
                 const ItemsHelper = struct {
@@ -1348,6 +1343,15 @@ pub const Sema = struct {
                     };
                     pub fn analyseItem(sema: *Sema, s: *Scope, n: NodeId, item: ast.Expr.ListItem) !Result {
                         const result = try sema.analyseExpr(s, item.expr.*, n);
+
+                        if (result.type == .noreturn) {
+                            try sema.diagnostics.err(
+                                sema.span_registry.getSpan(n),
+                                "noreturn type is not accepted as list item",
+                                .{},
+                            );
+                            return SemaError.SemanticError;
+                        }
 
                         if (item.is_spread and result.type != .list) {
                             try sema.diagnostics.err(
@@ -1399,23 +1403,31 @@ pub const Sema = struct {
                 const list_type = try self.arena.allocator().create(typing.Type);
                 errdefer self.arena.allocator().destroy(list_type);
 
-                list_type.* = blk: {
-                    const first = try ItemsHelper.analyseItem(
+                list_type.* = blk: while (list.len != 0) {
+                    const first = ItemsHelper.analyseItem(
                         self,
                         scope,
-                        node_id,
+                        list_spans[0],
                         list[0],
-                    );
+                    ) catch |err| switch (err) {
+                        SemaError.SemanticError => {
+                            list = list[1..];
+                            list_spans = list_spans[1..];
+                            continue :blk;
+                        },
+                        else => return err,
+                    };
 
                     if (!first.is_static) is_static = false;
-
                     try out.append(self.arena.allocator(), first.item);
-
                     break :blk first.type;
-                };
+                } else return SemaError.SemanticError; // we cannot ignore this error if theres no elemets left to infer type
 
                 for (list[1..], list_spans[1..]) |item, item_span_id| {
-                    const result = try ItemsHelper.analyseItem(self, scope, node_id, item);
+                    const result = ItemsHelper.analyseItem(self, scope, node_id, item) catch |err| switch (err) {
+                        SemaError.SemanticError => continue,
+                        else => return err,
+                    };
 
                     if (!result.is_static) is_static = false;
 
@@ -1490,7 +1502,25 @@ pub const Sema = struct {
 
                 const left = try self.analyseExpr(scope, b.left, binary_spans.left);
 
+                if (left.type == .noreturn) {
+                    try self.diagnostics.err(
+                        self.span_registry.getSpan(binary_spans.left),
+                        "noreturn type is not allowed in binary expression",
+                        .{},
+                    );
+                    return SemaError.SemanticError;
+                }
+
                 const right = try self.analyseExpr(scope, b.right, binary_spans.right);
+
+                if (right.type == .noreturn) {
+                    try self.diagnostics.err(
+                        self.span_registry.getSpan(binary_spans.right),
+                        "noreturn type is not allowed in binary expression",
+                        .{},
+                    );
+                    return SemaError.SemanticError;
+                }
 
                 const binary = @import("binary.zig");
 
@@ -1531,6 +1561,15 @@ pub const Sema = struct {
                 const unary_spans = span_node.details.expr.unary;
                 const operand = try self.analyseExpr(scope, u.operand, unary_spans.operand);
 
+                if (operand.type == .noreturn) {
+                    try self.diagnostics.err(
+                        self.span_registry.getSpan(unary_spans.operand),
+                        "noreturn type is not allowed in unary expression",
+                        .{},
+                    );
+                    return SemaError.SemanticError;
+                }
+
                 const result_type: ir.Type = switch (u.op) {
                     .not_op => blk: {
                         if (operand.type != .bool) {
@@ -1570,8 +1609,14 @@ pub const Sema = struct {
                 const if_spans = span_node.details.expr.if_expr;
 
                 const cond = try self.analyseExpr(scope, i.cond, if_spans.cond);
-                const then = try self.analyseExpr(scope, i.then, if_spans.then);
-                const else_ = try self.analyseExpr(scope, i.else_, if_spans.else_);
+
+                if (cond.type == .noreturn) {
+                    try self.diagnostics.err(
+                        self.span_registry.getSpan(if_spans.cond),
+                        "noreturn not allowed in if condition",
+                        .{},
+                    );
+                }
 
                 if (cond.type != .bool) {
                     try self.diagnostics.err(
@@ -1580,28 +1625,121 @@ pub const Sema = struct {
                         .{},
                     );
                 }
-                if (!typing.Type.eq(then.type, else_.type)) {
+
+                const then = try self.analyseExpr(scope, i.then, if_spans.then);
+                const else_ = try self.analyseExpr(scope, i.else_, if_spans.else_);
+
+                const result_type = typing.Type.unify(then.type, else_.type) orelse blk: {
                     try self.diagnostics.err(
                         span_node.span,
-                        "if branches must have the same type: got {s} and {s}",
-                        .{
-                            @tagName(then.type),
-                            @tagName(else_.type),
-                        },
+                        "if branches must have the same type: got {f} and {f}",
+                        .{ then.type, else_.type },
+                    );
+                    break :blk then.type; // TODO: (consider) give it whatever type so it can continue collecting errors
+                };
+
+                const node = try self.arena.allocator().create(ir.IfExpr);
+                node.* = .{ .cond = cond.expr, .then = then.expr, .else_ = else_.expr, .type = result_type };
+                return .{
+                    .expr = .{ .if_expr = node },
+                    .type = result_type,
+                    .is_static = cond.is_static and then.is_static and else_.is_static,
+                };
+            },
+            .switch_expr => |switch_expr| {
+                const switch_spans = self.span_registry.get(node_id);
+
+                const subject = try self.analyseExpr(scope, switch_expr.subject, switch_spans.details.switch_stmt.subject);
+
+                if (subject.type == .noreturn) {
+                    try self.diagnostics.err(
+                        self.span_registry.getSpan(switch_spans.details.switch_stmt.subject),
+                        "noreturn is not allow in switch subject",
+                        .{},
                     );
                 }
 
-                const node = try self.arena.allocator().create(ir.IfExpr);
-                node.* = .{
-                    .cond = cond.expr,
-                    .then = then.expr,
-                    .else_ = else_.expr,
-                    .type = then.type,
+                var is_static = subject.is_static;
+
+                var cases: ir.SwitchExpr.CasesStorage = .empty;
+                try cases.ensureTotalCapacity(self.arena.allocator(), @intCast(switch_expr.cases.len));
+
+                var else_case: ?ir.Expr = null;
+
+                var result_type: typing.Type = .noreturn;
+
+                for (switch_expr.cases) |case| {
+                    const case_spans = self.span_registry.get(case.id).details.switch_case;
+                    switch (case.pattern) {
+                        .expr => |e| {
+                            const pattern = try self.assertLiteral(subject.type, e, case_spans.pattern);
+
+                            if (cases.contains(pattern)) {
+                                try self.diagnostics.err(
+                                    self.span_registry.getSpan(case_spans.pattern),
+                                    "Duplicate switch case pattern '{f}'",
+                                    .{pattern},
+                                );
+                                continue;
+                            }
+                            const value = try self.analyseExpr(scope, case.value, case_spans.body);
+
+                            result_type = typing.Type.unify(result_type, value.type) orelse {
+                                try self.diagnostics.err(
+                                    self.span_registry.getSpan(case_spans.body),
+                                    "Invalid result type. Each case must result in the same type, expected {f} got {f}",
+                                    .{ result_type, value.type },
+                                );
+                                continue;
+                            };
+
+                            if (value.is_static == false) is_static = false;
+                            cases.putAssumeCapacityNoClobber(pattern, value.expr);
+                        },
+                        .else_ => {
+                            if (else_case) |_| {
+                                try self.diagnostics.err(
+                                    self.span_registry.getSpan(case_spans.pattern),
+                                    "Duplicate switch else case",
+                                    .{},
+                                );
+                                continue;
+                            }
+                            const value = try self.analyseExpr(scope, case.value, case_spans.body);
+                            result_type = typing.Type.unify(result_type, value.type) orelse {
+                                try self.diagnostics.err(
+                                    self.span_registry.getSpan(case_spans.body),
+                                    "Invalid result type. Each case must result in the same type, expected {f} got {f}",
+                                    .{ result_type, value.type },
+                                );
+                                continue;
+                            };
+
+                            if (value.is_static == false) is_static = false;
+                            else_case = value.expr;
+                        },
+                    }
+                }
+
+                const ptr = try self.arena.allocator().create(ir.SwitchExpr);
+                ptr.* = .{
+                    .subject = subject.expr,
+                    .cases = cases,
+                    .else_case = else_case orelse {
+                        try self.diagnostics.err(
+                            self.span_registry.getSpan(node_id),
+                            "Missing else case",
+                            .{},
+                        );
+                        return SemaError.SemanticError;
+                    },
                 };
                 return .{
-                    .expr = .{ .if_expr = node },
-                    .type = then.type,
-                    .is_static = cond.is_static and then.is_static and else_.is_static,
+                    .expr = .{
+                        .switch_expr = ptr,
+                    },
+                    .type = result_type,
+                    .is_static = is_static,
                 };
             },
         };
@@ -1692,4 +1830,21 @@ pub const Sema = struct {
 
         try scope.define(self.arena.allocator(), symbol);
     }
+
+    const SwitchPatternValidator = struct {
+        fn validateNumber(number: f64) bool {
+            return number == 0 or std.math.isNormal(number);
+        }
+
+        fn validate(v: typing.Value) bool {
+            return switch (v) {
+                .number => |n| validateNumber(n),
+                .list => |l| for (l.items) |item| {
+                    if (validate(item) == false)
+                        return false;
+                } else true,
+                else => true,
+            };
+        }
+    };
 };

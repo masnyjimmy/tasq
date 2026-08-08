@@ -8,6 +8,8 @@ pub const Error = error{
 };
 
 pub fn binaryResultType(op: ir.BinaryOp, left: typing.Type, right: typing.Type) Error!BinaryResult {
+    std.debug.assert(left != .noreturn and right != .noreturn);
+
     if (op == .add and left == .string and right == .string) {
         return .{ .result_type = .string };
     }

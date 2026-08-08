@@ -2,98 +2,180 @@ const std = @import("std");
 const ir = @import("ir.zig");
 
 const lib = @import("lib");
+const enums = lib.enums;
+const ct = lib.@"comptime";
 
 const typing = @import("typing.zig");
 const Type = typing.Type;
 
-pub const FunctionId = enum {
-    status_code,
-    env,
-    exists,
-    os,
-};
+pub const definitions = Functions(&.{
+    .{
+        .name = "env",
+        .args = &.{
+            .{ .name = "key", .type = Type.string },
+        },
+        .return_type = Type.string,
+    },
+    .{
+        .name = "env",
+        .args = &.{
+            .{ .name = "key", .type = Type.string },
+            .{ .name = "default", .type = Type.string },
+        },
+        .return_type = Type.string,
+    },
+    .{
+        .name = "exists",
+        .args = &.{
+            .{ .name = "path", .type = Type.string },
+        },
+        .return_type = Type.bool,
+    },
+    .{
+        .name = "os",
+        .args = &.{},
+        .return_type = Type.string,
+    },
+    .{
+        .name = "status_code",
+        .args = &.{},
+        .return_type = Type.number,
+    },
+    .{
+        .name = "error",
+        .args = &.{
+            .{ .name = "message", .type = Type.string },
+            // .{ .name = "code", .type = Type.number },
+        },
+        .return_type = Type.noreturn,
+    },
+});
 
-fn getFunctionId(name: []const u8) ?FunctionId {
-    const map = std.StaticStringMap(FunctionId).initComptime(.{
-        .{ "statusCode", .status_code },
-        .{ "env", .env },
-        .{ "exists", .exists },
-        .{ "os", .os },
-    });
+fn Functions(comptime specs: []const Spec) type {
+    const FnId = blk: {
+        const EnumTag = enums.FitUnsigned(specs.len);
 
-    return map.get(name);
-}
+        var unique_names: [specs.len][]const u8 = undefined;
+        var unique_count: usize = 0;
 
-const FunctionDefinition = struct {
-    const Arg = struct { []const u8, Type };
+        outer: for (specs) |spec| {
+            for (unique_names[0..unique_count]) |existing| {
+                if (std.mem.eql(u8, existing, spec.name)) continue :outer;
+            }
+            unique_names[unique_count] = spec.name;
+            unique_count += 1;
+        }
 
-    id: FunctionId,
-    args: []const Arg,
-    return_type: Type,
-};
+        const values = ct.iter(EnumTag, unique_count);
 
-fn define(comptime id: FunctionId, comptime args: []const FunctionDefinition.Arg, comptime return_type: Type) FunctionDefinition {
-    return .{
-        .id = id,
-        .args = args,
-        .return_type = return_type,
+        break :blk @Enum(
+            EnumTag,
+            .exhaustive,
+            unique_names[0..unique_count],
+            &values,
+        );
+    };
+
+    const Definition = struct {
+        id: FnId,
+        args: []const Spec.Arg,
+        return_type: typing.Type,
+    };
+
+    // For each spec (by original index), which unique-name index (i.e. FnId) it maps to.
+    const spec_to_id: [specs.len]FnId = blk: {
+        var unique_names: [specs.len][]const u8 = undefined;
+        var unique_count: usize = 0;
+        var ids: [specs.len]FnId = undefined;
+
+        for (specs, 0..) |spec, spec_idx| {
+            var found: ?usize = null;
+            for (unique_names[0..unique_count], 0..) |existing, uidx| {
+                if (std.mem.eql(u8, existing, spec.name)) {
+                    found = uidx;
+                    break;
+                }
+            }
+            const uidx = found orelse blk2: {
+                unique_names[unique_count] = spec.name;
+                unique_count += 1;
+                break :blk2 unique_count - 1;
+            };
+            ids[spec_idx] = @enumFromInt(uidx);
+        }
+
+        break :blk ids;
+    };
+
+    const defs = blk: {
+        var defs: [specs.len]Definition = undefined;
+
+        for (specs, 0..) |spec, idx| {
+            defs[idx] = def: {
+                var out = ct.copyFields(Definition, spec);
+                out.id = spec_to_id[idx];
+
+                break :def out;
+            };
+        }
+        break :blk defs;
+    };
+
+    const name_map = enums.generateEnumNameMap(FnId);
+
+    return struct {
+        pub const Type = FnId;
+
+        pub const items = defs;
+
+        pub fn get(name: []const u8, arg_num: usize) !Definition {
+            const idx = try getIndex(name, arg_num);
+
+            return defs[idx];
+        }
+
+        pub fn getById(id: FnId, arg_num: usize) !Definition {
+            const idx = getIndexById(id, arg_num) orelse return Error.InvalidArguments;
+
+            return defs[idx];
+        }
+
+        pub fn getIndexById(id: FnId, arg_num: usize) ?usize {
+            std.debug.assert(enums.isValidEnumValue(FnId, id));
+
+            for (defs, 0..) |def, idx| {
+                if (def.id != id) continue;
+
+                if (def.args.len == arg_num) {
+                    return idx;
+                }
+            }
+
+            return null;
+        }
+
+        pub fn getIndex(name: []const u8, arg_num: usize) !usize {
+            const id = name_map.get(name) orelse return Error.UnknownFunction;
+            return getIndexById(id, arg_num) orelse return Error.InvalidArguments;
+        }
+
+        pub fn getByIndex(index: usize) Definition {
+            return defs[index];
+        }
+
+        pub const Error = error{
+            UnknownFunction,
+            InvalidArguments,
+        };
     };
 }
+const Spec = struct {
+    const Arg = struct {
+        name: []const u8,
+        type: Type,
+    };
 
-pub const function_defs = [_]FunctionDefinition{
-    define(.env, &.{
-        .{ "key", Type.string },
-    }, .string),
-    define(.env, &.{
-        .{ "key", Type.string },
-        .{ "default", Type.string },
-    }, .string),
-    define(.exists, &.{
-        .{ "path", Type.string },
-    }, .bool),
-    define(.os, &.{}, .string),
-    define(.status_code, &.{}, .number),
+    name: []const u8,
+    args: []const Arg,
+    return_type: typing.Type,
 };
-
-fn validateFunctionDefinitions() void {
-    inline for (function_defs, 0..) |a, i| {
-        inline for (function_defs[i + 1 ..], i + 1..) |b, j| {
-            if (a.id == b.id and a.args.len == b.args.len) {
-                @compileError(std.fmt.comptimePrint(
-                    "Duplicate overload for function {any} with {} arguments (indexes {} and {})",
-                    .{ a.id, a.args.len, i, j },
-                ));
-            }
-        }
-    }
-}
-
-comptime {
-    validateFunctionDefinitions();
-}
-
-pub const Error = error{
-    UnknownFunction,
-    InvalidArguments,
-};
-
-pub fn getFunctionDef(name: []const u8, args_num: usize) Error!FunctionDefinition {
-    const id = getFunctionId(name) orelse return Error.UnknownFunction;
-
-    return try getFunctionDefById(id, args_num);
-}
-
-pub fn getFunctionIndex(id: FunctionId, args_num: usize) Error!usize {
-    inline for (function_defs, 0..) |def, idx| {
-        if (def.id == id and def.args.len == args_num) {
-            return idx;
-        }
-    }
-
-    return Error.InvalidArguments;
-}
-
-pub fn getFunctionDefById(id: FunctionId, args_num: usize) Error!FunctionDefinition {
-    const index = try getFunctionIndex(id, args_num);
-    return function_defs[index];
-}

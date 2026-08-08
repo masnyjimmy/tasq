@@ -10,10 +10,11 @@ const Value = typing.Value;
 
 const Interpreter = @import("interpreter.zig");
 
-const functions_count = functions.function_defs.len;
+const functions_count = functions.definitions.items.len;
 
 pub const Error = error{
     FunctionFailed,
+    Abort,
 };
 
 const FunctionType = *const fn (*const Interpreter, []const Value) Error!Value;
@@ -24,14 +25,16 @@ const handlers: [functions_count]FunctionType = .{
     handleExists,
     handleOs,
     handleStatusCode,
+    handleError,
 };
 
 pub fn callFunction(
     interpreter: *const Interpreter,
-    id: functions.FunctionId,
+    id: functions.definitions.Type,
     args: []const Value,
 ) Error!Value {
-    const index = functions.getFunctionIndex(id, args.len) catch unreachable;
+    const index = functions.definitions.getIndexById(id, args.len) orelse unreachable;
+
     const handler = handlers[index];
 
     return try handler(interpreter, args);
@@ -87,4 +90,17 @@ fn handleOs(_: *const Interpreter, _: []const Value) Error!Value {
 
 fn handleStatusCode(self: *const Interpreter, _: []const Value) Error!Value {
     return .{ .number = @floatFromInt(self.status_code) };
+}
+
+fn handleError(self: *const Interpreter, args: []const Value) Error!Value {
+    const message = args[0].string;
+
+    self.printer.printStyled(
+        self.allocator,
+        .{ .fg = .bright_red },
+        "{s}\n",
+        .{message},
+    ) catch return Error.FunctionFailed;
+
+    return Error.Abort;
 }
