@@ -26,6 +26,7 @@ const handlers: [functions_count]FunctionType = .{
     handleOs,
     handleStatusCode,
     handleError,
+    handlePrint,
 };
 
 pub fn callFunction(
@@ -103,4 +104,16 @@ fn handleError(self: *const Interpreter, args: []const Value) Error!Value {
     ) catch return Error.FunctionFailed;
 
     return Error.Abort;
+}
+
+fn handlePrint(self: *const Interpreter, args: []const Value) Error!Value {
+    const message = args[0].string;
+
+    self.printer.print(
+        self.allocator,
+        "{s}\n",
+        .{message},
+    ) catch unreachable;
+
+    return .void;
 }

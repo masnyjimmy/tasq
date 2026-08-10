@@ -49,6 +49,13 @@ pub const definitions = Functions(&.{
         },
         .return_type = Type.noreturn,
     },
+    .{
+        .name = "print",
+        .args = &.{
+            .{ .name = "message", .type = Type.string },
+        },
+        .return_type = Type.void,
+    },
 });
 
 fn Functions(comptime specs: []const Spec) type {
