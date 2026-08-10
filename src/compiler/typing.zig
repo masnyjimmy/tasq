@@ -13,6 +13,7 @@ pub const TypeTag = enum {
     bool,
     list,
     noreturn,
+    void,
 };
 
 pub const Type = union(TypeTag) {
@@ -22,7 +23,7 @@ pub const Type = union(TypeTag) {
     bool,
     list: *const Type,
     noreturn,
-
+    void,
     pub fn unify(left: Type, right: Type) ?Type {
         if (left == .noreturn) return right;
         if (right == .noreturn) return left;
@@ -100,6 +101,7 @@ pub const Value = union(TypeTag) {
     bool: bool,
     list: List,
     noreturn,
+    void,
 
     pub fn clone(self: *const Value, allocator: std.mem.Allocator) std.mem.Allocator.Error!Value {
         return switch (self.*) {
@@ -150,7 +152,7 @@ pub const Value = union(TypeTag) {
                 }
                 try writer.writeAll("]");
             },
-            .noreturn => try writer.print("<noreturn>", .{}),
+            inline else => |_, tag| try writer.print("<{t}>", .{tag}),
         }
     }
 

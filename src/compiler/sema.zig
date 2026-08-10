@@ -740,10 +740,12 @@ pub const Sema = struct {
                     },
                 };
             },
-            .noreturn => {
-                try self.diagnostics.err(span_node.span, "noreturn is not literal", .{});
-                return SemaError.SemanticError;
-            },
+            else => unreachable,
+            // .noreturn => {
+            //     try self.diagnostics.err(span_node.span, "noreturn is not literal", .{});
+            //     return SemaError.SemanticError;
+            // },
+            // .void => unreachable,
         };
     }
 
