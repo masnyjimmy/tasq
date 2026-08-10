@@ -1478,7 +1478,20 @@ pub const Parser = struct {
             try self.resyncFromRaw();
             if (try self.eat(.ldbrace)) |_| { //TODO: handle ld/rd brace span
                 const expr = blk: {
-                    const wrapped = try self.parseExpr();
+                    const wrapped = self.parseExpr() catch |err| switch (err) {
+                        ParseError.UnexpectedToken => {
+                            switch (try self.synchronizeTo(&.{.rdbrace})) {
+                                .rdbrace => {
+                                    // TODO: handle error
+                                    _ = try self.expect(.rdbrace);
+                                    self.resyncToRaw();
+                                    continue;
+                                },
+                                else => break,
+                            }
+                        },
+                        else => return err,
+                    };
                     try child_ids.append(wrapped.id);
                     break :blk wrapped.payload;
                 };
