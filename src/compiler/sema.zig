@@ -879,6 +879,13 @@ pub const Sema = struct {
             .task_call => |c| .{ .task_call = try self.analyseTaskCall(scope, c) },
             .if_stmt => |s| .{ .if_stmt = try self.analyseIfStmt(scope, s) },
             .switch_stmt => |s| .{ .switch_stmt = try self.analyseSwitchStmt(scope, s) },
+            .expr => |e| {
+                const res = try self.analyseExpr(scope, e, node_id);
+
+                return .{
+                    .expr = res.expr,
+                };
+            },
         };
     }
 

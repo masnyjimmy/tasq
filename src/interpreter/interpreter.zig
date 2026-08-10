@@ -106,6 +106,9 @@ fn main(self: *Interpreter, stmt: *const ir.Statement) !void {
             try self.call_stack.push(self.allocator, null, block);
             try self.scope_stack.pushBlock(self.allocator, block.scope);
         },
+        .expr => |*expr| {
+            _ = try self.resolveExpr(scope, expr);
+        },
         else => {
             try self.printer.printStyled(self.allocator, .{ .bold = true, .fg = .bright_red }, "unsupported yet\n", .{});
         },

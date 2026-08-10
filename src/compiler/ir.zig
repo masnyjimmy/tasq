@@ -149,6 +149,7 @@ pub const Statement = union(enum) {
     task_call: TaskCall,
     if_stmt: IfStmt,
     switch_stmt: SwitchStmt,
+    expr: Expr,
 };
 
 pub const SwitchStmt = struct {

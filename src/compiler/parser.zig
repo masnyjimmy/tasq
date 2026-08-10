@@ -759,8 +759,12 @@ pub const Parser = struct {
                 });
             },
             else => {
-                try self.addDiagnostic(.err, "expected statement, found '{s}'", .{@tagName(self.next.kind)});
-                return ParseError.UnexpectedToken;
+                const expr = try self.parseExpr();
+                return .wrap(expr.id, .{
+                    .expr = expr.payload,
+                });
+                // try self.addDiagnostic(.err, "expected statement, found '{s}'", .{@tagName(self.next.kind)});
+                // return ParseError.UnexpectedToken;
             },
         }
     }
