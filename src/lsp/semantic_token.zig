@@ -219,13 +219,14 @@ pub const Collector = struct {
             .task_call => |v| try self.walkTaskCall(&v),
             .if_stmt => |v| try self.walkIfStmt(&v),
             .switch_stmt => |s| try self.walkSwitchStmt(&s),
+            .expr => |e| try self.walkExpr(&e, node_id),
         }
     }
 
     fn walkSwitchStmt(self: *Collector, switch_stmt: *const ast.SwitchStmt) Error!void {
         const switch_node = self.span_registry.get(switch_stmt.id);
 
-        try self.walkExpr(switch_stmt.subject, switch_node.details.switch_stmt.subject);
+        try self.walkExpr(&switch_stmt.subject, switch_node.details.switch_stmt.subject);
 
         for (switch_stmt.cases) |case| {
             const case_node = self.span_registry.get(case.id).details.switch_case;
