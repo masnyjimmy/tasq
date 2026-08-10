@@ -5,16 +5,9 @@ const sym = @import("symbol.zig");
 const Symbol = sym.Symbol;
 
 pub const Scope = struct {
-    // pub const Kind = enum {
-    //     file,
-    //     group,
-    //     task,
-    // };
-
     const IndexesStorage = std.array_hash_map.String(usize);
 
     parent: ?*Scope,
-    // kind: Kind,
     // symbols
     symbols: std.ArrayList(*Symbol) = .empty,
     // indexes
@@ -25,6 +18,7 @@ pub const Scope = struct {
     pub fn debugDump(_: *const Scope) []const u8 {
         return "<scope>";
     }
+
     pub fn init(parent: ?*Scope) Scope {
         return .{
             .parent = parent,
@@ -70,7 +64,6 @@ pub const Scope = struct {
         try self.symbols.append(gpa, ptr);
     }
 
-    var one = false;
     pub fn resolveLocal(self: *const Scope, name: []const u8, symbol_type: Symbol.Type) ?*Symbol {
         const index = switch (symbol_type) {
             .variable => self.variables.get(name),
@@ -96,6 +89,7 @@ pub const Scope = struct {
         }
         return cur;
     }
+
     pub fn isRoot(self: *const Scope) bool {
         return @as(*Scope, @constCast(self)).root() == self;
     }

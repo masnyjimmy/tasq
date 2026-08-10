@@ -326,7 +326,6 @@ pub const Lexer = struct {
             .start = start,
             .len = len,
         };
-
         switch (kind) {
             .set_kw,
             .task_kw,
@@ -336,6 +335,7 @@ pub const Lexer = struct {
             .and_kw,
             .or_kw,
             .not_kw,
+            .switch_kw,
             => {
                 try self.span_registry.put(.keyword, span);
             },

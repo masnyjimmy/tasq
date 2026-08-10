@@ -265,6 +265,7 @@ pub fn @"textDocument/diagnostic"(
     arena: std.mem.Allocator,
     params: lsp.types.document_diagnostic.Params,
 ) !lsp.types.document_diagnostic.Report {
+    std.log.debug("Received 'textDocument/diagnostics'", .{});
     const file_id = self.workspace.getId(params.textDocument.uri) orelse {
         std.log.warn("Diagnostics on non existent document: '{s}'", .{params.textDocument.uri});
         return error.InvalidRequest;

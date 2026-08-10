@@ -86,6 +86,7 @@ pub const Statement = union(enum) {
     decl: Decl, // declaration
     if_stmt: IfStmt,
     switch_stmt: SwitchStmt,
+
     // for_stmt: forStmt,
 };
 
