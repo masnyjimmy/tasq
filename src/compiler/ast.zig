@@ -2,7 +2,6 @@ const std = @import("std");
 
 const Diagnostics = @import("Diagnostics.zig");
 const Span = @import("span.zig");
-const SNode = Span.Registry.Node;
 
 const NodeId = Span.Registry.NodeId;
 
