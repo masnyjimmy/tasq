@@ -522,6 +522,16 @@ const TaskArgumentParser = struct {
                         return Error.ParsingFailed;
                     }
 
+                    if (self.args.items.len <= positional_idx) {
+                        try self.printer.printStyled(
+                            arena.allocator(),
+                            style.err,
+                            "invalid positional argument on {} position: '{s}'\n",
+                            .{ positional_idx, tok.lexeme },
+                        );
+                        return Error.ParsingFailed;
+                    }
+
                     const arg = self.args.items[positional_idx];
                     positional_idx += 1;
 
