@@ -8,7 +8,6 @@ const Tag = enum {
     list,
     noreturn,
     void,
-    any,
 };
 
 pub const Type = union(Tag) {
@@ -19,7 +18,6 @@ pub const Type = union(Tag) {
     list: *const Type,
     noreturn,
     void,
-    any,
 
     pub fn unify(left: Type, right: Type) ?Type {
         if (left == .noreturn) return right;
@@ -30,9 +28,6 @@ pub const Type = union(Tag) {
 
     pub fn eq(left: Type, right: Type) bool {
         std.debug.assert(left != .noreturn and right != .noreturn);
-
-        if (left == .any or right == .any)
-            return true;
 
         const tag = blk: {
             const L = @as(Tag, left);
