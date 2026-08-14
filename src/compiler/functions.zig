@@ -5,8 +5,8 @@ const lib = @import("lib");
 const enums = lib.enums;
 const ct = lib.@"comptime";
 
-const typing = @import("typing.zig");
-const Type = typing.Type;
+const @"type" = @import("type.zig");
+const Type = @"type".Type;
 
 pub const definitions = Functions(&.{
     .{
@@ -86,7 +86,7 @@ fn Functions(comptime specs: []const Spec) type {
     const Definition = struct {
         id: FnId,
         args: []const Spec.Arg,
-        return_type: typing.Type,
+        return_type: Type,
     };
 
     // For each spec (by original index), which unique-name index (i.e. FnId) it maps to.
@@ -184,5 +184,5 @@ const Spec = struct {
 
     name: []const u8,
     args: []const Arg,
-    return_type: typing.Type,
+    return_type: Type,
 };
