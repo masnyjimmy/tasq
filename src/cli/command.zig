@@ -10,6 +10,8 @@ const Context = Command.Context;
 
 const task_mod = @import("task.zig");
 
+const DEFAULT_FILEPATH = "tasq";
+
 fn GlobalPreHandler(ctx: *const Context) !void {
     if (ctx.root != ctx.current or ctx.args.len == 0) {
         if (ctx.has("help")) {
@@ -37,7 +39,12 @@ fn RunTask(ctx: *const Context) !void {
     const task = ctx.args[0];
     const args = ctx.args[1..];
 
-    try task_mod.runTask(&ctx.app, task, args);
+    try task_mod.runTask(
+        &ctx.app,
+        ctx.getValueT("file", .string) orelse DEFAULT_FILEPATH,
+        task,
+        args,
+    );
 }
 
 fn ShowUsage(ctx: *const Context) !void {
@@ -48,11 +55,18 @@ fn ShowUsage(ctx: *const Context) !void {
 
     const taskName = ctx.args[0];
 
-    try task_mod.printTaskUsage(&ctx.app, taskName);
+    try task_mod.printTaskUsage(
+        &ctx.app,
+        ctx.getValueT("file", .string) orelse DEFAULT_FILEPATH,
+        taskName,
+    );
 }
 
 fn RunList(ctx: *const Context) !void {
-    try task_mod.printTasksList(&ctx.app);
+    try task_mod.printTasksList(
+        &ctx.app,
+        ctx.getValueT("file", .string) orelse DEFAULT_FILEPATH,
+    );
 }
 
 fn RunLsp(ctx: *const Context) !void {
@@ -68,6 +82,7 @@ fn Dump(ctx: *const Context) !void {
         source,
         tree,
         ir,
+        spans,
 
         const string = blk: {
             var out: []const u8 = "";
@@ -96,7 +111,12 @@ fn Dump(ctx: *const Context) !void {
     const target = Target.map.get(ctx.args[0]) orelse return ctx.fail("Invalid arguments, required [{s}]", .{Target.string});
 
     const cwd = std.Io.Dir.cwd();
-    const source = try cwd.readFileAlloc(ctx.app.io, ctx.app.source_file_path, ctx.app.allocator, .unlimited);
+    const source = try cwd.readFileAlloc(
+        ctx.app.io,
+        ctx.getValueT("file", .string) orelse DEFAULT_FILEPATH,
+        ctx.app.allocator,
+        .unlimited,
+    );
     defer ctx.app.allocator.free(source);
 
     var diagnostics: compiler.Diagnostics = .init(ctx.app.allocator);
@@ -131,13 +151,18 @@ fn Dump(ctx: *const Context) !void {
                 return;
             }
 
+            if (t == .spans) {
+                lib.debug.dump(span_registry.nodes, 4);
+                return;
+            }
+
             var sema = compiler.Sema.init(
                 &arena,
                 &span_registry,
                 d,
             );
 
-            const ir = try sema.analyse(ast);
+            const ir = try sema.analyse(&ast);
             lib.debug.dump(ir, 4);
         }
     };
@@ -149,7 +174,7 @@ fn Dump(ctx: *const Context) !void {
     try dd.dump_diagnostics(
         ctx.app.allocator,
         source,
-        ctx.app.source_file_path,
+        ctx.getValueT("file", .string) orelse DEFAULT_FILEPATH,
         &diagnostics,
         ctx.app.printer,
     );
@@ -163,6 +188,12 @@ pub fn buildCommand(allocator: std.mem.Allocator) !*Command {
         .run = .set(RunTask),
         .unknown_flag_behaviour = .as_positional,
     });
+
+    try rootCmd.addFlag(.{
+        .name = "file",
+        .brief = "Target file, overrides tasq",
+        .global = true,
+    }, .string);
 
     try rootCmd.addFlag(.{
         .name = "help",
