@@ -5,7 +5,8 @@ const Scope = inter.symbol.Scope;
 
 const compiler = @import("compiler");
 const ir = compiler.ir;
-const typing = compiler.typing;
+const Type = compiler.Type;
+const ArgType = compiler.ArgType;
 const Value = compiler.Value;
 
 const conzole = @import("conzole");
@@ -39,12 +40,12 @@ const style = struct {
 
 const DESCRIPTION_TEXT_OFFSET = 10;
 
-pub fn compileRunfile(ctx: *const Context) !*const compiler.ir.File {
+pub fn compileRunfile(ctx: *const Context, source_filepath: []const u8) !*const compiler.ir.File {
     const cwd = std.Io.Dir.cwd();
 
     const content = try cwd.readFileAlloc(
         ctx.io,
-        ctx.source_file_path,
+        source_filepath,
         ctx.allocator,
         .unlimited,
     );
@@ -52,7 +53,7 @@ pub fn compileRunfile(ctx: *const Context) !*const compiler.ir.File {
 
     const result = try ctx.workspace.openFile(
         ctx.allocator,
-        ctx.source_file_path,
+        source_filepath,
         content,
         0,
     );
@@ -83,8 +84,8 @@ pub fn compileRunfile(ctx: *const Context) !*const compiler.ir.File {
     return ctx.workspace.view(result.id, .ir).source;
 }
 
-pub fn printTasksList(ctx: *const Context) !void {
-    const file = try compileRunfile(ctx);
+pub fn printTasksList(ctx: *const Context, source_filepath: []const u8) !void {
+    const file = try compileRunfile(ctx, source_filepath);
 
     const p = ctx.printer;
 
@@ -134,8 +135,8 @@ pub fn printTasksList(ctx: *const Context) !void {
     }
 }
 
-pub fn printTaskUsage(ctx: *const Context, task_id: []const u8) !void {
-    const file = try compileRunfile(ctx);
+pub fn printTaskUsage(ctx: *const Context, source_filepath: []const u8, task_id: []const u8) !void {
+    const file = try compileRunfile(ctx, source_filepath);
 
     const task = file.findTask(.parse(task_id)) orelse return TaskError.TaskNotFound;
 
@@ -392,7 +393,7 @@ const TaskArgumentParser = struct {
     }
 
     const PrintableArgType = struct {
-        type: typing.ArgType,
+        type: ArgType,
         int: bool,
 
         pub fn format(self: PrintableArgType, w: *std.Io.Writer) !void {
@@ -687,8 +688,8 @@ const TaskArgumentParser = struct {
     }
 };
 
-pub fn runTask(ctx: *const Context, task_id: []const u8, args: []const []const u8) !void {
-    const file = try compileRunfile(ctx);
+pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []const u8, args: []const []const u8) !void {
+    const file = try compileRunfile(ctx, source_filepath);
 
     const task = file.findTask(.parse(task_id)) orelse {
         try ctx.printer.printStyled(ctx.allocator, style.err, "Task '{s}' not found\n", .{task_id});
