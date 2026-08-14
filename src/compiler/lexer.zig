@@ -26,7 +26,9 @@ const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "number", .number_type },
     .{ "null", .null_kw },
     .{ "switch", .switch_kw },
-    // .{ "for", .for_kw },
+    .{ "for", .for_kw },
+    .{ "continue", .continue_kw },
+    .{ "break", .break_kw },
 });
 
 // ── Lexer ─────────────────────────────────────────────────────────────────────
@@ -336,6 +338,9 @@ pub const Lexer = struct {
             .or_kw,
             .not_kw,
             .switch_kw,
+            .for_kw,
+            .continue_kw,
+            .break_kw,
             => {
                 try self.span_registry.put(.keyword, span);
             },
@@ -347,6 +352,9 @@ pub const Lexer = struct {
             },
             .colon_eq, .eq_eq, .plus, .minus, .star, .slash, .bang_eq, .lt, .lt_eq, .gt, .gt_eq, .triple_dot => {
                 try self.span_registry.put(.operator, span);
+            },
+            .quote, .apostrophe, .backtick => {
+                try self.span_registry.put(.string, span);
             },
             else => {},
         }
