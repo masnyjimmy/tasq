@@ -5,8 +5,7 @@ const lib = @import("lib");
 const compiler = @import("compiler");
 const platform = compiler.platform;
 const functions = compiler.functions;
-const typing = compiler.typing;
-const Value = typing.Value;
+const Value = compiler.Value;
 
 const Interpreter = @import("interpreter.zig");
 
