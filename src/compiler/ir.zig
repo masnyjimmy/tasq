@@ -3,31 +3,38 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const functions = @import("functions.zig");
-const typing = @import("typing.zig");
+
+const @"type" = @import("type.zig");
+const Type = @"type".Type;
+const ArgType = @"type".ArgType;
+
+const value = @import("value.zig");
+const Value = value.Value;
+
 const attrib = @import("attributes.zig");
 const opt = @import("options.zig");
 
 const Symbol = @import("symbol.zig").Symbol;
 const Scope = @import("scope.zig").Scope;
 
-pub const Type = typing.Type;
-const ArgType = typing.ArgType;
-
 const TaskId = @import("taskId.zig");
 
 pub const File = struct {
-    // TODO: implement
     scope: *Scope,
     options: Options,
     decls: []*Decl,
     groups: []*Group,
     tasks: []*Task,
 
+    pub fn findGroup(self: *const File, group: []const u8) ?*Group {
+        return self.scope.resolve(group, .group);
+    }
+
     pub fn findTask(self: *const File, task_id: TaskId) ?*Task {
         const scope = blk: {
             if (task_id.groupName) |group_name| {
-                if (self.scope.resolve(group_name, .group)) |group|
-                    break :blk group.details.group.origin.scope;
+                if (self.scope.resolve(group_name, .group)) |symbol|
+                    break :blk symbol.origin.group.scope;
 
                 return null;
             }
@@ -36,46 +43,17 @@ pub const File = struct {
         };
 
         if (scope.resolveLocal(task_id.name, .task)) |task| {
-            return task.details.task.origin;
+            return task.origin.task;
         }
 
-        return null;
-    }
-
-    pub fn getGroup(self: *const File, groupName: []const u8) ?*Group {
-        for (self.groups) |group| {
-            if (group.name) |gname|
-                if (std.mem.eql(u8, gname, groupName))
-                    return group;
-        }
-
-        return null;
-    }
-
-    pub fn getTask(self: *const File, name: []const u8, groupName: ?[]const u8) ?*Task {
-        if (groupName) |gn| {
-            if (self.getGroup(gn)) |group| {
-                return group.getTask(name);
-            }
-        } else {
-            for (self.tasks) |task| {
-                if (std.mem.eql(u8, task.name, name)) {
-                    return task;
-                }
-            }
-        }
         return null;
     }
 };
 
+/// compiled settings
 pub const Options = struct {
     shell: []const []const u8,
 };
-
-// pub const SetDecl = struct {
-//     option: opt.OptionId,
-//     payload: opt.OptionPayload,
-// };
 
 pub const Group = struct {
     name: ?[]const u8, // null = anonymous
@@ -95,8 +73,6 @@ pub const Group = struct {
     }
 };
 
-const ResolvedTaskAttributes = std.EnumMap(attrib.TaskAttributeType, attrib.TaskAttributeValue);
-
 pub const Task = struct {
     ast_ref: *const ast.Task,
     name: []const u8,
@@ -108,11 +84,10 @@ pub const Task = struct {
 };
 
 // resolved argument — attributes unpacked into concrete fields
-
 pub const Argument = struct {
     name: []const u8,
-    type: typing.ArgType,
-    default: ?typing.Value,
+    type: ArgType,
+    default: ?Value,
     is_positional: bool,
 
     short: ?u8,
@@ -124,19 +99,7 @@ pub const Argument = struct {
     int: bool,
 };
 
-pub const InterStringSeg = union(enum) {
-    lit: []const u8,
-    expr: Expr,
-};
-
-pub const String = union(enum) {
-    lit: []const u8,
-    inter: []InterStringSeg,
-};
-
 //=========== Statements ===============
-
-//TODO: remove statement block - useless
 
 pub const StatementBlock = struct {
     scope: *Scope,
@@ -147,29 +110,42 @@ pub const Statement = union(enum) {
     decl: *Decl,
     process: ProcessStmt,
     task_call: TaskCall,
-    if_stmt: IfStmt,
+    for_stmt: ForStmt,
     switch_stmt: SwitchStmt,
-    expr: Expr,
+    if_stmt: IfStmt,
+    expr: Expr, // else
+};
+
+pub const Capture = struct {
+    name: []const u8,
+    type: Type,
+};
+
+pub const ForStmt = struct {
+    subjects: []const Expr,
+    captures: []?*Capture,
+    body: StatementBlock,
 };
 
 pub const SwitchStmt = struct {
-    pub const CasesStorage = std.hash_map.HashMapUnmanaged(
-        typing.Value,
-        StatementBlock,
-        typing.ValueContext,
-        60,
-    );
+    pub const CasesStorage = SwitchCasesStorage(StatementBlock);
 
     subject: Expr,
     cases: CasesStorage,
-    else_case: StatementBlock,
+    else_case: ?StatementBlock,
+};
+
+pub const IfStmt = struct {
+    cond: Expr,
+    then: StatementBlock,
+    else_: ?StatementBlock,
 };
 
 pub const Decl = struct {
     name: []const u8,
     value: Expr,
     type: Type,
-    scope: *Scope, //TODO: consider moving it into symbol details, or somewhere else
+    scope: *Scope,
     is_static: bool, // inferred by sema
 };
 
@@ -194,12 +170,7 @@ pub const TaskCall = struct {
 
 pub const TaskCallArgs = std.StringHashMap(Expr);
 
-pub const IfStmt = struct {
-    cond: Expr,
-    then: StatementBlock,
-    else_: ?StatementBlock,
-};
-//========== expressions =============
+//=============== expressions ==================
 
 pub const Expr = union(enum) {
     pub const List = struct {
@@ -221,7 +192,49 @@ pub const Expr = union(enum) {
     unary: *UnaryExpr,
     if_expr: *IfExpr,
     switch_expr: *SwitchExpr,
+    for_expr: *ForExpr,
     builtin_call: BuiltinCall,
+    @"continue",
+    @"break",
+};
+
+pub const ForExpr = struct {
+    subjects: []const Expr,
+    captures: []?*Capture,
+    scope: *Scope,
+    body: Expr,
+    type: Type,
+};
+
+pub const SwitchExpr = struct {
+    pub const CasesStorage = SwitchCasesStorage(Expr);
+    subject: Expr,
+    cases: CasesStorage,
+    else_case: Expr,
+    type: Type,
+};
+
+pub fn SwitchCasesStorage(comptime T: type) type {
+    return std.hash_map.HashMapUnmanaged(
+        Value,
+        T,
+        Value.MapContext,
+        60,
+    );
+}
+
+pub const IfExpr = struct {
+    cond: Expr,
+    then: Expr,
+    @"else": Expr,
+    type: Type, // both branches must match — filled by sema
+};
+
+pub const String = []const StringPart;
+
+pub const StringPart = union(enum) {
+    lit: []const u8,
+    expr: Expr,
 };
 
 // after sema, ident carries its resolved symbol — no more string lookup at runtime
@@ -251,22 +264,3 @@ pub const UnaryExpr = struct {
 };
 
 pub const UnaryOp = ast.UnaryOp;
-
-pub const IfExpr = struct {
-    cond: Expr,
-    then: Expr,
-    else_: Expr,
-    type: Type, // both branches must match — filled by sema
-};
-
-pub const SwitchExpr = struct {
-    pub const CasesStorage = std.hash_map.HashMapUnmanaged(
-        typing.Value,
-        Expr,
-        typing.ValueContext,
-        60,
-    );
-    subject: Expr,
-    cases: CasesStorage,
-    else_case: Expr,
-};
