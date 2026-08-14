@@ -1,9 +1,10 @@
 const std = @import("std");
 
 const compiler = @import("compiler");
+const Type = compiler.Type;
+const ArgType = compiler.ArgType;
 const Value = compiler.Value;
 const ir = compiler.ir;
-const typing = compiler.typing;
 const binary = compiler.binary;
 
 pub const Error = binary.Error;
@@ -43,7 +44,7 @@ fn evalArithmetic(op: ir.BinaryOp, left: Value, right: Value) Value {
     const T = blk: {
         const left_type = left.typeOf();
         const right_type = right.typeOf();
-        std.debug.assert(typing.Type.eq(left_type, right_type));
+        std.debug.assert(Type.eq(left_type, right_type));
 
         break :blk left_type;
     };
@@ -118,6 +119,7 @@ fn evalEquality(op: ir.BinaryOp, left: Value, right: Value) Value {
 
                 break :blk true;
             },
+            .noreturn, .any => unreachable,
             inline else => |_, tag| {
                 const left_value = @field(left, @tagName(tag));
                 const right_value = @field(right, @tagName(tag));
@@ -148,7 +150,7 @@ fn evalLogical(op: ir.BinaryOp, left: Value, right: Value) Value {
     return .{ .bool = result };
 }
 
-fn coerce(v: Value, target: typing.TypeTag) Value {
+fn coerce(v: Value, target: std.meta.Tag(Type)) Value {
     const v_type = v.typeOf();
     if (v_type == target) return v;
 
