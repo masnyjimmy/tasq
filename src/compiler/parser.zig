@@ -1,22 +1,23 @@
-const ast = @import("ast.zig");
 const std = @import("std");
 
-const lex = @import("lexer.zig");
-const Lexer = lex.Lexer;
+const ast = @import("ast.zig");
+
+const lexer_mod = @import("lexer.zig");
+const Lexer = lexer_mod.Lexer;
 
 const text = @import("text.zig");
 
-const token = @import("token.zig");
-const Token = token.Token;
-const TokenKind = token.TokenKind;
+const token_mod = @import("token.zig");
+const Token = token_mod.Token;
+const TokenKind = token_mod.TokenKind;
 
 const Diagnostics = @import("Diagnostics.zig");
 
-const lib = @import("lib");
-
 const Span = @import("span.zig");
-const SpanId = Span.Registry.NodeId;
+const NodeId = Span.Registry.NodeId;
 const Wrapped = Span.Registry.Wrapped;
+
+const lib = @import("lib");
 
 const ParseError = error{
     UnexpectedToken,
@@ -28,7 +29,17 @@ fn parseTaskCall(value: []const u8) struct { []const u8, []const u8 } {
     return .{ value[0..dot_index], value[dot_index..] };
 }
 
-//TODO: make parser conserve order of nodes
+const ParseAs = enum {
+    statement,
+    expr,
+
+    fn BranchT(comptime as: @This()) type {
+        return switch (as) {
+            .statement => ast.StatementBlock,
+            .expr => ast.Expr,
+        };
+    }
+};
 
 pub const Parser = struct {
     arena: *std.heap.ArenaAllocator,
@@ -57,121 +68,33 @@ pub const Parser = struct {
         };
     }
 
-    fn create(self: *Parser, comptime T: type, value: T) !*T {
-        const ptr = try self.arena.allocator().create(T);
-        ptr.* = value;
-        return ptr;
-    }
-
-    /// Shared builder for every binary-expr precedence level.
-    fn makeBinary(
-        self: *Parser,
-        start: u32,
-        op: ast.BinaryOp,
-        left: Wrapped(ast.Expr),
-        right: Wrapped(ast.Expr),
-    ) ParseError!Wrapped(ast.Expr) {
-        const node = try self.arena.allocator().create(ast.BinaryExpr);
-        node.* = .{ .op = op, .left = left.payload, .right = right.payload };
-
-        const id = try self.span_registry.addNode(
-            self.spanFrom(start),
-            .{ .expr = .{
-                .binary = .{
-                    .left = left.id,
-                    .right = right.id,
-                },
-            } },
-        );
-
-        return .wrap(id, .{ .binary = node });
-    }
-
-    // ── Span helper ───────────────────────────────────────────────────────────
-
-    fn spanFrom(self: *Parser, start: u32) Span {
-        const end = if (self.current) |p| p.span.start + p.span.len else self.next.span.start;
-        return .{
-            .start = start,
-            .len = end - start,
-        };
-    }
-
-    fn peek(self: *Parser) TokenKind {
-        return self.next.kind;
-    }
-
-    fn setNextFetchCurrent(self: *Parser, tok: Token) Token {
-        const curr = self.next;
-        self.current = curr;
-        self.next = tok;
-        return curr;
-    }
-
-    fn retreat(self: *Parser) !Token {
-        if (self.current) |prev| {
-            self.lexer.pos = self.next.span.start;
-            self.next = prev;
-            self.current = null;
-            return prev;
-        } else {
-            return error.UnableToRetreat;
-        }
-    }
-
-    fn advance(self: *Parser) !Token {
-        const tok = try self.lexer.next();
-        return self.setNextFetchCurrent(tok);
-    }
-
-    fn expect(self: *Parser, kind: TokenKind) ParseError!Token {
-        if (self.next.kind == kind) return self.advance();
-
-        try self.addDiagnostic(
-            .err,
-            "expected '{s}', found {s}",
-            .{ @tagName(kind), @tagName(self.next.kind) },
-        );
-
-        return ParseError.UnexpectedToken;
-    }
-
-    fn eat(self: *Parser, kind: TokenKind) !?Token {
-        if (self.next.kind == kind) return try self.advance();
-        return null;
-    }
-
-    fn resyncFromRaw(self: *Parser) !void {
-        self.next = try self.lexer.next();
-    }
-
-    fn resyncToRaw(self: *Parser) void {
-        if (self.current) |curr|
-            self.lexer.pos = curr.span.end();
-    }
-
     fn readCharacter(self: *Parser) ParseError!Token {
         var lexer = self.lexer.stringLexer();
+
+        self.resyncToRaw();
         const tok = try lexer.lexCharacter();
+        try self.resyncFromRaw(tok);
+
         if (tok.kind != .char) {
             try self.addDiagnostic(.err, "expected char, found '{s}'", .{@tagName(tok.kind)});
             return ParseError.UnexpectedToken;
         }
 
-        try self.resyncFromRaw();
         return tok;
     }
 
     fn readString(self: *Parser, terminator: []const u8, comptime multiline: bool) ParseError!Token {
         var lexer = self.lexer.stringLexer();
+
+        self.resyncToRaw();
         const tok = try lexer.lexString(&.{terminator}, multiline);
+        try self.resyncFromRaw(tok);
 
         if (tok.kind != .string) {
             try self.addDiagnostic(.err, "expected string, found '{s}'", .{@tagName(tok.kind)});
             return ParseError.UnexpectedToken;
         }
 
-        try self.resyncFromRaw();
         return tok;
     }
 
@@ -211,10 +134,10 @@ pub const Parser = struct {
     pub fn parseFile(self: *Parser) ParseError!ast.File {
         const start = self.currentPos();
 
-        var options = try std.ArrayList(ast.Set).initCapacity(self.arena.allocator(), 1);
-        var decls = try std.ArrayList(ast.Decl).initCapacity(self.arena.allocator(), 1);
-        var groups = try std.ArrayList(ast.Group).initCapacity(self.arena.allocator(), 8);
-        var tasks = try std.ArrayList(ast.Task).initCapacity(self.arena.allocator(), 5);
+        var options: std.ArrayList(ast.Set) = try .initCapacity(self.arena.allocator(), 1);
+        var decls: std.ArrayList(ast.Decl) = try .initCapacity(self.arena.allocator(), 1);
+        var groups: std.ArrayList(ast.Group) = try .initCapacity(self.arena.allocator(), 8);
+        var tasks: std.ArrayList(ast.Task) = try .initCapacity(self.arena.allocator(), 5);
 
         while (self.peek() != .eof) {
             const attrs = try self.collectAttributes();
@@ -292,91 +215,6 @@ pub const Parser = struct {
         };
     }
 
-    fn collectAttributes(self: *Parser) ParseError![]ast.Attribute {
-        var attributes = try std.ArrayList(ast.Attribute).initCapacity(self.arena.allocator(), 1);
-
-        while (try self.eat(.lbracket) != null) {
-            const attr = try self.parseAttribute();
-            try attributes.appendSlice(self.arena.allocator(), attr);
-        }
-
-        return try attributes.toOwnedSlice(self.arena.allocator());
-    }
-
-    fn parseAttribute(self: *Parser) ParseError![]ast.Attribute {
-        var attrs = try std.ArrayList(ast.Attribute).initCapacity(self.arena.allocator(), 1);
-
-        while (true) {
-            const attr_start = self.currentPos();
-            const name = self.expect(.ident) catch |err| switch (err) {
-                ParseError.UnexpectedToken => {
-                    switch (try self.synchronizeTo(&.{ .comma, .rbracket, .eof })) {
-                        .comma => {
-                            // skip lbracket and start over
-                            _ = try self.advance();
-                            continue;
-                        },
-                        else => break,
-                    }
-                },
-                else => return err,
-            };
-
-            var value: ?ast.MetaValue = null;
-            var value_id: ?SpanId = null;
-
-            if (try self.eat(.colon)) |_| {
-                const wrapped = self.parseMetaValue() catch |err| switch (err) {
-                    ParseError.UnexpectedToken => {
-                        switch (try self.synchronizeTo(&.{ .comma, .rbracket, .eof })) {
-                            .comma => {
-                                // skip lbracket and start over
-                                _ = try self.advance();
-                                continue;
-                            },
-                            else => break,
-                        }
-                    },
-                    else => return err,
-                };
-                value = wrapped.payload;
-                value_id = wrapped.id;
-            }
-
-            const id = try self.span_registry.addNode(
-                self.spanFrom(attr_start),
-                .{ .attribute = .{ .name = name.span, .value = value_id } },
-            );
-
-            try attrs.append(
-                self.arena.allocator(),
-                .{
-                    .id = id,
-                    .name = name.lexeme,
-                    .value = value,
-                },
-            );
-
-            if (try self.eat(.comma) == null) {
-                break;
-            }
-        }
-
-        _ = self.expect(.rbracket) catch |err| switch (err) {
-            ParseError.UnexpectedToken => {
-                switch (try self.synchronizeTo(&.{.rbracket})) {
-                    .rbracket => {
-                        _ = try self.advance();
-                    },
-                    else => {},
-                }
-            },
-            else => return err,
-        };
-
-        return attrs.toOwnedSlice(self.arena.allocator());
-    }
-
     fn parseGroup(self: *Parser, attrs: []ast.Attribute, start: u32) ParseError!ast.Group {
         const name = try self.eat(.ident);
 
@@ -390,8 +228,8 @@ pub const Parser = struct {
 
         _ = try self.expect(.lbrace);
 
-        var decls = try std.ArrayList(ast.Decl).initCapacity(self.arena.allocator(), 5);
-        var tasks = try std.ArrayList(ast.Task).initCapacity(self.arena.allocator(), 1);
+        var decls: std.ArrayList(ast.Decl) = try .initCapacity(self.arena.allocator(), 5);
+        var tasks: std.ArrayList(ast.Task) = try .initCapacity(self.arena.allocator(), 1);
 
         const body_start = self.currentPos();
 
@@ -407,7 +245,6 @@ pub const Parser = struct {
                     }
 
                     _ = try self.expect(.colon_eq);
-                    //TODO: skip declaration if expression is invalid instead of poison
                     const value = try self.parseExpr();
 
                     const id = try self.span_registry.addNode(
@@ -469,14 +306,12 @@ pub const Parser = struct {
             args_span = self.spanFrom(args_start);
         }
 
-        _ = try self.expect(.lbrace);
-
         // FIX: body_start must be captured *after* consuming '{', otherwise
         // the registered body span (and the .wrap node below) includes the
         // brace itself -- inconsistent with parseGroup/parseSet, which both
         // capture body_start post-brace.
 
-        const body = try self.parseStatements();
+        const body = try self.parseStatementBlock(false);
 
         const id = try self.span_registry.addNode(
             self.spanFrom(start),
@@ -496,365 +331,144 @@ pub const Parser = struct {
         };
     }
 
-    fn parseStatements(self: *Parser) ParseError!Wrapped([]ast.Statement) {
-        var stmts = try std.ArrayList(ast.Statement).initCapacity(self.arena.allocator(), 1);
+    fn parseSet(self: *Parser, attributes: []ast.Attribute, start: u32) ParseError!ast.Set {
+        var decls: std.ArrayList(ast.Set.SetDecl) = .empty;
 
+        const body_start = self.currentPos();
+
+        if (try self.eat(.lbrace)) |_| { // block
+            while (try self.eat(.rbrace) == null) {
+                const decl = try self.parseSetDecl();
+                try decls.append(self.arena.allocator(), decl);
+            }
+        } else {
+            const decl = try self.parseSetDecl();
+            try decls.append(self.arena.allocator(), decl);
+        }
+
+        const body_span = self.spanFrom(body_start);
+
+        const id = try self.span_registry.addNode(
+            self.spanFrom(start),
+            .{ .set = .{ .body = body_span } },
+        );
+
+        return .{
+            .id = id,
+            .attrs = attributes,
+            .body = try decls.toOwnedSlice(self.arena.allocator()),
+        };
+    }
+
+    fn parseSetDecl(self: *Parser) ParseError!ast.Set.SetDecl {
         const start = self.currentPos();
-        var child_ids = try self.span_registry.getArrayList(SpanId, 1);
-        errdefer child_ids.deinit();
 
-        while (try self.eat(.rbrace) == null) {
-            const wrapped = self.parseOneStatement() catch |err| switch (err) {
+        const name = try self.expect(.ident);
+
+        var value: ?ast.MetaValue = null;
+        var value_id: ?NodeId = null;
+
+        if (try self.eat(.eq)) |_| {
+            const wrapped = try self.parseMetaValue();
+            value = wrapped.payload;
+            value_id = wrapped.id;
+        }
+
+        const id = try self.span_registry.addNode(
+            self.spanFrom(start),
+            .{ .set_decl = .{ .name = name.span, .value = value_id } },
+        );
+
+        return .{
+            .id = id,
+            .name = name.lexeme,
+            .value = value,
+        };
+    }
+
+    fn collectAttributes(self: *Parser) ParseError![]ast.Attribute {
+        var attributes = try std.ArrayList(ast.Attribute).initCapacity(self.arena.allocator(), 1);
+
+        while (try self.eat(.lbracket) != null) {
+            const attr = try self.parseAttribute();
+            try attributes.appendSlice(self.arena.allocator(), attr);
+        }
+
+        return try attributes.toOwnedSlice(self.arena.allocator());
+    }
+
+    fn parseAttribute(self: *Parser) ParseError![]ast.Attribute {
+        var attrs = try std.ArrayList(ast.Attribute).initCapacity(self.arena.allocator(), 1);
+
+        while (true) {
+            const attr_start = self.currentPos();
+            const name = self.expect(.ident) catch |err| switch (err) {
                 ParseError.UnexpectedToken => {
-                    switch (try self.synchronizeTo(&.{ .backtick, .ident, .dcolon, .if_kw, .rbrace, .eof })) {
-                        .rbrace => {
+                    switch (try self.synchronizeTo(&.{ .comma, .rbracket, .eof })) {
+                        .comma => {
+                            // skip lbracket and start over
                             _ = try self.advance();
-                            break;
+                            continue;
                         },
-                        .eof => break,
-                        else => continue,
+                        else => break,
                     }
                 },
                 else => return err,
             };
-            try child_ids.append(wrapped.id);
-            try stmts.append(self.arena.allocator(), wrapped.payload);
-        }
 
-        const id = try self.span_registry.addNode(
-            self.spanFrom(start),
-            .{ .block = .{ .stmts = try child_ids.toOwnedSlice() } },
-        );
+            var value: ?ast.MetaValue = null;
+            var value_id: ?NodeId = null;
 
-        return .wrap(id, try stmts.toOwnedSlice(self.arena.allocator()));
-    }
-
-    fn parseOneStatement(self: *Parser) ParseError!Wrapped(ast.Statement) {
-        switch (self.peek()) {
-            .backtick => {
-                try self.span_registry.put(.string, self.next.span); // opening backtick highlight
-
-                const string = try self.parseStringExpr("`", false);
-
-                const backtick = try self.expect(.backtick);
-                try self.span_registry.put(.string, backtick.span); // closing backtick highlight
-
-                return .wrap(string.id, .{ .process = string.payload });
-            },
-            .ident => {
-                const start = self.currentPos();
-                const ident_tok = try self.advance();
-
-                if (try self.eat(.colon_eq)) |_| {
-                    const value = try self.parseExpr();
-
-                    const id = try self.span_registry.addNode(
-                        self.spanFrom(start),
-                        .{ .decl = .{ .name = ident_tok.span, .value = value.id } },
-                    );
-
-                    return .wrap(id, .{ .decl = .{
-                        .id = id,
-                        .name = ident_tok.lexeme,
-                        .value = value.payload,
-                    } });
-                } else { // must be task call
-                    var scope: ast.TaskCallScope = .closest;
-                    var group_span: ?Span = null;
-                    var task = ident_tok;
-
-                    if (try self.eat(.dcolon)) |_| {
-                        const group = task;
-                        task = try self.expect(.ident);
-                        group_span = group.span;
-                        scope = .{ .group = group.lexeme };
-                    }
-
-                    const args_start = self.currentPos();
-                    const args = try self.parseTaskCallArgs();
-
-                    const args_span = self.spanFrom(args_start);
-                    const span = self.spanFrom(start);
-
-                    const id = try self.span_registry.addNode(span, .{ .task_call = .{
-                        .group = group_span,
-                        .task = task.span,
-                        .args = args_span,
-                    } });
-
-                    return .wrap(id, .{ .task_call = .{
-                        .id = id,
-                        .task = task.lexeme,
-                        .scope = scope,
-                        .args = args,
-                    } });
-                }
-            },
-            // ::task => root task call
-            .dcolon => {
-                const start = self.currentPos();
-                _ = try self.advance();
-                const ident_tok = try self.expect(.ident);
-
-                const args_start = self.currentPos();
-                const args = try self.parseTaskCallArgs();
-
-                const args_span = self.spanFrom(args_start);
-                const span = self.spanFrom(start);
-
-                const id = try self.span_registry.addNode(span, .{ .task_call = .{
-                    .group = null,
-                    .task = ident_tok.span,
-                    .args = args_span,
-                } });
-
-                return .wrap(id, .{
-                    .task_call = .{
-                        .id = id,
-                        .task = ident_tok.lexeme,
-                        .scope = .root,
-                        .args = args,
-                    },
-                });
-            },
-            .if_kw => {
-                const Helper = struct {
-                    fn statementToBlock(parser: *Parser, in: Wrapped(ast.Statement), span: Span) !Wrapped([]ast.Statement) {
-                        var spans = try parser.span_registry.getArrayList(SpanId, 1);
-                        spans.appendAssumeCapacity(in.id);
-
-                        const block = try parser.arena.allocator().alloc(ast.Statement, 1);
-                        block[0] = in.payload;
-
-                        const id = try parser.span_registry.addNode(
-                            span,
-                            .{
-                                .block = .{
-                                    .stmts = try spans.toOwnedSlice(),
-                                },
+            if (try self.eat(.colon)) |_| {
+                const wrapped = self.parseMetaValue() catch |err| switch (err) {
+                    ParseError.UnexpectedToken => {
+                        switch (try self.synchronizeTo(&.{ .comma, .rbracket, .eof })) {
+                            .comma => {
+                                // skip lbracket and start over
+                                _ = try self.advance();
+                                continue;
                             },
-                        );
-
-                        return .wrap(id, block);
-                    }
-                };
-
-                const if_kw = try self.advance();
-
-                const cond = try self.parseExpr();
-
-                const then, const then_id = then: {
-                    const wrapped = if (try self.eat(.lbrace)) |_|
-                        try self.parseStatements()
-                    else blk: {
-                        const start = self.currentPos();
-                        const single = try self.parseOneStatement();
-                        break :blk try Helper.statementToBlock(self, single, self.spanFrom(start));
-                    };
-
-                    break :then .{ wrapped.payload, wrapped.id };
-                };
-
-                var else_: ?[]ast.Statement = null;
-                var else_id: ?SpanId = null;
-
-                if (try self.eat(.else_kw)) |_| {
-                    const wrapped = if (try self.eat(.lbrace)) |_|
-                        try self.parseStatements()
-                    else blk: {
-                        const start = self.currentPos();
-                        const wrapped = try self.parseOneStatement();
-                        break :blk try Helper.statementToBlock(self, wrapped, self.spanFrom(start));
-                    };
-
-                    else_ = wrapped.payload;
-                    else_id = wrapped.id;
-                }
-
-                const span = self.spanFrom(if_kw.span.start);
-
-                const id = try self.span_registry.addNode(span, .{ .if_stmt = .{
-                    .cond = cond.id,
-                    .then = then_id,
-                    .else_ = else_id,
-                } });
-
-                return .wrap(id, .{
-                    .if_stmt = .{
-                        .id = id,
-                        .cond = cond.payload,
-                        .then = then,
-                        .else_ = else_,
-                    },
-                });
-            },
-            .switch_kw => {
-                const switch_kw = self.expect(.switch_kw) catch unreachable;
-
-                _ = try self.expect(.lparen);
-
-                const subject = try self.parseExpr();
-
-                _ = try self.expect(.rparen);
-
-                _ = try self.expect(.lbrace);
-
-                var cases: std.ArrayList(ast.SwitchStmt.Case) = try .initCapacity(self.arena.allocator(), 0);
-
-                while (try self.eat(.rbrace) == null) {
-                    const start = self.currentPos();
-
-                    const pattern: ast.SwitchPattern, const pattern_span = blk: {
-                        if (try self.eat(.else_kw)) |kw| {
-                            const id = try self.span_registry.addNode(kw.span, .leaf);
-                            break :blk .{ .else_, id };
+                            else => break,
                         }
-
-                        const expr = try self.parseExpr();
-                        break :blk .{ .{ .expr = expr.payload }, expr.id };
-                    };
-
-                    _ = try self.expect(.fat_arrow);
-
-                    const block = try self.parseStatementBlock(true);
-
-                    const id = try self.span_registry.addNode(
-                        self.spanFrom(start),
-                        .{ .switch_case = .{
-                            .pattern = pattern_span,
-                            .body = block.id,
-                        } },
-                    );
-
-                    try cases.append(
-                        self.arena.allocator(),
-                        .{
-                            .id = id,
-                            .pattern = pattern,
-                            .body = block.payload,
-                        },
-                    );
-
-                    if (try self.eat(.comma) == null) {
-                        _ = try self.expect(.rbrace);
-                        break;
-                    }
-                }
-
-                const id = try self.span_registry.addNode(
-                    self.spanFrom(switch_kw.span.start),
-                    .{
-                        .switch_stmt = .{
-                            .subject = subject.id,
-                        },
                     },
-                );
-
-                return .wrap(id, .{
-                    .switch_stmt = .{
-                        .id = id,
-                        .subject = subject.payload,
-                        .cases = try cases.toOwnedSlice(self.arena.allocator()),
-                    },
-                });
-            },
-            else => {
-                const expr = try self.parseExpr();
-                return .wrap(expr.id, .{
-                    .expr = expr.payload,
-                });
-                // try self.addDiagnostic(.err, "expected statement, found '{s}'", .{@tagName(self.next.kind)});
-                // return ParseError.UnexpectedToken;
-            },
-        }
-    }
-
-    fn parseStatementBlock(self: *Parser, comptime allow_single: bool) ParseError!Wrapped(ast.StatementBlock) {
-        const start = self.currentPos();
-
-        const lbrace = if (allow_single)
-            try self.eat(.lbrace)
-        else
-            try self.expect(.lbrace);
-
-        var stmts: std.ArrayList(ast.Statement) = try .initCapacity(self.arena.allocator(), 0);
-        var spans_nodes = try self.span_registry.getArrayList(SpanId, 0);
-
-        if (lbrace) |_| {
-            while (try self.eat(.rbrace) == null) {
-                const stmt = try self.parseOneStatement();
-                try spans_nodes.append(stmt.id);
-                try stmts.append(self.arena.allocator(), stmt.payload);
-            }
-        } else {
-            const stmt = try self.parseOneStatement();
-            try spans_nodes.append(stmt.id);
-            try stmts.append(self.arena.allocator(), stmt.payload);
-        }
-
-        const id = try self.span_registry.addNode(
-            self.spanFrom(start),
-            .{
-                .block = .{
-                    .stmts = try spans_nodes.toOwnedSlice(),
-                },
-            },
-        );
-
-        return .wrap(id, try stmts.toOwnedSlice(self.arena.allocator()));
-    }
-    fn parseTaskCallArgs(self: *Parser) ParseError![]ast.TaskCallArg {
-        var args = try std.ArrayList(ast.TaskCallArg).initCapacity(self.arena.allocator(), 1);
-
-        _ = try self.expect(.lparen);
-
-        while (try self.eat(.rparen) == null) {
-            const arg_start = self.currentPos();
-
-            var arg_name: ?Token = null;
-            var value: ast.Expr = undefined;
-            var value_id: SpanId = undefined;
-
-            if (try self.eat(.ident)) |tok| {
-                if (try self.eat(.colon)) |_| {
-                    arg_name = tok;
-
-                    const wrapped = try self.parseExpr();
-                    value = wrapped.payload;
-                    value_id = wrapped.id;
-                } else {
-                    _ = try self.retreat();
-
-                    const wrapped = try self.parseExpr();
-                    value = wrapped.payload;
-                    value_id = wrapped.id;
-                }
-            } else {
-                const wrapped = try self.parseExpr();
+                    else => return err,
+                };
                 value = wrapped.payload;
                 value_id = wrapped.id;
             }
 
             const id = try self.span_registry.addNode(
-                self.spanFrom(arg_start),
-                .{ .task_call_arg = .{
-                    .name = if (arg_name) |v| v.span else null,
-                    .value = value_id,
-                } },
+                self.spanFrom(attr_start),
+                .{ .attribute = .{ .name = name.span, .value = value_id } },
             );
 
-            try args.append(self.arena.allocator(), .{
-                .id = id,
-                .name = if (arg_name) |v| v.lexeme else null,
-                .value = value,
-            });
+            try attrs.append(
+                self.arena.allocator(),
+                .{
+                    .id = id,
+                    .name = name.lexeme,
+                    .value = value,
+                },
+            );
 
-            if (self.peek() != .rparen) {
-                _ = try self.expect(.comma);
+            if (try self.eat(.comma) == null) {
+                break;
             }
         }
 
-        return try args.toOwnedSlice(self.arena.allocator());
+        _ = self.expect(.rbracket) catch |err| switch (err) {
+            ParseError.UnexpectedToken => {
+                switch (try self.synchronizeTo(&.{.rbracket})) {
+                    .rbracket => {
+                        _ = try self.advance();
+                    },
+                    else => {},
+                }
+            },
+            else => return err,
+        };
+
+        return attrs.toOwnedSlice(self.arena.allocator());
     }
 
     fn parseArguments(self: *Parser) ParseError![]ast.Argument {
@@ -916,7 +530,7 @@ pub const Parser = struct {
             };
 
             var default: ?ast.Expr = null;
-            var default_id: ?SpanId = null;
+            var default_id: ?NodeId = null;
 
             if (try self.eat(.eq)) |_| blk: {
                 const wrapped = self.parseExpr() catch |err| switch (err) {
@@ -963,62 +577,6 @@ pub const Parser = struct {
         return try arguments.toOwnedSlice(self.arena.allocator());
     }
 
-    fn parseSet(self: *Parser, attributes: []ast.Attribute, start: u32) ParseError!ast.Set {
-        var decls: std.ArrayList(ast.Set.SetDecl) = .empty;
-        errdefer decls.deinit(self.arena.allocator());
-
-        const body_start = self.currentPos();
-
-        if (try self.eat(.lbrace)) |_| { // block
-            while (try self.eat(.rbrace) == null) {
-                const decl = try self.parseSetDecl();
-                try decls.append(self.arena.allocator(), decl);
-            }
-        } else {
-            const decl = try self.parseSetDecl();
-            try decls.append(self.arena.allocator(), decl);
-        }
-
-        const body_span = self.spanFrom(body_start);
-
-        const id = try self.span_registry.addNode(
-            self.spanFrom(start),
-            .{ .set = .{ .body = body_span } },
-        );
-
-        return .{
-            .id = id,
-            .attrs = attributes,
-            .body = try decls.toOwnedSlice(self.arena.allocator()),
-        };
-    }
-
-    fn parseSetDecl(self: *Parser) ParseError!ast.Set.SetDecl {
-        const start = self.currentPos();
-
-        const name = try self.expect(.ident);
-
-        var value: ?ast.MetaValue = null;
-        var value_id: ?SpanId = null;
-
-        if (try self.eat(.eq)) |_| {
-            const wrapped = try self.parseMetaValue();
-            value = wrapped.payload;
-            value_id = wrapped.id;
-        }
-
-        const id = try self.span_registry.addNode(
-            self.spanFrom(start),
-            .{ .set_decl = .{ .name = name.span, .value = value_id } },
-        );
-
-        return .{
-            .id = id,
-            .name = name.lexeme,
-            .value = value,
-        };
-    }
-
     /// ArgType doesn't need its own registry entry -- `argument.type` in the
     /// registry stores the whole type span directly, so this just hands
     /// back the span alongside the parsed value.
@@ -1026,7 +584,6 @@ pub const Parser = struct {
         const start = self.currentPos();
 
         const list_op_span: ?Span = blk: {
-            // TODO: handle brackets span separately if ever needed
             if (try self.eat(.lbracket)) |lb| {
                 _ = try self.expect(.rbracket);
                 break :blk self.spanFrom(lb.span.start);
@@ -1057,6 +614,228 @@ pub const Parser = struct {
         };
 
         return .{ .span = self.spanFrom(start), .value = result };
+    }
+
+    //================= statements =====================
+
+    fn parseStatement(self: *Parser) ParseError!Wrapped(ast.Statement) {
+        switch (self.peek()) {
+            .backtick => {
+                try self.span_registry.put(.string, self.next.span); // opening backtick highlight
+
+                const string = try self.parseStringExpr("`", false);
+
+                const backtick = try self.expect(.backtick);
+                try self.span_registry.put(.string, backtick.span); // closing backtick highlight
+
+                return .wrap(string.id, .{ .process = string.payload });
+            },
+            .ident => {
+                const start = self.currentPos();
+                const ident_tok = try self.advance();
+
+                if (try self.eat(.colon_eq)) |_| {
+                    const value = try self.parseExpr();
+
+                    const id = try self.span_registry.addNode(
+                        self.spanFrom(start),
+                        .{ .decl = .{ .name = ident_tok.span, .value = value.id } },
+                    );
+
+                    return .wrap(id, .{ .decl = .{
+                        .id = id,
+                        .name = ident_tok.lexeme,
+                        .value = value.payload,
+                    } });
+                } else { // must be task call
+                    var scope: ast.TaskCall.Scope = .closest;
+                    var group_span: ?Span = null;
+                    var task = ident_tok;
+
+                    if (try self.eat(.dcolon)) |_| {
+                        const group = task;
+                        task = try self.expect(.ident);
+                        group_span = group.span;
+                        scope = .{ .group = group.lexeme };
+                    }
+
+                    const args_start = self.currentPos();
+                    const args = try self.parseTaskCallArgs();
+
+                    const args_span = self.spanFrom(args_start);
+                    const span = self.spanFrom(start);
+
+                    const id = try self.span_registry.addNode(span, .{ .task_call = .{
+                        .group = group_span,
+                        .task = task.span,
+                        .args = args_span,
+                    } });
+
+                    return .wrap(id, .{ .task_call = .{
+                        .id = id,
+                        .task = task.lexeme,
+                        .scope = scope,
+                        .args = args,
+                    } });
+                }
+            },
+            // ::task => root task call
+            .dcolon => {
+                const start = self.currentPos();
+                _ = try self.advance();
+                const ident_tok = try self.expect(.ident);
+
+                const args_start = self.currentPos();
+                const args = try self.parseTaskCallArgs();
+
+                const args_span = self.spanFrom(args_start);
+                const span = self.spanFrom(start);
+
+                const id = try self.span_registry.addNode(span, .{ .task_call = .{
+                    .group = null,
+                    .task = ident_tok.span,
+                    .args = args_span,
+                } });
+
+                return .wrap(id, .{
+                    .task_call = .{
+                        .id = id,
+                        .task = ident_tok.lexeme,
+                        .scope = .root,
+                        .args = args,
+                    },
+                });
+            },
+            .if_kw => {
+                const if_kw = self.expect(.if_kw) catch unreachable;
+
+                const result = try self.parseIf(if_kw.span.start, .statement);
+
+                return .wrap(result.id, .{ .if_stmt = result });
+            },
+            .switch_kw => {
+                const switch_kw = self.expect(.switch_kw) catch unreachable;
+
+                const result = try self.parseSwitch(switch_kw.span.start, .statement);
+
+                return .wrap(result.id, .{ .switch_stmt = result });
+            },
+            .for_kw => {
+                const for_kw = try self.expect(.for_kw);
+
+                const result = try self.parseFor(for_kw.span.start, .statement);
+
+                return .wrap(result.id, .{ .for_stmt = result });
+            },
+            else => {
+                const expr = try self.parseExpr();
+                return .wrap(expr.id, .{
+                    .expr = expr.payload,
+                });
+                // try self.addDiagnostic(.err, "expected statement, found '{s}'", .{@tagName(self.next.kind)});
+                // return ParseError.UnexpectedToken;
+            },
+        }
+    }
+
+    fn parseStatementBlock(self: *Parser, comptime allow_single: bool) ParseError!Wrapped(ast.StatementBlock) {
+        const start = self.currentPos();
+
+        const lbrace: ?Token = if (allow_single)
+            try self.eat(.lbrace)
+        else
+            try self.expect(.lbrace);
+
+        var stmts: std.ArrayList(ast.Statement) = try .initCapacity(self.arena.allocator(), 0);
+
+        var spans_nodes = try self.span_registry.getArrayList(NodeId, 0);
+        errdefer spans_nodes.deinit();
+
+        if (lbrace) |_| {
+            while (try self.eat(.rbrace) == null) {
+                const stmt = try self.parseStatement();
+                try spans_nodes.append(stmt.id);
+                try stmts.append(self.arena.allocator(), stmt.payload);
+            }
+        } else {
+            const stmt = try self.parseStatement();
+            try spans_nodes.append(stmt.id);
+            try stmts.append(self.arena.allocator(), stmt.payload);
+        }
+
+        const id = try self.span_registry.addNode(
+            self.spanFrom(start),
+            .{
+                .block = .{
+                    .stmts = try spans_nodes.toOwnedSlice(),
+                },
+            },
+        );
+
+        return .wrap(id, try stmts.toOwnedSlice(self.arena.allocator()));
+    }
+
+    fn parseTaskCallArgs(self: *Parser) ParseError![]ast.TaskCall.Arg {
+        var args: std.ArrayList(ast.TaskCall.Arg) = try .initCapacity(self.arena.allocator(), 1);
+
+        _ = try self.expect(.lparen);
+
+        while (try self.eat(.rparen) == null) {
+            const arg_start = self.currentPos();
+
+            var arg_name: ?Token = null;
+            var value: ast.Expr = undefined;
+            var value_id: NodeId = undefined;
+
+            if (try self.eat(.ident)) |tok| {
+                if (try self.eat(.colon)) |_| {
+                    arg_name = tok;
+
+                    const wrapped = try self.parseExpr();
+                    value = wrapped.payload;
+                    value_id = wrapped.id;
+                } else {
+                    _ = try self.retreat();
+
+                    const wrapped = try self.parseExpr();
+                    value = wrapped.payload;
+                    value_id = wrapped.id;
+                }
+            } else {
+                const wrapped = try self.parseExpr();
+                value = wrapped.payload;
+                value_id = wrapped.id;
+            }
+
+            const id = try self.span_registry.addNode(
+                self.spanFrom(arg_start),
+                .{ .task_call_arg = .{
+                    .name = if (arg_name) |v| v.span else null,
+                    .value = value_id,
+                } },
+            );
+
+            try args.append(self.arena.allocator(), .{
+                .id = id,
+                .name = if (arg_name) |v| v.lexeme else null,
+                .value = value,
+            });
+
+            if (self.peek() != .rparen) {
+                _ = try self.expect(.comma);
+            }
+        }
+
+        return try args.toOwnedSlice(self.arena.allocator());
+    }
+
+    //============= advanced stmt / expr constructs helpers ==================
+
+    fn parseAsTarget(self: *Parser, comptime as: ParseAs) ParseError!Wrapped(ParseAs.BranchT(as)) {
+        return switch (as) {
+            .statement => try self.parseStatementBlock(true),
+            .expr => try self.parseExpr(),
+        };
     }
 
     fn parseExpr(self: *Parser) ParseError!Wrapped(ast.Expr) {
@@ -1155,6 +934,30 @@ pub const Parser = struct {
         return self.makeBinary(start, op, left, right);
     }
 
+    /// Shared builder for every binary-expr precedence level.
+    fn makeBinary(
+        self: *Parser,
+        start: u32,
+        op: ast.BinaryOp,
+        left: Wrapped(ast.Expr),
+        right: Wrapped(ast.Expr),
+    ) ParseError!Wrapped(ast.Expr) {
+        const node = try self.arena.allocator().create(ast.BinaryExpr);
+        node.* = .{ .op = op, .left = left.payload, .right = right.payload };
+
+        const id = try self.span_registry.addNode(
+            self.spanFrom(start),
+            .{ .expr = .{
+                .binary = .{
+                    .left = left.id,
+                    .right = right.id,
+                },
+            } },
+        );
+
+        return .wrap(id, .{ .binary = node });
+    }
+
     fn parseUnary(self: *Parser) ParseError!Wrapped(ast.Expr) {
         if (try self.eat(.minus)) |_| {
             const start = self.currentPos();
@@ -1204,14 +1007,63 @@ pub const Parser = struct {
                 const id = try self.span_registry.addNode(tok.span, .leaf);
                 return .wrap(id, .{ .number_lit = val });
             },
-            .lbracket => { // list
+            .apostrophe => {
                 const start = self.currentPos();
-                _ = self.expect(.lbracket) catch unreachable;
+                const ch = try self.readCharacter();
+                _ = try self.expect(.apostrophe);
+
+                const result = text.processChar(self.arena.allocator(), ch.lexeme) catch unreachable;
+
+                try self.span_registry.put(.string, self.spanFrom(start));
+
+                const id = try self.span_registry.addNode(self.spanFrom(start), .leaf);
+                return .wrap(id, .{ .char_lit = result });
+            },
+            .quote => {
+                // parseStringExpr already registers/returns the correct id --
+                // a plain literal reuses its single leaf id, an interpolated
+                // one an `.expr` id -- so just forward it.
+                _ = self.expect(.quote) catch unreachable;
+
+                const string = try self.parseStringExpr("\"", false);
+                _ = try self.expect(.quote);
+
+                return .wrap(string.id, .{ .string = string.payload });
+            },
+            .lparen => {
+                // Parens don't get their own registry entry: the span/id of
+                // the enclosed expr is reused as-is.
+                //TODO: consider wrapping it
+                _ = self.expect(.lparen) catch unreachable;
+                const expr = try self.parseExpr();
+                _ = try self.expect(.rparen);
+
+                return .wrap(expr.id, expr.payload);
+            },
+            .lbracket => { // list
+                const lbracket = self.expect(.lbracket) catch unreachable;
+
+                // for expr
+
+                if (try self.eat(.for_kw)) |for_kw| {
+                    const result = try self.parseFor(for_kw.span.start, .expr);
+
+                    _ = try self.expect(.rbracket);
+
+                    const ptr = try self.arena.allocator().create(ast.ForExpr);
+                    ptr.* = result;
+
+                    const id = try self.span_registry.addNode(
+                        self.spanFrom(lbracket.span.start),
+                        .{ .wrap = result.id },
+                    );
+
+                    return .wrap(id, .{ .for_expr = ptr });
+                }
 
                 var items: std.ArrayList(ast.Expr.ListItem) = .empty;
-                errdefer items.deinit(self.arena.allocator());
 
-                var child_ids = try self.span_registry.getArrayList(SpanId, 2);
+                var child_ids = try self.span_registry.getArrayList(NodeId, 2);
                 errdefer child_ids.deinit();
 
                 while (try self.eat(.rbracket) == null) {
@@ -1241,7 +1093,7 @@ pub const Parser = struct {
                 }
 
                 const id = try self.span_registry.addNode(
-                    self.spanFrom(start),
+                    self.spanFrom(lbracket.span.start),
                     .{ .expr = .{
                         .list = try child_ids.toOwnedSlice(),
                     } },
@@ -1251,120 +1103,39 @@ pub const Parser = struct {
                     .list = try items.toOwnedSlice(self.arena.allocator()),
                 });
             },
-            .apostrophe => {
-                const start = self.currentPos();
-                const ch = try self.readCharacter();
-                _ = try self.expect(.apostrophe);
-
-                const result = text.processChar(self.arena.allocator(), ch.lexeme) catch unreachable;
-
-                const id = try self.span_registry.addNode(self.spanFrom(start), .leaf);
-                return .wrap(id, .{ .char_lit = result });
-            },
-            .quote => {
-                // parseStringExpr already registers/returns the correct id --
-                // a plain literal reuses its single leaf id, an interpolated
-                // one an `.expr` id -- so just forward it.
-                const string = try self.parseStringExpr("\"", false);
-                _ = try self.expect(.quote);
-
-                return .wrap(string.id, .{ .string = string.payload });
-            },
-            .lparen => {
-                // Parens don't get their own registry entry: the span/id of
-                // the enclosed expr is reused as-is.
-                _ = self.expect(.lparen) catch unreachable;
-                const expr = try self.parseExpr();
-                _ = try self.expect(.rparen);
-
-                return .wrap(expr.id, expr.payload);
-            },
-            .if_kw => {
-                const if_expr = try self.parseIfExpr();
-
-                const ptr = try self.arena.allocator().create(ast.IfExpr);
-                ptr.* = if_expr.payload;
-
-                return .wrap(if_expr.id, .{ .if_expr = ptr });
-            },
             .switch_kw => {
                 const switch_kw = self.expect(.switch_kw) catch unreachable;
 
-                _ = try self.expect(.lparen);
-                const subject = try self.parseExpr();
-                _ = try self.expect(.rparen);
-
-                _ = try self.expect(.lbrace);
-
-                var cases: std.ArrayList(ast.SwitchExpr.Case) = try .initCapacity(self.arena.allocator(), 0);
-
-                while (try self.eat(.rbrace) == null) {
-                    const start = self.currentPos();
-
-                    const pattern: ast.SwitchPattern, const pattern_span = blk: {
-                        if (try self.eat(.else_kw)) |kw| {
-                            break :blk .{
-                                .else_,
-                                try self.span_registry.addNode(
-                                    kw.span,
-                                    .leaf,
-                                ),
-                            };
-                        }
-
-                        const expr = try self.parseExpr();
-
-                        break :blk .{
-                            .{ .expr = expr.payload },
-                            expr.id,
-                        };
-                    };
-
-                    _ = try self.expect(.fat_arrow);
-
-                    const value = try self.parseExpr();
-
-                    if (try self.eat(.comma) == null) {
-                        _ = try self.expect(.rbrace);
-                    }
-
-                    const id = try self.span_registry.addNode(
-                        self.spanFrom(start),
-                        .{
-                            .switch_case = .{
-                                .pattern = pattern_span,
-                                .body = value.id,
-                            },
-                        },
-                    );
-
-                    try cases.append(self.arena.allocator(), .{
-                        .id = id,
-                        .pattern = pattern,
-                        .value = value.payload,
-                    });
-                }
-
-                const id = try self.span_registry.addNode(
-                    self.spanFrom(switch_kw.span.start),
-                    .{
-                        .switch_stmt = .{
-                            .subject = subject.id,
-                        },
-                    },
-                );
+                const result = try self.parseSwitch(switch_kw.span.start, .expr);
 
                 const ptr = try self.arena.allocator().create(ast.SwitchExpr);
-                ptr.* = .{
-                    .subject = subject.payload,
-                    .cases = try cases.toOwnedSlice(self.arena.allocator()),
-                };
+                ptr.* = result;
 
-                return .wrap(id, .{ .switch_expr = ptr });
+                return .wrap(result.id, .{ .switch_expr = ptr });
+            },
+            .if_kw => {
+                const if_kw = self.expect(.if_kw) catch unreachable;
+
+                const result = try self.parseIf(if_kw.span.start, .expr);
+
+                const ptr = try self.arena.allocator().create(ast.IfExpr);
+                ptr.* = result;
+
+                return .wrap(result.id, .{ .if_expr = ptr });
             },
             .at => {
                 const builtin_call = try self.parseBuiltInCall();
                 return .wrap(builtin_call.id, .{ .builtin_call = builtin_call });
+            },
+            .continue_kw => {
+                const continue_kw = self.expect(.continue_kw) catch unreachable;
+                const id = try self.span_registry.addNode(continue_kw.span, .leaf);
+                return .wrap(id, .@"continue");
+            },
+            .break_kw => {
+                const break_kw = self.expect(.break_kw) catch unreachable;
+                const id = try self.span_registry.addNode(break_kw.span, .leaf);
+                return .wrap(id, .@"break");
             },
             else => {
                 try self.addDiagnostic(
@@ -1377,6 +1148,196 @@ pub const Parser = struct {
         }
     }
 
+    fn parseFor(self: *Parser, for_start: u32, comptime as: ParseAs) ParseError!ast.ForCommon(ParseAs.BranchT(as)) {
+        var subjects: std.ArrayList(ast.Expr) = .empty;
+        var subjects_spans = try self.span_registry.getArrayList(NodeId, 0);
+        errdefer subjects_spans.deinit();
+
+        _ = try self.expect(.lparen);
+
+        while (true) {
+            const sub = try self.parseExpr();
+
+            try subjects_spans.append(sub.id);
+
+            try subjects.append(self.arena.allocator(), sub.payload);
+
+            if (try self.eat(.comma) == null) {
+                _ = try self.expect(.rparen);
+                break;
+            }
+        }
+
+        var captures: std.ArrayList(?[]const u8) = try .initCapacity(self.arena.allocator(), subjects.items.len);
+        var captures_spans = try self.span_registry.getArrayList(Span, subjects.items.len);
+        errdefer captures_spans.deinit();
+
+        _ = try self.expect(.pipe);
+
+        while (true) {
+            const span: Span = blk: {
+                if (try self.eat(.underscore)) |tok| {
+                    try captures.append(self.arena.allocator(), null);
+                    break :blk tok.span;
+                }
+
+                const ident = try self.expect(.ident);
+                try captures.append(self.arena.allocator(), ident.lexeme);
+                break :blk ident.span;
+            };
+
+            try captures_spans.append(span);
+
+            if (try self.eat(.comma) == null) {
+                _ = try self.expect(.pipe);
+                break;
+            }
+        }
+
+        const body = try self.parseAsTarget(as);
+
+        const id = try self.span_registry.addNode(
+            self.spanFrom(for_start),
+            .{
+                .@"for" = .{
+                    .subjects = try subjects_spans.toOwnedSlice(),
+                    .captures = try captures_spans.toOwnedSlice(),
+                    .body = body.id,
+                },
+            },
+        );
+
+        return .{
+            .id = id,
+            .subjects = try subjects.toOwnedSlice(self.arena.allocator()),
+            .captures = try captures.toOwnedSlice(self.arena.allocator()),
+            .body = body.payload,
+        };
+    }
+
+    fn parseSwitch(self: *Parser, switch_start: u32, comptime as: ParseAs) ParseError!ast.SwitchCommon(ParseAs.BranchT(as)) {
+        _ = try self.expect(.lparen);
+
+        const subject = try self.parseExpr();
+
+        _ = try self.expect(.rparen);
+
+        var cases: std.ArrayList(ast.SwitchCommon(as.BranchT()).Case) = .empty;
+
+        _ = try self.expect(.lbrace);
+
+        while (try self.eat(.rbrace) == null) {
+            const case = try self.parseSwitchCase(as);
+
+            try cases.append(self.arena.allocator(), case);
+
+            if (try self.eat(.comma) == null) {
+                _ = try self.expect(.rbrace);
+                break;
+            }
+        }
+
+        const id = try self.span_registry.addNode(
+            self.spanFrom(switch_start),
+            .{
+                .@"switch" = .{
+                    .subject = subject.id,
+                },
+            },
+        );
+
+        return .{
+            .id = id,
+            .subject = subject.payload,
+            .cases = try cases.toOwnedSlice(self.arena.allocator()),
+        };
+    }
+
+    fn parseSwitchCase(self: *Parser, comptime as: ParseAs) ParseError!ast.SwitchCommon(ParseAs.BranchT(as)).Case {
+        const start = self.currentPos();
+
+        var patterns_spans = try self.span_registry.getArrayList(NodeId, 1);
+        errdefer patterns_spans.deinit();
+
+        const pattern: ast.SwitchCommon(as.BranchT()).Pattern = blk: {
+            if (try self.eat(.else_kw)) |tok| {
+                _ = try self.expect(.fat_arrow);
+
+                try patterns_spans.append(try self.span_registry.addNode(tok.span, .leaf));
+
+                break :blk .@"else";
+            }
+
+            var patterns: std.ArrayList(ast.Expr) = try .initCapacity(self.arena.allocator(), 1);
+
+            while (true) {
+                const expr = try self.parseExpr();
+
+                try patterns_spans.append(expr.id);
+
+                try patterns.append(self.arena.allocator(), expr.payload);
+
+                if (try self.eat(.comma) == null) {
+                    _ = try self.expect(.fat_arrow);
+                    break;
+                }
+            }
+
+            break :blk .{ .expr = try patterns.toOwnedSlice(self.arena.allocator()) };
+        };
+
+        const body = try self.parseAsTarget(as);
+
+        const id = try self.span_registry.addNode(
+            self.spanFrom(start),
+            .{
+                .switch_case = .{
+                    .patterns = try patterns_spans.toOwnedSlice(),
+                    .body = body.id,
+                },
+            },
+        );
+
+        return .{
+            .id = id,
+            .pattern = pattern,
+            .body = body.payload,
+        };
+    }
+
+    fn parseIf(self: *Parser, if_start: u32, comptime as: ParseAs) ParseError!ast.IfCommon(ParseAs.BranchT(as)) {
+        _ = try self.expect(.lparen);
+
+        const cond = try self.parseExpr();
+
+        _ = try self.expect(.rparen);
+
+        const then = try self.parseAsTarget(as);
+
+        const @"else" = if (try self.eat(.else_kw)) |_|
+            try self.parseAsTarget(as)
+        else
+            null;
+
+        const id = try self.span_registry.addNode(
+            self.spanFrom(if_start),
+            .{
+                .@"if" = .{
+                    .cond = cond.id,
+                    .then = then.id,
+                    .else_ = if (@"else") |e| e.id else null,
+                },
+            },
+        );
+
+        return .{
+            .id = id,
+            .cond = cond.payload,
+            .then = then.payload,
+            .@"else" = if (@"else") |e| e.payload else null,
+        };
+    }
+
     fn parseBuiltInCall(self: *Parser) ParseError!ast.BuiltInCall {
         const at = try self.expect(.at); // skip @
 
@@ -1384,15 +1345,15 @@ pub const Parser = struct {
 
         var args = try std.ArrayList(ast.Expr).initCapacity(self.arena.allocator(), 1);
 
-        var child_ids = try self.span_registry.getArrayList(SpanId, 2);
-        errdefer child_ids.deinit();
+        var args_spans = try self.span_registry.getArrayList(NodeId, 2);
+        errdefer args_spans.deinit();
 
         _ = try self.expect(.lparen);
 
         if (try self.eat(.rparen) == null) {
             while (true) {
                 const expr = try self.parseExpr();
-                try child_ids.append(expr.id);
+                try args_spans.append(expr.id);
                 try args.append(self.arena.allocator(), expr.payload);
                 if (try self.eat(.comma) == null) break;
             }
@@ -1402,7 +1363,7 @@ pub const Parser = struct {
         const id = try self.span_registry.addNode(self.spanFrom(at.span.start), .{
             .builtin_call = .{
                 .name = ident.span,
-                .args = try child_ids.toOwnedSlice(),
+                .args = try args_spans.toOwnedSlice(),
             },
         });
 
@@ -1413,56 +1374,29 @@ pub const Parser = struct {
         };
     }
 
-    fn parseIfExpr(self: *Parser) ParseError!Wrapped(ast.IfExpr) {
-        const @"if" = try self.advance(); // consume 'if'
+    fn parseStringExpr(self: *Parser, terminator: []const u8, comptime multiline: bool) ParseError!Wrapped(ast.String) {
+        //TODO: currently string token span doesn't include quotes, fix this
 
-        _ = try self.expect(.lparen);
+        const start = self.currentPos();
+        var out: std.ArrayList(ast.StringPart) = .empty;
 
-        const cond = try self.parseExpr();
-
-        _ = try self.expect(.rparen);
-
-        const then = try self.parseExpr();
-
-        _ = try self.expect(.else_kw);
-
-        const else_ = try self.parseExpr();
-
-        const id = try self.span_registry.addNode(
-            self.spanFrom(@"if".span.start),
-            .{ .expr = .{ .if_expr = .{
-                .cond = cond.id,
-                .then = then.id,
-                .else_ = else_.id,
-            } } },
-        );
-
-        return .wrap(id, .{
-            .cond = cond.payload,
-            .then = then.payload,
-            .else_ = else_.payload,
-        });
-    }
-
-    fn parseStringExpr(self: *Parser, terminator: []const u8, comptime multiline: bool) ParseError!Wrapped(ast.StringExpr) {
-        var out: std.ArrayList(ast.InterStringSeg) = .empty;
-
-        var child_ids = try self.span_registry.getArrayList(SpanId, 1);
-        errdefer child_ids.deinit();
+        var parts_spans = try self.span_registry.getArrayList(NodeId, 1);
+        errdefer parts_spans.deinit();
 
         var lexer = self.lexer.stringLexer();
-        const start = self.currentPos();
 
         while (true) {
-            const seg = try lexer.lexString(&.{ terminator, "{{" }, multiline);
+            self.resyncToRaw();
+            const part = try lexer.lexString(&.{ terminator, "{{" }, multiline);
+            try self.resyncFromRaw(part);
 
-            switch (seg.kind) {
+            switch (part.kind) {
                 .string => {
-                    try child_ids.append(try self.span_registry.addNode(seg.span, .leaf));
-                    try self.span_registry.put(.string, seg.span);
+                    try parts_spans.append(try self.span_registry.addNode(part.span, .leaf));
+                    try self.span_registry.put(.string, part.span);
 
                     try out.append(self.arena.allocator(), .{
-                        .lit = seg.lexeme,
+                        .lit = part.lexeme,
                     });
                 },
                 .unterminated_string => {
@@ -1475,8 +1409,7 @@ pub const Parser = struct {
                 },
             }
 
-            try self.resyncFromRaw();
-            if (try self.eat(.ldbrace)) |_| { //TODO: handle ld/rd brace span
+            if (try self.eat(.ldbrace)) |_| {
                 const expr = blk: {
                     const wrapped = self.parseExpr() catch |err| switch (err) {
                         ParseError.UnexpectedToken => {
@@ -1484,7 +1417,6 @@ pub const Parser = struct {
                                 .rdbrace => {
                                     // TODO: handle error
                                     _ = try self.expect(.rdbrace);
-                                    self.resyncToRaw();
                                     continue;
                                 },
                                 else => break,
@@ -1492,41 +1424,26 @@ pub const Parser = struct {
                         },
                         else => return err,
                     };
-                    try child_ids.append(wrapped.id);
+                    try parts_spans.append(wrapped.id);
                     break :blk wrapped.payload;
                 };
                 try out.append(self.arena.allocator(), .{ .expr = expr });
                 _ = try self.expect(.rdbrace);
-                self.resyncToRaw();
             } else {
                 break;
             }
         }
 
-        // A pure literal (no interpolation) just reuses the single segment's
-        // leaf id -- no need to wrap it in another `.expr` node.
-        if (out.items.len == 1) {
-            std.debug.assert(out.items[0] == .lit);
-            defer out.deinit(self.arena.allocator());
-
-            const id = child_ids.items[0];
-            child_ids.deinit();
-
-            return .wrap(id, .{ .lit = out.items[0].lit });
-        }
-
         const id = try self.span_registry.addNode(
             self.spanFrom(start),
             .{ .expr = .{
-                .list = try child_ids.toOwnedSlice(),
+                .list = try parts_spans.toOwnedSlice(),
             } },
         );
 
         return .wrap(
             id,
-            .{
-                .inter = try out.toOwnedSlice(self.arena.allocator()),
-            },
+            try out.toOwnedSlice(self.arena.allocator()),
         );
     }
 
@@ -1567,12 +1484,13 @@ pub const Parser = struct {
                 return .wrap(id, .{ .char = ch.lexeme[0] });
             },
             .quote => {
-                const start = self.currentPos();
+                const quote = self.expect(.quote) catch unreachable;
 
                 const string = try self.readString("\"", false);
+
                 _ = try self.expect(.quote);
 
-                const id = try self.span_registry.addNode(self.spanFrom(start), .leaf);
+                const id = try self.span_registry.addNode(self.spanFrom(quote.span.start), .leaf);
                 return .wrap(id, .{ .string = string.lexeme });
             },
             .lbracket => {
@@ -1580,9 +1498,8 @@ pub const Parser = struct {
                 _ = self.expect(.lbracket) catch unreachable;
 
                 var items: std.ArrayList(ast.MetaValue) = .empty;
-                errdefer items.deinit(self.arena.allocator());
 
-                var child_ids = try self.span_registry.getArrayList(SpanId, 2);
+                var child_ids = try self.span_registry.getArrayList(NodeId, 2);
                 errdefer child_ids.deinit();
 
                 while (try self.eat(.rbracket) == null) {
@@ -1618,5 +1535,73 @@ pub const Parser = struct {
 
     inline fn currentPos(self: *Parser) u32 {
         return self.next.span.start;
+    }
+
+    //================= Span helper =========================
+
+    fn spanFrom(self: *Parser, start: u32) Span {
+        const end = if (self.current) |p| p.span.end() else self.next.span.start;
+        return .{
+            .start = start,
+            .len = end - start,
+        };
+    }
+
+    fn peek(self: *Parser) TokenKind {
+        return self.next.kind;
+    }
+
+    fn expect(self: *Parser, kind: TokenKind) ParseError!Token {
+        if (self.next.kind == kind) return self.advance();
+
+        try self.addDiagnostic(
+            .err,
+            "expected '{s}', found {s}",
+            .{ @tagName(kind), @tagName(self.next.kind) },
+        );
+
+        return ParseError.UnexpectedToken;
+    }
+
+    fn eat(self: *Parser, kind: TokenKind) !?Token {
+        if (self.next.kind == kind) return try self.advance();
+        return null;
+    }
+
+    fn advance(self: *Parser) !Token {
+        const tok = try self.lexer.next();
+        return self.setNextFetchCurrent(tok);
+    }
+
+    fn setNextFetchCurrent(self: *Parser, tok: Token) Token {
+        const curr = self.next;
+        self.current = curr;
+        self.next = tok;
+        return curr;
+    }
+
+    fn retreat(self: *Parser) !Token {
+        if (self.current) |prev| {
+            self.lexer.pos = self.next.span.start;
+            self.next = prev;
+            self.current = null;
+            return prev;
+        } else {
+            return error.UnableToRetreat;
+        }
+    }
+
+    /// after reading raw string or something,
+    /// set token so parser is in valid state
+    fn resyncFromRaw(self: *Parser, token: Token) !void {
+        self.current = token;
+        self.next = try self.lexer.next();
+    }
+
+    /// sets lexer pos to end of previous (last significant) token
+    /// needed when reading string
+    fn resyncToRaw(self: *Parser) void {
+        if (self.current) |curr|
+            self.lexer.pos = curr.span.end();
     }
 };
