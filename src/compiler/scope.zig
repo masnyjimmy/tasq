@@ -15,8 +15,8 @@ pub const Scope = struct {
     tasks: IndexesStorage = .empty,
     groups: IndexesStorage = .empty,
 
-    pub fn debugDump(_: *const Scope) []const u8 {
-        return "<scope>";
+    pub fn debugDump(self: *const Scope) []const *const Symbol {
+        return self.symbols.items;
     }
 
     pub fn init(parent: ?*Scope) Scope {
@@ -101,7 +101,7 @@ pub const Scope = struct {
         const out = try allocator.alloc(*ir.Task, self.tasks.count());
 
         for (self.tasks.values(), out) |task_idx, *o| {
-            o.* = self.symbols.items[task_idx].details.task.origin;
+            o.* = self.symbols.items[task_idx].origin.task;
         }
 
         return out;
@@ -114,7 +114,7 @@ pub const Scope = struct {
         const out = try allocator.alloc(*ir.Group, self.groups.count());
 
         for (self.groups.values(), out) |group_idx, *o| {
-            o.* = self.symbols.items[group_idx].details.group.origin;
+            o.* = self.symbols.items[group_idx].origin.group;
         }
 
         return out;
