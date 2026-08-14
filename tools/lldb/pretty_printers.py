@@ -18,12 +18,28 @@ MAX_REASONABLE_LEN      = 1 << 24  # elements, for slices
 MAX_REASONABLE_STRLEN   = 1 << 20  # bytes, for strings
 
 def _readable_span(process, addr, size):
-    """True iff [addr, addr+size) lies entirely inside one readable region."""
+    """True iff [addr, addr+size) appears readable."""
+    if size <= 0:
+        return False
+
     region = lldb.SBMemoryRegionInfo()
     err = process.GetMemoryRegionInfo(addr, region)
-    if err.Fail() or not region.IsReadable():
+    if err.Success() and region.IsReadable() and region.GetRegionEnd() >= addr + size:
+        return True
+
+    # GetMemoryRegionInfo() is unreliable or unimplemented on some process
+    # plugins (certain corefile readers, some remote targets), where it
+    # just fails unconditionally. That would otherwise make every slice
+    # look unreadable and suppress all synthetic children. Fall back to
+    # actually probing memory instead of trusting region info alone.
+    error = lldb.SBError()
+    process.ReadMemory(addr, 1, error)
+    if error.Fail():
         return False
-    return region.GetRegionEnd() >= addr + size
+
+    error.Clear()
+    process.ReadMemory(addr + size - 1, 1, error)
+    return error.Success()
 
 def create_struct(parent, name, struct_type, inits):
     struct_bytes, struct_data = bytearray(struct_type.size), lldb.SBData()
@@ -197,11 +213,21 @@ def zig_String_AsIdentifier(value, pred):
 class zig_Optional_SynthProvider:
     def __init__(self, value, _=None): self.value = value
     def update(self):
+        self.child = False
         try:
-            self.child = self.value.GetChildMemberWithName('some').unsigned == 1 and self.value.GetChildMemberWithName('data').Clone('child')
+            some = self.value.GetChildMemberWithName('some')
+            if some.IsValid():
+                # tagged representation: struct { data: T, some: bool }
+                if some.unsigned == 1:
+                    self.child = self.value.GetChildMemberWithName('data').Clone('child')
+            else:
+                # pointer-like payload: the optional itself is the pointer;
+                # null (0) means `none`, anything else is `some`
+                if self.value.unsigned != 0:
+                    self.child = self.value.Clone('child')
         except: pass
     def has_children(self): return bool(self.child)
-    def num_children(self): return int(self.child)
+    def num_children(self): return int(bool(self.child))
     def get_child_index(self, name): return 0 if self.child and (name == 'child' or name == '?') else -1
     def get_child_at_index(self, index): return self.child if self.child and index == 0 else None
 def zig_Optional_SummaryProvider(value, _=None):
