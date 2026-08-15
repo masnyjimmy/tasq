@@ -244,7 +244,7 @@ pub const ResolvedIdent = struct {
 };
 
 pub const BuiltinCall = struct {
-    id: functions.definitions.Type,
+    function: functions.ResolvedFunction,
     args: []Expr,
 };
 

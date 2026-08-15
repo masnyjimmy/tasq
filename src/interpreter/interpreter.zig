@@ -375,7 +375,7 @@ fn resolveExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Interpre
                 out.* = try self.resolveExpr(scope, &in);
             }
 
-            return builtin.callFunction(self, call.id, args) catch |err| return switch (err) {
+            return builtin.callFunction(self, call.function.id, args) catch |err| return switch (err) {
                 builtin.Error.Abort => InterpreterError.Abort,
                 else => unreachable,
             };
@@ -405,7 +405,7 @@ fn resolveString(self: *Interpreter, scope: *Scope, string: ir.String) Interpret
     return try aw.toOwnedSlice();
 }
 
-fn currentScope(self: *Interpreter) *Scope {
+pub fn currentScope(self: *Interpreter) *Scope {
     return self.scope_stack.assertCurrentScope();
 }
 

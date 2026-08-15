@@ -93,3 +93,9 @@ pub const ArgType = enum {
         };
     }
 };
+
+pub const TypeExpr = union(enum) {
+    concrete: Type,
+    generic: []const u8,
+    list: *const TypeExpr,
+};

@@ -7,59 +7,139 @@ const ct = lib.@"comptime";
 
 const @"type" = @import("type.zig");
 const Type = @"type".Type;
+const TypeExpr = @"type".TypeExpr;
+
+pub const Error = error{
+    UnknownFunction,
+    InvalidArguments,
+} || std.mem.Allocator.Error;
+
+pub const ResolvedFunction = struct {
+    id: definitions.Id,
+    return_type: Type,
+};
+
+pub fn resolveArguments(allocator: std.mem.Allocator, params: []const Spec.Param, args: []const Type) !?std.StringHashMap(Type) {
+    var bindings: std.StringHashMap(Type) = .init(allocator);
+    defer bindings.deinit();
+
+    for (params, args) |param, arg| {
+        if (!try matchAndBind(&bindings, param.type, arg))
+            return null;
+    }
+
+    return bindings.move(); // move to prevent deinit on returned map
+}
+
+fn matchAndBind(bindings: *std.StringHashMap(Type), p: TypeExpr, a: Type) !bool {
+    return switch (p) {
+        .concrete => |t| Type.eq(t, a),
+        .generic => |name| {
+            if (bindings.get(name)) |bound| return Type.eq(bound, a);
+            try bindings.put(name, a);
+            return true;
+        },
+        .list => |elem_p| a == .list and try matchAndBind(bindings, elem_p.*, a.list.*),
+    };
+}
+
+fn resolveType(allocator: std.mem.Allocator, bindings: *const std.StringHashMap(Type), p: TypeExpr) !Type {
+    return switch (p) {
+        .concrete => |t| t,
+        .generic => |name| bindings.get(name) orelse unreachable, // unbound generic, shouldn't ever happen on builtin functions
+        .list => |elem_p| {
+            const items_type = try allocator.create(Type);
+            items_type.* = try resolveType(allocator, bindings, elem_p.*);
+
+            return .{ .list = items_type };
+        },
+    };
+}
 
 pub const definitions = Functions(&.{
     .{
         .name = "env",
         .args = &.{
-            .{ .name = "key", .type = Type.string },
+            .{
+                .name = "key",
+                .type = .{ .concrete = Type.string },
+            },
         },
-        .return_type = Type.string,
+        .return_type = .{ .concrete = Type.string },
     },
     .{
         .name = "env",
         .args = &.{
-            .{ .name = "key", .type = Type.string },
-            .{ .name = "default", .type = Type.string },
+            .{
+                .name = "key",
+                .type = .{ .concrete = Type.string },
+            },
+            .{
+                .name = "default",
+                .type = .{ .concrete = Type.string },
+            },
         },
-        .return_type = Type.string,
+        .return_type = .{ .concrete = Type.string },
     },
     .{
         .name = "exists",
         .args = &.{
-            .{ .name = "path", .type = Type.string },
+            .{
+                .name = "path",
+                .type = .{ .concrete = Type.string },
+            },
         },
-        .return_type = Type.bool,
+        .return_type = .{ .concrete = Type.bool },
     },
     .{
         .name = "os",
         .args = &.{},
-        .return_type = Type.string,
+        .return_type = .{ .concrete = Type.string },
     },
     .{
         .name = "status_code",
         .args = &.{},
-        .return_type = Type.number,
+        .return_type = .{ .concrete = Type.number },
     },
     .{
         .name = "error",
         .args = &.{
-            .{ .name = "message", .type = Type.string },
+            .{
+                .name = "message",
+                .type = .{ .concrete = Type.string },
+            },
             // .{ .name = "code", .type = Type.number },
         },
-        .return_type = Type.noreturn,
+        .return_type = .{ .concrete = Type.noreturn },
     },
     .{
         .name = "print",
         .args = &.{
-            .{ .name = "message", .type = Type.string },
+            .{
+                .name = "message",
+                .type = .{ .concrete = Type.string },
+            },
         },
-        .return_type = Type.void,
+        .return_type = .{ .concrete = Type.void },
+    },
+    .{
+        .name = "toArray",
+        .args = &.{
+            .{
+                .name = "value",
+                .type = .{ .generic = "T" },
+            },
+        },
+        .return_type = .{
+            .list = &.{
+                .generic = "T",
+            },
+        },
     },
 });
 
 fn Functions(comptime specs: []const Spec) type {
-    const FnId = blk: {
+    const FnIdent = blk: {
         const EnumTag = enums.FitUnsigned(specs.len);
 
         var unique_names: [specs.len][]const u8 = undefined;
@@ -83,17 +163,11 @@ fn Functions(comptime specs: []const Spec) type {
         );
     };
 
-    const Definition = struct {
-        id: FnId,
-        args: []const Spec.Arg,
-        return_type: Type,
-    };
-
     // For each spec (by original index), which unique-name index (i.e. FnId) it maps to.
-    const spec_to_id: [specs.len]FnId = blk: {
+    const spec_to_id: [specs.len]FnIdent = blk: {
         var unique_names: [specs.len][]const u8 = undefined;
         var unique_count: usize = 0;
-        var ids: [specs.len]FnId = undefined;
+        var ids: [specs.len]FnIdent = undefined;
 
         for (specs, 0..) |spec, spec_idx| {
             var found: ?usize = null;
@@ -114,13 +188,23 @@ fn Functions(comptime specs: []const Spec) type {
         break :blk ids;
     };
 
+    const FunctionId = enum(usize) { _ };
+
+    const Definition = struct {
+        id: FunctionId,
+        ident: FnIdent,
+        args: []const Spec.Param,
+        return_type: TypeExpr,
+    };
+
     const defs = blk: {
         var defs: [specs.len]Definition = undefined;
 
         for (specs, 0..) |spec, idx| {
             defs[idx] = def: {
                 var out = ct.copyFields(Definition, spec);
-                out.id = spec_to_id[idx];
+                out.id = @enumFromInt(idx);
+                out.ident = spec_to_id[idx];
 
                 break :def out;
             };
@@ -128,61 +212,45 @@ fn Functions(comptime specs: []const Spec) type {
         break :blk defs;
     };
 
-    const name_map = enums.generateEnumNameMap(FnId);
+    const name_map = enums.generateEnumNameMap(FnIdent);
 
     return struct {
-        pub const Type = FnId;
-
         pub const items = defs;
 
-        pub fn get(name: []const u8, arg_num: usize) !Definition {
-            const idx = try getIndex(name, arg_num);
+        pub const Id = FunctionId;
 
-            return defs[idx];
-        }
+        pub fn resolve(allocator: std.mem.Allocator, name: []const u8, args: []const Type) Error!ResolvedFunction {
+            const ident = name_map.get(name) orelse return Error.UnknownFunction;
 
-        pub fn getById(id: FnId, arg_num: usize) !Definition {
-            const idx = getIndexById(id, arg_num) orelse return Error.InvalidArguments;
+            for (defs) |def| {
+                if (def.ident != ident)
+                    continue;
 
-            return defs[idx];
-        }
+                if (def.args.len != args.len)
+                    continue;
 
-        pub fn getIndexById(id: FnId, arg_num: usize) ?usize {
-            std.debug.assert(enums.isValidEnumValue(FnId, id));
+                var resolved = try resolveArguments(allocator, def.args, args) orelse continue;
+                defer resolved.deinit();
 
-            for (defs, 0..) |def, idx| {
-                if (def.id != id) continue;
+                const return_type = try resolveType(allocator, &resolved, def.return_type);
 
-                if (def.args.len == arg_num) {
-                    return idx;
-                }
+                return .{
+                    .id = def.id,
+                    .return_type = return_type,
+                };
             }
 
-            return null;
+            return Error.InvalidArguments;
         }
-
-        pub fn getIndex(name: []const u8, arg_num: usize) !usize {
-            const id = name_map.get(name) orelse return Error.UnknownFunction;
-            return getIndexById(id, arg_num) orelse return Error.InvalidArguments;
-        }
-
-        pub fn getByIndex(index: usize) Definition {
-            return defs[index];
-        }
-
-        pub const Error = error{
-            UnknownFunction,
-            InvalidArguments,
-        };
     };
 }
 const Spec = struct {
-    const Arg = struct {
+    const Param = struct {
         name: []const u8,
-        type: Type,
+        type: TypeExpr,
     };
 
     name: []const u8,
-    args: []const Arg,
-    return_type: Type,
+    args: []const Param,
+    return_type: TypeExpr,
 };

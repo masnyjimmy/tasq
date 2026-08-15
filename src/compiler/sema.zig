@@ -1682,54 +1682,49 @@ pub const Sema = struct {
     };
 
     fn analyseBuiltinCall(self: *Sema, scope: *Scope, call: ast.BuiltInCall) SemaError!BuiltinCallResult {
-        const call_spans = self.span_registry.get(call.id);
+        const call_spans = self.span_registry.get(call.id).details.builtin_call;
 
-        const def = funcs.definitions.get(call.name, call.args.len) catch |err| switch (err) {
-            funcs.definitions.Error.UnknownFunction => {
+        var args: std.ArrayList(ir.Expr) = try .initCapacity(self.arena.allocator(), call.args.len);
+        var args_types: std.ArrayList(Type) = try .initCapacity(self.arena.allocator(), call.args.len);
+
+        var is_static: bool = true;
+
+        for (call.args, call_spans.args) |arg, arg_span| {
+            const result = try self.analyseExpr(scope, arg, arg_span);
+
+            if (result.is_static == false)
+                is_static = false;
+
+            args.appendAssumeCapacity(result.expr);
+            args_types.appendAssumeCapacity(result.type);
+        }
+
+        const result = funcs.definitions.resolve(self.arena.allocator(), call.name, args_types.items) catch |err| switch (err) {
+            funcs.Error.UnknownFunction => {
                 try self.diagnostics.err(
-                    call_spans.span,
-                    "Unknown builtin function '{s}'",
+                    self.span_registry.getSpan(call.id),
+                    "unknown function '{s}'",
                     .{call.name},
                 );
                 return SemaError.SemanticError;
             },
-            funcs.definitions.Error.InvalidArguments => {
+            funcs.Error.InvalidArguments => {
                 try self.diagnostics.err(
                     self.span_registry.getSpan(call.id),
-                    "Invalid arguments number ({}) for '{s}' function",
-                    .{ call.args.len, call.name },
+                    "invalid arguments",
+                    .{},
                 );
                 return SemaError.SemanticError;
             },
+            funcs.Error.OutOfMemory => return SemaError.OutOfMemory,
         };
-
-        var args = try std.ArrayList(ir.Expr).initCapacity(self.arena.allocator(), call.args.len);
-
-        for (call.args, def.args, call_spans.details.builtin_call.args) |arg_expr, arg_def, arg_span| {
-            const arg = try self.analyseExpr(
-                scope,
-                arg_expr,
-                arg_span, //TODO: implement handling span
-            );
-
-            if (arg.type.eq(arg_def.type) == false) {
-                try self.diagnostics.err(
-                    self.span_registry.getSpan(arg_span),
-                    "invalid argument type, got '{f}' expected '{f}'",
-                    .{ arg.type, arg_def.type },
-                );
-                return SemaError.SemanticError;
-            }
-
-            args.appendAssumeCapacity(arg.expr);
-        }
 
         return .{
             .builtin_call = .{
-                .id = def.id,
-                .args = args.toOwnedSliceAssert(),
+                .function = result,
+                .args = args.items,
             },
-            .type = def.return_type,
+            .type = result.return_type,
         };
     }
 
