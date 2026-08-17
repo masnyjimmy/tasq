@@ -1,6 +1,10 @@
 const std = @import("std");
 
-const Type = @import("type.zig").Type;
+const type_mod = @import("type.zig");
+const Type = type_mod.Type;
+const FuncType = type_mod.FuncType;
+
+const ir = @import("ir.zig");
 
 pub const ValueMapContext = struct {
     pub fn hash(_: @This(), value: Value) u64 {
@@ -42,6 +46,7 @@ const Tag = enum {
     bool,
     list,
     void,
+    lambda,
 };
 
 pub const Value = union(Tag) {
@@ -51,10 +56,12 @@ pub const Value = union(Tag) {
     bool: bool,
     list: List,
     void,
+    lambda: *const ir.Lambda,
 
     pub fn typeOf(self: *const Value) Type {
         return switch (self.*) {
             .list => |list| .{ .list = list.items_type },
+            .lambda => unreachable,
             inline else => |_, tag| @unionInit(Type, @tagName(tag), {}),
         };
     }

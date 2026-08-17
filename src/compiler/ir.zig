@@ -194,8 +194,15 @@ pub const Expr = union(enum) {
     switch_expr: *SwitchExpr,
     for_expr: *ForExpr,
     builtin_call: BuiltinCall,
+    lambda: *Lambda,
     @"continue",
     @"break",
+};
+
+pub const Lambda = struct {
+    captures: []const Capture,
+    body: Expr,
+    scope: *Scope,
 };
 
 pub const ForExpr = struct {

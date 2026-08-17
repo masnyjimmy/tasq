@@ -14,48 +14,6 @@ pub const Error = error{
     InvalidArguments,
 } || std.mem.Allocator.Error;
 
-pub const ResolvedFunction = struct {
-    id: definitions.Id,
-    return_type: Type,
-};
-
-pub fn resolveArguments(allocator: std.mem.Allocator, params: []const Spec.Param, args: []const Type) !?std.StringHashMap(Type) {
-    var bindings: std.StringHashMap(Type) = .init(allocator);
-    defer bindings.deinit();
-
-    for (params, args) |param, arg| {
-        if (!try matchAndBind(&bindings, param.type, arg))
-            return null;
-    }
-
-    return bindings.move(); // move to prevent deinit on returned map
-}
-
-fn matchAndBind(bindings: *std.StringHashMap(Type), p: TypeExpr, a: Type) !bool {
-    return switch (p) {
-        .concrete => |t| Type.eq(t, a),
-        .generic => |name| {
-            if (bindings.get(name)) |bound| return Type.eq(bound, a);
-            try bindings.put(name, a);
-            return true;
-        },
-        .list => |elem_p| a == .list and try matchAndBind(bindings, elem_p.*, a.list.*),
-    };
-}
-
-fn resolveType(allocator: std.mem.Allocator, bindings: *const std.StringHashMap(Type), p: TypeExpr) !Type {
-    return switch (p) {
-        .concrete => |t| t,
-        .generic => |name| bindings.get(name) orelse unreachable, // unbound generic, shouldn't ever happen on builtin functions
-        .list => |elem_p| {
-            const items_type = try allocator.create(Type);
-            items_type.* = try resolveType(allocator, bindings, elem_p.*);
-
-            return .{ .list = items_type };
-        },
-    };
-}
-
 pub const definitions = Functions(&.{
     .{
         .name = "env",
@@ -113,18 +71,31 @@ pub const definitions = Functions(&.{
         .return_type = .{ .concrete = Type.void },
     },
     .{
-        .name = "toArray",
+        .name = "any",
         .args = &.{
             .{
-                .name = "value",
-                .type = .{ .generic = "T" },
+                .name = "list",
+                .type = .{
+                    .list = &.{
+                        .generic = "T",
+                    },
+                },
+            },
+            .{
+                .name = "fn",
+                .type = .{
+                    .lambda = &.{
+                        .params = &.{
+                            .{ .generic = "T" },
+                        },
+                        .return_type = .{
+                            .concrete = Type.bool,
+                        },
+                    },
+                },
             },
         },
-        .return_type = .{
-            .list = &.{
-                .generic = "T",
-            },
-        },
+        .return_type = .{ .concrete = Type.bool },
     },
 });
 
@@ -209,7 +180,7 @@ fn Functions(comptime specs: []const Spec) type {
 
         pub const Id = FunctionId;
 
-        pub fn resolve(allocator: std.mem.Allocator, name: []const u8, args: []const Type) Error!ResolvedFunction {
+        pub fn resolve(allocator: std.mem.Allocator, name: []const u8, args: []const InArg) Error!ResolvedFunction {
             const ident = name_map.get(name) orelse return Error.UnknownFunction;
 
             for (defs) |def| {
@@ -222,11 +193,18 @@ fn Functions(comptime specs: []const Spec) type {
                 var resolved = try resolveArguments(allocator, def.args, args) orelse continue;
                 defer resolved.deinit();
 
+                const params = try allocator.alloc(OutArg, args.len);
+
+                for (def.args, params) |in, *out| {
+                    out.* = try resolveType(allocator, &resolved, in.type);
+                }
+
                 const return_type = try resolveType(allocator, &resolved, def.return_type);
 
                 return .{
                     .id = def.id,
-                    .return_type = return_type,
+                    .params = params,
+                    .return_type = return_type.value,
                 };
             }
 
@@ -244,3 +222,101 @@ const Spec = struct {
     args: []const Param,
     return_type: TypeExpr,
 };
+
+pub const InArg = union(enum) {
+    lambda: struct {
+        params: usize,
+    },
+    value: struct {
+        type: Type,
+    },
+};
+
+pub fn resolveArguments(allocator: std.mem.Allocator, params: []const Spec.Param, args: []const InArg) !?std.StringHashMap(Type) {
+    var bindings: std.StringHashMap(Type) = .init(allocator);
+    defer bindings.deinit();
+
+    for (params, args) |param, arg| {
+        if (!try matchAndBind(&bindings, param.type, arg))
+            return null;
+    }
+
+    return bindings.move(); // move to prevent deinit on returned map
+}
+
+fn matchAndBind(bindings: *std.StringHashMap(Type), p: TypeExpr, a: InArg) !bool {
+    return switch (p) {
+        .concrete => |t| switch (a) {
+            .value => |T| Type.eq(t, T.type),
+            .lambda => false,
+        },
+        .generic => |name| switch (a) {
+            .value => |T| {
+                if (bindings.get(name)) |bound| return Type.eq(bound, T.type);
+                try bindings.put(name, T.type);
+                return true;
+            },
+            .lambda => false,
+        },
+        .list => |elem_p| switch (a) {
+            .value => |T| T.type == .list and try matchAndBind(bindings, elem_p.*, .{
+                .value = .{
+                    .type = T.type.list.*,
+                },
+            }),
+            .lambda => false,
+        },
+        .lambda => |lambda| switch (a) {
+            .value => false,
+            .lambda => |L| lambda.params.len == L.params,
+        },
+    };
+}
+
+pub const OutArg = union(enum) {
+    value: Type,
+    lambda: struct {
+        params: []const Type,
+        return_type: Type,
+    },
+};
+
+pub const ResolvedFunction = struct {
+    id: definitions.Id,
+    params: []const OutArg,
+    return_type: Type,
+};
+
+fn resolveType(allocator: std.mem.Allocator, bindings: *const std.StringHashMap(Type), p: TypeExpr) !OutArg {
+    return switch (p) {
+        .concrete => |t| .{ .value = t },
+        .generic => |name| .{ .value = bindings.get(name) orelse unreachable }, // unbound generic, shouldn't ever happen on builtin functions
+        .list => |elem_p| {
+            const items_type = try allocator.create(Type);
+
+            const resolved_type = try resolveType(allocator, bindings, elem_p.*);
+            items_type.* = resolved_type.value;
+
+            return .{
+                .value = .{ .list = items_type },
+            };
+        },
+        .lambda => |lambda| {
+            const params = try allocator.alloc(Type, lambda.params.len);
+
+            for (lambda.params, params) |in, *out| {
+                const resolved_type = try resolveType(allocator, bindings, in);
+                out.* = resolved_type.value;
+            }
+
+            const return_type = try resolveType(allocator, bindings, lambda.return_type);
+
+            return .{
+                .lambda = .{
+                    .params = params,
+                    .return_type = return_type.value,
+                },
+            };
+        },
+    };
+}

@@ -1030,6 +1030,49 @@ pub const Parser = struct {
 
                 return .wrap(string.id, .{ .string = string.payload });
             },
+            .pipe => {
+                const pipe = self.expect(.pipe) catch unreachable;
+
+                var params: std.ArrayList([]const u8) = try .initCapacity(self.arena.allocator(), 1);
+                var params_spans = try self.span_registry.getArrayList(Span, 1);
+                errdefer params_spans.deinit();
+
+                while (true) {
+                    const ident = try self.expect(.ident);
+
+                    try params.append(self.arena.allocator(), ident.lexeme);
+                    try params_spans.append(ident.span);
+
+                    if (try self.eat(.comma) == null) {
+                        _ = try self.expect(.pipe);
+                        break;
+                    }
+                }
+
+                const body = try self.parseExpr();
+
+                const id = try self.span_registry.addNode(
+                    self.spanFrom(pipe.span.start),
+                    .{
+                        .lambda = .{
+                            .params = try params_spans.toOwnedSlice(),
+                            .body = body.id,
+                        },
+                    },
+                );
+
+                const ptr = try self.arena.allocator().create(ast.Lambda);
+                ptr.* = .{
+                    .id = id,
+                    .params = try params.toOwnedSlice(self.arena.allocator()),
+                    .body = body.payload,
+                };
+
+                return .wrap(
+                    id,
+                    .{ .lambda = ptr },
+                );
+            },
             .lparen => {
                 // Parens don't get their own registry entry: the span/id of
                 // the enclosed expr is reused as-is.

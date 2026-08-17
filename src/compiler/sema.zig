@@ -1343,6 +1343,14 @@ pub const Sema = struct {
                     .is_static = result.is_static,
                 };
             },
+            .lambda => |lambda| {
+                try self.diagnostics.err(
+                    self.span_registry.getSpan(lambda.id),
+                    "lambda allowed only as function argument",
+                    .{},
+                );
+                return SemaError.SemanticError;
+            },
             .@"continue" => {
                 if (self.loop_depth == 0) {
                     try self.diagnostics.err(
@@ -1685,21 +1693,44 @@ pub const Sema = struct {
         const call_spans = self.span_registry.get(call.id).details.builtin_call;
 
         var args: std.ArrayList(ir.Expr) = try .initCapacity(self.arena.allocator(), call.args.len);
-        var args_types: std.ArrayList(Type) = try .initCapacity(self.arena.allocator(), call.args.len);
+        var args_types: std.ArrayList(funcs.InArg) = try .initCapacity(self.arena.allocator(), call.args.len);
 
         var is_static: bool = true;
 
+        // collect arguments, when possible, otherwise leave for second pass
         for (call.args, call_spans.args) |arg, arg_span| {
+            if (arg == .lambda) {
+                args.appendAssumeCapacity(undefined); // it will be resolved in later pass
+                args_types.appendAssumeCapacity(
+                    .{
+                        .lambda = .{
+                            .params = arg.lambda.params.len,
+                        },
+                    },
+                );
+                continue;
+            }
+
             const result = try self.analyseExpr(scope, arg, arg_span);
 
             if (result.is_static == false)
                 is_static = false;
 
             args.appendAssumeCapacity(result.expr);
-            args_types.appendAssumeCapacity(result.type);
+            args_types.appendAssumeCapacity(
+                .{
+                    .value = .{
+                        .type = result.type,
+                    },
+                },
+            );
         }
 
-        const result = funcs.definitions.resolve(self.arena.allocator(), call.name, args_types.items) catch |err| switch (err) {
+        const result = funcs.definitions.resolve(
+            self.arena.allocator(),
+            call.name,
+            args_types.items,
+        ) catch |err| switch (err) {
             funcs.Error.UnknownFunction => {
                 try self.diagnostics.err(
                     self.span_registry.getSpan(call.id),
@@ -1718,6 +1749,60 @@ pub const Sema = struct {
             },
             funcs.Error.OutOfMemory => return SemaError.OutOfMemory,
         };
+        // second pass, resolve type inferention
+        for (call.args, result.params, 0..) |expr, param, idx| {
+            switch (param) {
+                .lambda => |l| {
+                    const lambda_spans = self.span_registry.get(call_spans.args[idx]).details.lambda;
+
+                    const lambda = expr.lambda;
+
+                    const lambda_scope = try self.createScope(scope);
+
+                    const captures = try self.arena.allocator().alloc(ir.Capture, l.params.len);
+
+                    for (lambda.params, l.params, captures, lambda_spans.params) |ident, in, *out, param_span| {
+                        out.* = .{
+                            .name = ident,
+                            .type = in,
+                        };
+
+                        try self.defineSymbol(lambda_scope, .{
+                            .name = ident,
+                            .span = param_span,
+                            .origin = .{
+                                .capture = out,
+                            },
+                        });
+                    }
+
+                    const body = try self.analyseExpr(lambda_scope, lambda.body, lambda_spans.body);
+
+                    if (body.is_static == false)
+                        is_static = false;
+
+                    if (body.type.eq(l.return_type) == false) {
+                        try self.diagnostics.err(
+                            self.span_registry.getSpan(lambda_spans.body),
+                            "invalid lambda result type, expected '{f}' got '{f}'",
+                            .{ l.return_type, body.type },
+                        );
+                    }
+
+                    const lambda_ptr = try self.arena.allocator().create(ir.Lambda);
+                    lambda_ptr.* = .{
+                        .captures = captures,
+                        .body = body.expr,
+                        .scope = lambda_scope,
+                    };
+
+                    args.items[idx] = .{
+                        .lambda = lambda_ptr,
+                    };
+                },
+                else => {},
+            }
+        }
 
         return .{
             .builtin_call = .{

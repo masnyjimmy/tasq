@@ -36,6 +36,7 @@ pub const Registry = struct {
         task_call,
         task_call_arg,
         builtin_call,
+        lambda,
         expr,
     };
 
@@ -67,6 +68,8 @@ pub const Registry = struct {
         task_call_arg: struct { name: ?Span, value: NodeId },
 
         builtin_call: struct { name: Span, args: []const NodeId },
+
+        lambda: struct { params: []const Span, body: NodeId },
 
         /// binary   -> children = .{ left, right }        (op needs no span)
         /// unary    -> children = .{ operand }
@@ -116,6 +119,9 @@ pub const Registry = struct {
                 },
                 .switch_case => |c| {
                     allocator.free(c.patterns);
+                },
+                .lambda => |l| {
+                    allocator.free(l.params);
                 },
                 else => {},
             }

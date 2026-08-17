@@ -133,8 +133,15 @@ pub const Expr = union(enum) {
     if_expr: *IfExpr,
     switch_expr: *SwitchExpr,
     for_expr: *ForExpr,
+    lambda: *Lambda,
     @"continue",
     @"break",
+};
+
+pub const Lambda = struct {
+    id: NodeId,
+    params: []const []const u8,
+    body: Expr,
 };
 
 pub const ForExpr = ForCommon(Expr);
