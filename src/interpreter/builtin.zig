@@ -21,7 +21,6 @@ const FunctionType = *const fn (*Interpreter, []const Value) Error!Value;
 
 const handlers: [functions_count]FunctionType = .{
     handleEnv,
-    handleEnvWithDefault,
     handleExists,
     handleOs,
     handleStatusCode,
@@ -44,29 +43,13 @@ pub fn callFunction(
 
 fn handleEnv(self: *Interpreter, args: []const Value) Error!Value {
     const key = args[0].string;
-
-    const value = if (self.environ.get(key)) |value|
-        value
-    else {
-        self.printer.printStyled(
-            self.allocator,
-            .{ .fg = .red },
-            "'{s}' environment variable not found",
-            .{key},
-        ) catch unreachable;
-        return Error.FunctionFailed;
-    };
-
-    return .{ .string = value };
-}
-
-fn handleEnvWithDefault(self: *Interpreter, args: []const Value) Error!Value {
-    const key = args[0].string;
     const default = args[1].string;
 
     return if (self.environ.get(key)) |value| .{
         .string = value,
-    } else .{ .string = default };
+    } else .{
+        .string = default,
+    };
 }
 
 fn handleExists(self: *Interpreter, args: []const Value) Error!Value {

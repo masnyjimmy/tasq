@@ -64,16 +64,6 @@ pub const definitions = Functions(&.{
                 .name = "key",
                 .type = .{ .concrete = Type.string },
             },
-        },
-        .return_type = .{ .concrete = Type.string },
-    },
-    .{
-        .name = "env",
-        .args = &.{
-            .{
-                .name = "key",
-                .type = .{ .concrete = Type.string },
-            },
             .{
                 .name = "default",
                 .type = .{ .concrete = Type.string },
