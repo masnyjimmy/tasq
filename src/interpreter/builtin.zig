@@ -7,15 +7,13 @@ const platform = compiler.platform;
 const functions = compiler.functions;
 const Type = compiler.Type;
 const Value = compiler.Value;
+const Scope = @import("symbol.zig").Scope;
 
 const Interpreter = @import("interpreter.zig");
 
 const functions_count = functions.definitions.items.len;
 
-pub const Error = error{
-    FunctionFailed,
-    Abort,
-} || std.mem.Allocator.Error;
+pub const Error = Interpreter.Error;
 
 const FunctionType = *const fn (*Interpreter, []const Value) Error!Value;
 
@@ -26,7 +24,7 @@ const handlers: [functions_count]FunctionType = .{
     handleStatusCode,
     handleError,
     handlePrint,
-    handleToArray,
+    handleAny,
 };
 
 pub fn callFunction(
@@ -80,12 +78,12 @@ fn handleStatusCode(self: *Interpreter, _: []const Value) Error!Value {
 fn handleError(self: *Interpreter, args: []const Value) Error!Value {
     const message = args[0].string;
 
-    self.printer.printStyled(
+    try self.printer.printStyled(
         self.allocator,
         .{ .fg = .bright_red },
         "{s}\n",
         .{message},
-    ) catch return Error.FunctionFailed;
+    );
 
     return Error.Abort;
 }
@@ -93,29 +91,38 @@ fn handleError(self: *Interpreter, args: []const Value) Error!Value {
 fn handlePrint(self: *Interpreter, args: []const Value) Error!Value {
     const message = args[0].string;
 
-    self.printer.print(
+    try self.printer.print(
         self.allocator,
         "{s}\n",
         .{message},
-    ) catch unreachable;
+    );
 
     return .void;
 }
 
-fn handleToArray(self: *Interpreter, args: []const Value) Error!Value {
-    const value = args[0];
+fn handleAny(self: *Interpreter, args: []const Value) Error!Value {
+    const list = args[0].list;
 
-    var allocator = self.currentScope().arena.allocator();
+    const test_fn = args[1].lambda;
 
-    const out_array = try allocator.dupe(Value, &.{value});
+    for (list.items) |item| {
+        var scope: Scope = .init(self.currentScope(), self.allocator, test_fn.scope);
+        defer scope.deinit();
 
-    const type_ptr = try allocator.create(Type);
-    type_ptr.* = value.typeOf();
+        lib.debug.dump(.{
+            .symbol = item,
+        }, 4);
 
-    return .{
-        .list = .{
-            .items_type = type_ptr,
-            .items = out_array,
-        },
-    };
+        try scope.define(.{
+            .name = test_fn.captures[0].name,
+            .value = item,
+        });
+
+        const result = try self.evaluateExpr(&scope, &test_fn.body);
+
+        if (result.eql(.{ .bool = true }))
+            return .{ .bool = true };
+    }
+
+    return .{ .bool = false };
 }

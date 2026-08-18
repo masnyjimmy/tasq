@@ -24,7 +24,7 @@ const ScopeStack = @import("scope_stack.zig");
 
 pub const Interpreter = @This();
 
-const InterpreterError = std.Io.Writer.Error || binary_mod.Error || std.mem.Allocator.Error || std.process.SpawnError || error{
+pub const Error = std.Io.Writer.Error || binary_mod.Error || std.mem.Allocator.Error || std.process.SpawnError || error{
     Abort,
     Break,
     Continue,
@@ -62,12 +62,12 @@ pub fn init(
     };
 }
 
-pub fn run(self: *Interpreter) InterpreterError!void {
+pub fn run(self: *Interpreter) Error!void {
     const target_depth = self.call_stack.stack.items.len;
     while (try self.call_stack.advance(self.allocator)) |res| {
         switch (res) {
             .statement => |stmt| self.main(stmt) catch |err| switch (err) {
-                InterpreterError.Abort => return,
+                Error.Abort => return,
                 else => return err,
             },
             .frame_end => {
@@ -78,7 +78,7 @@ pub fn run(self: *Interpreter) InterpreterError!void {
     }
 }
 
-fn main(self: *Interpreter, stmt: *const ir.Statement) InterpreterError!void {
+fn main(self: *Interpreter, stmt: *const ir.Statement) Error!void {
     const scope = self.currentScope();
     switch (stmt.*) {
         .decl => |decl| {
@@ -90,7 +90,7 @@ fn main(self: *Interpreter, stmt: *const ir.Statement) InterpreterError!void {
             try self.handleProcess(process);
         },
         .if_stmt => |*if_stmt| {
-            const cond = try self.resolveExpr(scope, &if_stmt.cond);
+            const cond = try self.evaluateExpr(scope, &if_stmt.cond);
 
             if (cond.bool) {
                 try self.pushBlock(&if_stmt.then);
@@ -99,7 +99,7 @@ fn main(self: *Interpreter, stmt: *const ir.Statement) InterpreterError!void {
             }
         },
         .switch_stmt => |*switch_stmt| {
-            const target = try self.resolveExpr(scope, &switch_stmt.subject);
+            const target = try self.evaluateExpr(scope, &switch_stmt.subject);
 
             const block: ?*const ir.StatementBlock = switch_stmt.cases.getPtr(target) orelse if (switch_stmt.else_case) |*e| e else null;
 
@@ -110,7 +110,7 @@ fn main(self: *Interpreter, stmt: *const ir.Statement) InterpreterError!void {
             const values = try scope.arena.allocator().alloc(Value, for_stmt.subjects.len);
 
             for (values, for_stmt.subjects) |*out, in| {
-                out.* = try self.resolveExpr(scope, &in);
+                out.* = try self.evaluateExpr(scope, &in);
             }
 
             const max_length = blk: {
@@ -146,11 +146,11 @@ fn main(self: *Interpreter, stmt: *const ir.Statement) InterpreterError!void {
 
                 // run till this level again
                 self.run() catch |err| switch (err) {
-                    InterpreterError.Break => {
+                    Error.Break => {
                         try self.popBlockTarget(&for_stmt.body);
                         break;
                     },
-                    InterpreterError.Continue => {
+                    Error.Continue => {
                         try self.popBlockTarget(&for_stmt.body);
                         continue;
                     },
@@ -159,7 +159,7 @@ fn main(self: *Interpreter, stmt: *const ir.Statement) InterpreterError!void {
             }
         },
         .expr => |*expr| {
-            _ = try self.resolveExpr(scope, expr);
+            _ = try self.evaluateExpr(scope, expr);
         },
         else => {
             try self.printer.printStyled(self.allocator, .{ .bold = true, .fg = .bright_red }, "unsupported yet\n", .{});
@@ -168,7 +168,7 @@ fn main(self: *Interpreter, stmt: *const ir.Statement) InterpreterError!void {
     }
 }
 
-fn pushBlock(self: *Interpreter, block: *const ir.StatementBlock) InterpreterError!void {
+fn pushBlock(self: *Interpreter, block: *const ir.StatementBlock) Error!void {
     try self.call_stack.push(self.allocator, null, block);
     try self.scope_stack.pushBlock(self.allocator, block.scope);
 }
@@ -177,7 +177,7 @@ fn popBlock(self: *Interpreter) void {
     self.scope_stack.pop(self.allocator);
 }
 
-fn popBlockTarget(self: *Interpreter, block: *const ir.StatementBlock) InterpreterError!void {
+fn popBlockTarget(self: *Interpreter, block: *const ir.StatementBlock) Error!void {
     while (self.call_stack.current) |state| {
         const is_current = state.block == block;
 
@@ -188,10 +188,10 @@ fn popBlockTarget(self: *Interpreter, block: *const ir.StatementBlock) Interpret
     } else unreachable;
 }
 
-fn handleDecl(self: *Interpreter, scope: *Scope, decl: *const ir.Decl) InterpreterError!Value {
+fn handleDecl(self: *Interpreter, scope: *Scope, decl: *const ir.Decl) Error!Value {
     const decl_scope = scope.findByStatic(decl.scope) orelse unreachable;
 
-    const value = try self.resolveExpr(decl_scope, &decl.value);
+    const value = try self.evaluateExpr(decl_scope, &decl.value);
 
     try decl_scope.define(.{
         .name = decl.name,
@@ -201,7 +201,7 @@ fn handleDecl(self: *Interpreter, scope: *Scope, decl: *const ir.Decl) Interpret
     return value;
 }
 
-fn handleProcess(self: *Interpreter, process: []const u8) InterpreterError!void {
+fn handleProcess(self: *Interpreter, process: []const u8) Error!void {
     const shell_len = self.options.shell.len;
 
     var argv = try self.allocator.alloc([]const u8, shell_len + 1);
@@ -219,7 +219,7 @@ fn handleProcess(self: *Interpreter, process: []const u8) InterpreterError!void 
     _ = try child.wait(self.io);
 }
 
-fn resolveExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) InterpreterError!Value {
+pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Error!Value {
     return switch (expr.*) {
         .bool_lit => |lit| .{ .bool = lit },
         .char_lit => |lit| .{ .char = lit },
@@ -231,10 +231,10 @@ fn resolveExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Interpre
 
             for (list.items) |item| {
                 if (item.is_spread) {
-                    const spread = try self.resolveExpr(scope, item.expr);
+                    const spread = try self.evaluateExpr(scope, item.expr);
                     try result.appendSlice(scope.arena.allocator(), spread.list.items);
                 } else {
-                    try result.append(scope.arena.allocator(), try self.resolveExpr(scope, item.expr));
+                    try result.append(scope.arena.allocator(), try self.evaluateExpr(scope, item.expr));
                 }
             }
 
@@ -248,7 +248,7 @@ fn resolveExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Interpre
 
         .ident => |id| {
             // get resolved
-            if (self.getSymbol(id.name)) |sym| {
+            if (scope.resolve(id.name)) |sym| {
                 return sym.value;
             }
             // resolve if not already (lazy resolution)
@@ -259,26 +259,26 @@ fn resolveExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Interpre
             };
         },
         .if_expr => |if_expr| {
-            const cond = try self.resolveExpr(scope, &if_expr.cond);
+            const cond = try self.evaluateExpr(scope, &if_expr.cond);
             std.debug.assert(cond == .bool);
 
             return if (cond.bool)
-                try self.resolveExpr(scope, &if_expr.then)
+                try self.evaluateExpr(scope, &if_expr.then)
             else
-                try self.resolveExpr(scope, &if_expr.@"else");
+                try self.evaluateExpr(scope, &if_expr.@"else");
         },
         .switch_expr => |switch_expr| {
-            const target = try self.resolveExpr(scope, &switch_expr.subject);
+            const target = try self.evaluateExpr(scope, &switch_expr.subject);
 
             const value = switch_expr.cases.get(target) orelse switch_expr.else_case;
 
-            return try self.resolveExpr(scope, &value);
+            return try self.evaluateExpr(scope, &value);
         },
         .for_expr => |for_expr| {
             const subjects = try scope.arena.allocator().alloc(Value, for_expr.subjects.len);
 
             for (subjects, for_expr.subjects) |*out, in| {
-                out.* = try self.resolveExpr(scope, &in);
+                out.* = try self.evaluateExpr(scope, &in);
             }
 
             const max_length = blk: {
@@ -316,9 +316,9 @@ fn resolveExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Interpre
                     }
                 }
 
-                const item = self.resolveExpr(iter_scope, &for_expr.body) catch |err| switch (err) {
-                    InterpreterError.Continue => continue,
-                    InterpreterError.Break => break,
+                const item = self.evaluateExpr(iter_scope, &for_expr.body) catch |err| switch (err) {
+                    Error.Continue => continue,
+                    Error.Break => break,
                     else => return err,
                 };
 
@@ -336,8 +336,8 @@ fn resolveExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Interpre
             };
         },
         .binary => |binary| {
-            const left = try self.resolveExpr(scope, &binary.left);
-            const right = try self.resolveExpr(scope, &binary.right);
+            const left = try self.evaluateExpr(scope, &binary.left);
+            const right = try self.evaluateExpr(scope, &binary.right);
 
             // add,sub,div,mul => [string,float,int,list,bool] op [string,float,int]
 
@@ -349,7 +349,7 @@ fn resolveExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Interpre
             );
         },
         .unary => |unary| {
-            const operand = try self.resolveExpr(scope, &unary.operand);
+            const operand = try self.evaluateExpr(scope, &unary.operand);
             std.debug.assert(operand.typeOf() == .bool);
 
             switch (unary.op) {
@@ -372,20 +372,20 @@ fn resolveExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Interpre
             const args = try scope.arena.allocator().alloc(Value, call.args.len);
 
             for (call.args, args) |in, *out| {
-                out.* = try self.resolveExpr(scope, &in);
+                out.* = try self.evaluateExpr(scope, &in);
             }
-
             return builtin.callFunction(self, call.function.id, args) catch |err| return switch (err) {
-                builtin.Error.Abort => InterpreterError.Abort,
+                builtin.Error.Abort => Error.Abort,
                 else => unreachable,
             };
         },
-        .@"continue" => InterpreterError.Continue,
-        .@"break" => InterpreterError.Break,
+        .lambda => |lambda| .{ .lambda = lambda },
+        .@"continue" => Error.Continue,
+        .@"break" => Error.Break,
     };
 }
 
-fn resolveString(self: *Interpreter, scope: *Scope, string: ir.String) InterpreterError![]const u8 {
+fn resolveString(self: *Interpreter, scope: *Scope, string: ir.String) Error![]const u8 {
     var aw = std.Io.Writer.Allocating.init(scope.arena.allocator());
     const writer = &aw.writer;
     errdefer aw.deinit();
@@ -396,7 +396,7 @@ fn resolveString(self: *Interpreter, scope: *Scope, string: ir.String) Interpret
                 try writer.writeAll(lit);
             },
             .expr => |expr| {
-                const value = try self.resolveExpr(scope, &expr);
+                const value = try self.evaluateExpr(scope, &expr);
                 try writer.print("{f}", .{value});
             },
         }
