@@ -8,19 +8,12 @@ const Value = compiler.Value;
 
 const binary_mod = @import("binary.zig");
 
-const symbol_mod = @import("symbol.zig");
-
-const Symbol = symbol_mod.Symbol;
-const Scope = symbol_mod.Scope;
+const Scope = @import("Scope.zig");
 
 const conzole = @import("conzole");
 const Printer = conzole.terminal.Printer;
 
 const builtin = @import("builtin.zig");
-
-const CallStack = @import("call_stack.zig");
-
-const ScopeStack = @import("scope_stack.zig");
 
 pub const Interpreter = @This();
 
@@ -35,9 +28,6 @@ io: std.Io,
 printer: *Printer,
 options: *const ir.Options,
 status_code: u8 = 0,
-
-call_stack: *CallStack,
-scope_stack: *ScopeStack,
 environ: *const std.process.Environ.Map,
 
 pub fn init(
@@ -45,8 +35,6 @@ pub fn init(
     io: std.Io,
     printer: *Printer,
     options: *const ir.Options,
-    call_stack: *CallStack,
-    scope_stack: *ScopeStack,
     environ: *const std.process.Environ.Map,
 ) Interpreter {
     return .{
@@ -54,32 +42,98 @@ pub fn init(
         .io = io,
         .printer = printer,
         .options = options,
-
-        .call_stack = call_stack,
-        .scope_stack = scope_stack,
-
         .environ = environ,
     };
 }
 
-pub fn run(self: *Interpreter) Error!void {
-    const target_depth = self.call_stack.stack.items.len;
-    while (try self.call_stack.advance(self.allocator)) |res| {
-        switch (res) {
-            .statement => |stmt| self.main(stmt) catch |err| switch (err) {
-                Error.Abort => return,
-                else => return err,
-            },
-            .frame_end => {
-                self.scope_stack.pop(self.allocator);
-                if (self.call_stack.stack.items.len < target_depth) return;
-            },
-        }
+fn bindArgs(scope: *Scope, args: []*ir.Argument, values: *std.array_hash_map.String(Value)) !void {
+    for (args) |arg| {
+        const kv = values.fetchSwapRemove(arg.name) orelse {
+            std.debug.panic(
+                \\internal error: missing argument '{s}';
+                \\this should have been caught during IR validation
+            ,
+                .{arg.name},
+            );
+        };
+
+        try scope.define(.{
+            .name = kv.key,
+            .value = try kv.value.clone(scope.arena.allocator()),
+        }, false);
     }
 }
 
-fn main(self: *Interpreter, stmt: *const ir.Statement) Error!void {
-    const scope = self.currentScope();
+pub fn run(self: *Interpreter, initial_task: *const ir.Task, values: *std.array_hash_map.String(Value)) !void {
+    const root_scope = try Scope.create(null, self.allocator, initial_task.body.scope.root());
+    defer root_scope.destroy();
+
+    const group_scope: ?*Scope = blk: {
+        if (initial_task.group) |group| {
+            const group_scope = try Scope.create(root_scope, self.allocator, group.scope);
+            errdefer group_scope.destroy();
+
+            try bindArgs(group_scope, group.args, values);
+
+            break :blk group_scope;
+        } else {
+            break :blk null;
+        }
+    };
+    defer {
+        if (group_scope) |gs| {
+            gs.destroy();
+        }
+    }
+
+    const task_scope = try Scope.create(
+        group_scope orelse root_scope,
+        self.allocator,
+        initial_task.body.scope,
+    );
+    defer task_scope.destroy();
+
+    try bindArgs(task_scope, initial_task.args, values);
+
+    try self.runBlock(task_scope, initial_task.body.statements);
+}
+
+pub fn runTaskWithGroup(
+    self: *Interpreter,
+    scope: *Scope,
+    group: *const ir.Group,
+    task: *const ir.Task,
+    values: *std.array_hash_map.String(Value),
+) !void {
+    const group_scope = try Scope.create(scope, self.allocator, group.scope);
+    defer group_scope.destroy();
+
+    try bindArgs(group_scope, group.args, values);
+
+    try self.runTask(group_scope, task, values);
+}
+
+pub fn runTask(
+    self: *Interpreter,
+    scope: *Scope,
+    task: *const ir.Task,
+    values: *std.array_hash_map.String(Value),
+) !void {
+    const task_scope = try Scope.create(scope, self.allocator, task.body.scope);
+    defer task_scope.destroy();
+
+    try bindArgs(task_scope, task.args, values);
+
+    try self.runBlock(task_scope, task.body.statements);
+}
+
+pub fn runBlock(self: *Interpreter, scope: *Scope, statements: []const ir.Statement) Error!void {
+    for (statements) |*stmt| {
+        try self.main(scope, stmt);
+    }
+}
+
+fn main(self: *Interpreter, scope: *Scope, stmt: *const ir.Statement) Error!void {
     switch (stmt.*) {
         .decl => |decl| {
             _ = try self.handleDecl(scope, decl);
@@ -93,9 +147,15 @@ fn main(self: *Interpreter, stmt: *const ir.Statement) Error!void {
             const cond = try self.evaluateExpr(scope, &if_stmt.cond);
 
             if (cond.bool) {
-                try self.pushBlock(&if_stmt.then);
+                const then_scope = try Scope.create(scope, self.allocator, if_stmt.then.scope);
+                defer then_scope.destroy();
+
+                try self.runBlock(then_scope, if_stmt.then.statements);
             } else if (if_stmt.else_) |*else_| {
-                try self.pushBlock(else_);
+                const else_scope = try Scope.create(scope, self.allocator, else_.scope);
+                defer else_scope.destroy();
+
+                try self.runBlock(else_scope, else_.statements);
             }
         },
         .switch_stmt => |*switch_stmt| {
@@ -103,11 +163,16 @@ fn main(self: *Interpreter, stmt: *const ir.Statement) Error!void {
 
             const block: ?*const ir.StatementBlock = switch_stmt.cases.getPtr(target) orelse if (switch_stmt.else_case) |*e| e else null;
 
-            if (block) |b|
-                try self.pushBlock(b);
+            if (block) |b| {
+                const case_scope = try Scope.create(scope, self.allocator, b.scope);
+                defer case_scope.destroy();
+
+                try self.runBlock(case_scope, b.statements);
+            }
         },
         .for_stmt => |*for_stmt| {
-            const values = try scope.arena.allocator().alloc(Value, for_stmt.subjects.len);
+            const values = try self.allocator.alloc(Value, for_stmt.subjects.len);
+            defer self.allocator.free(values);
 
             for (values, for_stmt.subjects) |*out, in| {
                 out.* = try self.evaluateExpr(scope, &in);
@@ -123,69 +188,40 @@ fn main(self: *Interpreter, stmt: *const ir.Statement) Error!void {
             };
 
             for (0..max_length) |idx| {
-                try self.pushBlock(&for_stmt.body);
+                const for_scope = try Scope.create(scope, self.allocator, for_stmt.body.scope);
+                defer for_scope.destroy();
 
-                const iter_scope = self.currentScope();
-
-                for (for_stmt.captures[0 .. for_stmt.captures.len - 1], 0..) |maybe_cap, j| {
+                for (for_stmt.captures[0..for_stmt.subjects.len], 0..) |maybe_cap, j| {
                     if (maybe_cap) |cap| {
-                        try iter_scope.define(.{
+                        try for_scope.define(.{
                             .name = cap.name,
                             .value = values[j].list.items[idx],
-                        });
-                    }
-                }
-                if (for_stmt.captures.len == for_stmt.subjects.len + 1) {
-                    if (for_stmt.captures[for_stmt.captures.len - 1]) |idx_cap| {
-                        try iter_scope.define(.{
-                            .name = idx_cap.name,
-                            .value = .{ .number = @floatFromInt(idx) },
-                        });
+                        }, false);
                     }
                 }
 
-                // run till this level again
-                self.run() catch |err| switch (err) {
-                    Error.Break => {
-                        try self.popBlockTarget(&for_stmt.body);
-                        break;
-                    },
-                    Error.Continue => {
-                        try self.popBlockTarget(&for_stmt.body);
-                        continue;
-                    },
-                    else => return err,
-                };
+                if (for_stmt.captures.len == for_stmt.subjects.len + 1) {
+                    if (for_stmt.captures[for_stmt.captures.len - 1]) |idx_cap| {
+                        try for_scope.define(.{
+                            .name = idx_cap.name,
+                            .value = .{ .number = @floatFromInt(idx) },
+                        }, false);
+                    }
+                }
+
+                try self.runBlock(for_scope, for_stmt.body.statements);
             }
+        },
+        .task_call => |*task_call| {
+            _ = task_call.task;
+
+            // what to do here?
+
         },
         .expr => |*expr| {
             _ = try self.evaluateExpr(scope, expr);
         },
-        else => {
-            try self.printer.printStyled(self.allocator, .{ .bold = true, .fg = .bright_red }, "unsupported yet\n", .{});
-            try self.printer.flush();
-        },
     }
-}
-
-fn pushBlock(self: *Interpreter, block: *const ir.StatementBlock) Error!void {
-    try self.call_stack.push(self.allocator, null, block);
-    try self.scope_stack.pushBlock(self.allocator, block.scope);
-}
-fn popBlock(self: *Interpreter) void {
-    self.call_stack.pop(self.allocator);
-    self.scope_stack.pop(self.allocator);
-}
-
-fn popBlockTarget(self: *Interpreter, block: *const ir.StatementBlock) Error!void {
-    while (self.call_stack.current) |state| {
-        const is_current = state.block == block;
-
-        self.popBlock();
-
-        if (is_current)
-            break;
-    } else unreachable;
 }
 
 fn handleDecl(self: *Interpreter, scope: *Scope, decl: *const ir.Decl) Error!Value {
@@ -196,7 +232,7 @@ fn handleDecl(self: *Interpreter, scope: *Scope, decl: *const ir.Decl) Error!Val
     try decl_scope.define(.{
         .name = decl.name,
         .value = value,
-    });
+    }, false);
 
     return value;
 }
@@ -275,16 +311,17 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
             return try self.evaluateExpr(scope, &value);
         },
         .for_expr => |for_expr| {
-            const subjects = try scope.arena.allocator().alloc(Value, for_expr.subjects.len);
+            const values = try self.allocator.alloc(Value, for_expr.subjects.len);
+            defer self.allocator.free(values);
 
-            for (subjects, for_expr.subjects) |*out, in| {
+            for (values, for_expr.subjects) |*out, in| {
                 out.* = try self.evaluateExpr(scope, &in);
             }
 
             const max_length = blk: {
-                var out: usize = subjects[0].list.items.len;
+                var out: usize = values[0].list.items.len;
 
-                for (subjects[1..]) |val|
+                for (values[1..]) |val|
                     out = @min(out, val.list.items.len);
 
                 break :blk out;
@@ -293,30 +330,28 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
             var result: std.ArrayList(Value) = .empty;
 
             for (0..max_length) |idx| {
-                try self.scope_stack.pushBlock(self.allocator, for_expr.scope);
-                defer self.scope_stack.pop(self.allocator);
+                const for_scope = try Scope.create(scope, self.allocator, for_expr.scope);
+                defer for_scope.destroy();
 
-                const iter_scope = self.currentScope();
-
-                for (for_expr.captures[0 .. for_expr.captures.len - 1], 0..) |maybe_cap, j| {
+                for (for_expr.captures[0..for_expr.subjects.len], 0..) |maybe_cap, j| {
                     if (maybe_cap) |cap| {
-                        try iter_scope.define(.{
+                        try for_scope.define(.{
                             .name = cap.name,
-                            .value = subjects[j].list.items[idx],
-                        });
+                            .value = values[j].list.items[idx],
+                        }, false);
                     }
                 }
 
                 if (for_expr.captures.len == for_expr.subjects.len + 1) {
                     if (for_expr.captures[for_expr.captures.len - 1]) |idx_cap| {
-                        try iter_scope.define(.{
+                        try for_scope.define(.{
                             .name = idx_cap.name,
                             .value = .{ .number = @floatFromInt(idx) },
-                        });
+                        }, false);
                     }
                 }
 
-                const item = self.evaluateExpr(iter_scope, &for_expr.body) catch |err| switch (err) {
+                const item = self.evaluateExpr(for_scope, &for_expr.body) catch |err| switch (err) {
                     Error.Continue => continue,
                     Error.Break => break,
                     else => return err,
@@ -374,10 +409,7 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
             for (call.args, args) |in, *out| {
                 out.* = try self.evaluateExpr(scope, &in);
             }
-            return builtin.callFunction(self, call.function.id, args) catch |err| return switch (err) {
-                builtin.Error.Abort => Error.Abort,
-                else => unreachable,
-            };
+            return try builtin.callFunction(self, scope, call.function.id, args);
         },
         .lambda => |lambda| .{ .lambda = lambda },
         .@"continue" => Error.Continue,
@@ -403,12 +435,4 @@ fn resolveString(self: *Interpreter, scope: *Scope, string: ir.String) Error![]c
     }
 
     return try aw.toOwnedSlice();
-}
-
-pub fn currentScope(self: *Interpreter) *Scope {
-    return self.scope_stack.assertCurrentScope();
-}
-
-fn getSymbol(self: *Interpreter, name: []const u8) ?*Symbol {
-    return self.currentScope().resolve(name);
 }
