@@ -653,11 +653,19 @@ pub const Sema = struct {
             }
         };
 
+        // A task found via `.closest` that belongs to a group can only have
+        // been reached by walking *up* through enclosing scopes - which means
+        // `scope` is necessarily nested inside that same group's scope right
+        // now. `.root` can only ever find ungrouped tasks, and `.group` is
+        // always an explicit "from outside" call. So this one check fully
+        // captures "am I calling a sibling task from inside my own group?".
+        const is_same_group_call = call.scope == .closest and task.group != null;
+
         // validate args
-        var out_args = ir.TaskCallArgs.init(self.arena.allocator());
+        var args: ir.TaskCall.ArgsMap = .empty;
 
         // read positional
-        const positionalCount = blk: {
+        const pos_count = blk: {
             for (call.args, 0..) |arg, idx| {
                 if (arg.name != null) break :blk idx;
                 const arg_span = self.span_registry.getSpan(arg.id);
@@ -665,124 +673,129 @@ pub const Sema = struct {
                 const result = try self.analyseExpr(scope, arg.value, arg.id);
 
                 if (idx >= task.args.len) {
-                    try self.diagnostics.err(arg_span, "invalid positional arguments count, got '{}', expected {}", .{ idx + 1, task.args.len });
+                    try self.diagnostics.err(arg_span, "invalid positional arguments count, got '{}', expected '{}'", .{ idx + 1, task.args.len });
                     return SemaError.SemanticError;
                 }
 
                 const t = task.args[idx];
 
                 if (!Type.eq(t.type.typeOf(), result.type)) {
-                    try self.diagnostics.err(arg_span, "invalid type", .{});
+                    try self.diagnostics.err(arg_span, "invalid argument type, got '{f}', expected '{f}'", .{ result.type, t.type.typeOf() });
                     return SemaError.SemanticError;
                 }
 
-                try out_args.put(t.name, result.expr);
+                try args.put(self.arena.allocator(), t.name, .{ .value = result.expr });
             }
             break :blk call.args.len;
         };
 
-        // get rest of parameters from group and task
-        const restArgs = totalArgs: {
-            var out = try std.ArrayList(*ir.Argument).initCapacity(
-                self.arena.allocator(),
-                task.args.len + if (task.group) |g| g.args.len else 0,
-            );
-            for (task.args[positionalCount..]) |arg| {
-                try out.append(self.arena.allocator(), arg);
-            }
-            if (task.group) |g| {
-                for (g.args) |arg| {
-                    try out.append(self.arena.allocator(), arg);
-                }
-            }
-            break :totalArgs try out.toOwnedSlice(self.arena.allocator());
+        // retrieve named arguments, tagging each with whether it belongs to
+        // the task itself or to the enclosing group - we need that origin
+        // later to decide which of the two rules applies to a missing arg.
+        const NamedArgEntry = struct {
+            arg: *ir.Argument,
+            from_group: bool,
         };
-        defer self.arena.allocator().free(restArgs);
 
-        // get positional parameters from call as map {name => arg}
-        var restCallArgs = blk: {
-            var out = std.StringHashMap(ast.TaskCall.Arg).init(self.arena.allocator());
-            for (call.args[positionalCount..]) |arg| {
-                const arg_span = self.span_registry.getSpan(arg.id);
-                if (out.contains(arg.name.?)) {
-                    try self.diagnostics.err(arg_span, "duplicate argument '{s}'", .{arg.name.?});
-                    return SemaError.SemanticError;
-                }
+        var named_args = blk: {
+            var out: std.array_hash_map.String(NamedArgEntry) = .empty;
+            try out.ensureTotalCapacity(
+                self.arena.allocator(),
+                (task.args.len - pos_count) + if (task.group) |g| g.args.len else 0,
+            );
 
-                try out.put(arg.name.?, arg);
+            // collect task's own args
+            for (task.args) |arg|
+                out.putAssumeCapacity(
+                    arg.name,
+                    .{ .arg = arg, .from_group = false },
+                );
+
+            // collect group args
+            if (task.group) |g| {
+                for (g.args) |arg|
+                    out.putAssumeCapacity(
+                        arg.name,
+                        .{ .arg = arg, .from_group = true },
+                    );
             }
+
             break :blk out;
         };
-        defer restCallArgs.deinit();
 
-        // bind positional arguments to task argument
-        for (restArgs) |arg| {
-            if (restCallArgs.fetchRemove(arg.name)) |in| {
-                const in_arg = in.value;
-                const in_arg_span = self.span_registry.getSpan(in_arg.id);
+        for (call.args[pos_count..]) |arg| {
+            const arg_span = self.span_registry.getSpan(arg.id);
+            const arg_name = arg.name.?; //TODO: assertion can be wrong here, as it can be user error propably, check it
 
-                const result = try self.analyseExpr(scope, in_arg.value, in_arg.id);
-                if (!Type.eq(result.type, arg.type.typeOf())) {
-                    try self.diagnostics.err(
-                        in_arg_span,
-                        "invalid argument type, got '{s}', expected '{s}'",
-                        .{
-                            @tagName(result.type),
-                            @tagName(arg.type),
-                        },
-                    );
-                    return SemaError.SemanticError;
-                }
-                try out_args.put(arg.name, result.expr);
-            } else if (arg.default == null) {
-                try self.diagnostics.err(node.details.task_call.args, "missing argument '{s}'", .{arg.name});
-                return SemaError.SemanticError;
-            }
-        }
-
-        // bind positional arguments to group arguments
-        if (task.group) |g| {
-            for (g.args) |arg| {
-                if (restCallArgs.fetchRemove(arg.name)) |in| {
-                    const in_arg = in.value;
-                    const arg_span = self.span_registry.getSpan(in_arg.id);
-
-                    const result = try self.analyseExpr(scope, in_arg.value, in_arg.id);
-                    if (!Type.eq(result.type, arg.type.typeOf())) {
-                        try self.diagnostics.err(
-                            arg_span,
-                            "invalid argument type, got '{s}', expected '{s}'",
-                            .{
-                                @tagName(result.type),
-                                @tagName(arg.type),
-                            },
-                        );
-                        return SemaError.SemanticError;
-                    }
-                } else if (arg.default == null) {
-                    try self.diagnostics.err(node.details.task_call.args, "missing group argument '{s}'", .{arg.name});
-                    return SemaError.SemanticError;
-                }
-            }
-        }
-
-        if (restCallArgs.unmanaged.size != 0) {
-            var iter = restCallArgs.iterator();
-            while (iter.next()) |v| {
+            if (args.contains(arg_name)) {
                 try self.diagnostics.err(
-                    self.span_registry.getSpan(
-                        v.value_ptr.id,
-                    ),
-                    "invalid argument '{s}'",
-                    .{v.key_ptr.*},
+                    arg_span,
+                    "duplicate argument '{s}'",
+                    .{arg_name},
+                );
+                continue;
+            }
+
+            const target_arg = if (named_args.fetchSwapRemove(arg_name)) |target|
+                target.value.arg
+            else {
+                try self.diagnostics.err(
+                    arg_span,
+                    "unknown argument '{s}'",
+                    .{arg_name},
+                );
+                continue;
+            };
+
+            const value = try self.analyseExpr(
+                scope,
+                arg.value,
+                arg.id,
+            );
+
+            if (value.type.eq(target_arg.type.typeOf()) == false) {
+                try self.diagnostics.err(
+                    arg_span,
+                    "invalid argument value type, got '{f}', expected '{f}'",
+                    .{
+                        value.type,
+                        target_arg.type.typeOf(),
+                    },
                 );
             }
-            return SemaError.SemanticError;
+
+            try args.put(
+                self.arena.allocator(),
+                arg_name,
+                .{ .value = value.expr },
+            );
+        }
+
+        // Anything left in named_args wasn't explicitly passed by the caller.
+        var it = named_args.iterator();
+
+        while (it.next()) |kv| {
+            const arg_name, const entry = .{ kv.key_ptr.*, kv.value_ptr.* };
+
+            // if its same group task call, then value is already provided in scope, it can be omited
+            if (entry.from_group and is_same_group_call) {
+                continue;
+            }
+
+            if (entry.arg.default) |def| {
+                try args.put(self.arena.allocator(), arg_name, .{ .default = def });
+            } else {
+                try self.diagnostics.err(
+                    self.span_registry.getSpan(call.id),
+                    "missing argument: '{s}'",
+                    .{arg_name},
+                );
+            }
         }
 
         return .{
             .task = task,
-            .args = out_args,
+            .args = args,
         };
     }
 
