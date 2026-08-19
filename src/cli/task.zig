@@ -696,13 +696,14 @@ pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []cons
         return TaskError.TaskNotFound;
     };
 
-    var interpreter: inter.Interpreter = .init(
+    var interpreter: inter.Interpreter = try .init(
         ctx.allocator,
         ctx.io,
         ctx.printer,
         &file.options,
         ctx.environ,
     );
+    defer interpreter.deinit();
 
     var parser: TaskArgumentParser = try .init(
         ctx.allocator,

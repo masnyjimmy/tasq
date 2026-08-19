@@ -9,13 +9,23 @@ const ct = lib.@"comptime";
 pub const options = OptionsGroup(&.{
     .{
         .name = "shell",
-        .value_type = .{
-            .list = &.string,
-        },
+        .value_types = &.{.{ .list = &.string }},
+    },
+    .{
+        .name = "dotenv",
+        .value_types = &.{ .bool, .string },
+    },
+    .{
+        .name = "working_dir",
+        .value_types = &.{.string},
+    },
+    .{
+        .name = "fail_fast",
+        .value_types = &.{.bool},
     },
 });
 
-fn OptionsGroup(comptime specs: []const OptionSpec) type {
+fn OptionsGroup(comptime specs: []const Spec) type {
     const Id = blk: {
         const TagType = enums.FitUnsigned(specs.len);
 
@@ -31,34 +41,36 @@ fn OptionsGroup(comptime specs: []const OptionSpec) type {
 
     const Definition = struct {
         id: Id,
-        value_type: MetaType,
+        value_types: []const MetaType,
     };
 
     const defs: [specs.len]Definition = comptime blk: {
         var defs: [specs.len]Definition = undefined;
 
         for (specs, 0..) |spec, idx| {
-            defs[idx] = .{
-                .id = @enumFromInt(idx),
-                .value_type = spec.value_type,
+            defs[idx] = def: {
+                var out = ct.copyFields(Definition, spec);
+                out.id = @enumFromInt(idx);
+
+                break :def out;
             };
         }
         break :blk defs;
     };
 
-    const map = enums.generateEnumNameMap(Id);
+    const name_map = enums.generateEnumNameMap(Id);
 
     return struct {
         pub const Type = Id;
 
         pub fn get(name: []const u8) ?Definition {
-            const t = map.get(name) orelse return null;
+            const t = name_map.get(name) orelse return null;
             return defs[@intFromEnum(t)];
         }
     };
 }
 
-const OptionSpec = struct {
+const Spec = struct {
     name: []const u8,
-    value_type: MetaType,
+    value_types: []const MetaType,
 };

@@ -240,6 +240,7 @@ pub const MetaTypeTag = enum {
     char,
     string,
     list,
+    tuple,
 };
 
 pub const MetaType = union(MetaTypeTag) {
@@ -249,6 +250,7 @@ pub const MetaType = union(MetaTypeTag) {
     char,
     string,
     list: *const MetaType,
+    tuple: []const MetaType,
 
     pub fn format(self: @This(), w: *std.Io.Writer) !void {
         switch (self) {
@@ -265,6 +267,7 @@ pub const MetaValue = union(MetaTypeTag) {
     char: u8,
     string: []const u8,
     list: []const MetaValue,
+    tuple: []const MetaValue,
 
     pub fn validateType(self: *const MetaValue, target_type: MetaType) bool {
         const T: MetaTypeTag = blk: {
@@ -280,9 +283,15 @@ pub const MetaValue = union(MetaTypeTag) {
         switch (T) {
             .list => {
                 for (self.list) |item| {
-                    if (item.validateType(target_type.list.*) == false) {
+                    if (item.validateType(target_type.list.*) == false)
                         return false;
-                    }
+                }
+                return true;
+            },
+            .tuple => {
+                for (self.tuple, target_type.tuple) |elem, target| {
+                    if (elem.validateType(target) == false)
+                        return false;
                 }
                 return true;
             },

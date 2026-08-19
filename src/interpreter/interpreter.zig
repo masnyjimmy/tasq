@@ -28,7 +28,8 @@ io: std.Io,
 printer: *Printer,
 options: *const ir.Options,
 status_code: u8 = 0,
-environ: *const std.process.Environ.Map,
+environ: std.process.Environ.Map,
+cwd: std.Io.Dir,
 
 pub fn init(
     allocator: std.mem.Allocator,
@@ -36,14 +37,36 @@ pub fn init(
     printer: *Printer,
     options: *const ir.Options,
     environ: *const std.process.Environ.Map,
-) Interpreter {
+) !Interpreter {
+
+    // TODO: read dotenv,
+
+    var new_environ = try environ.clone(allocator);
+    errdefer new_environ.deinit();
+
+    const cwd = blk: {
+        const cwd = std.Io.Dir.cwd();
+
+        if (options.dotenv) |env_file| {
+            try lib.dotenv.parse(io, env_file, &new_environ);
+        }
+
+        break :blk try cwd.openDir(io, options.working_dir orelse ".", .{});
+    };
+
     return .{
         .allocator = allocator,
         .io = io,
         .printer = printer,
         .options = options,
-        .environ = environ,
+        .environ = new_environ,
+        .cwd = cwd,
     };
+}
+
+pub fn deinit(self: *Interpreter) void {
+    self.environ.deinit();
+    self.cwd.close(self.io);
 }
 
 fn bindArgs(scope: *Scope, args: []*ir.Argument, values: *std.array_hash_map.String(Value)) !void {
@@ -94,6 +117,19 @@ pub fn run(self: *Interpreter, initial_task: *const ir.Task, values: *std.array_
     defer task_scope.destroy();
 
     try bindArgs(task_scope, initial_task.args, values);
+
+    // apply task env
+
+    const prev_environ = self.environ;
+    self.environ = try prev_environ.clone(self.allocator);
+    defer {
+        self.environ.deinit();
+        self.environ = prev_environ;
+    }
+
+    for (initial_task.envs) |env| {
+        try self.environ.put(env.key, env.value);
+    }
 
     try self.runBlock(task_scope, initial_task.body.statements);
 }
@@ -241,6 +277,18 @@ fn main(self: *Interpreter, scope: *Scope, stmt: *const ir.Statement) Error!void
                 }, false);
             }
 
+            // apply task environ
+            const prev_environ = self.environ;
+            self.environ = try prev_environ.clone(self.allocator);
+            defer {
+                self.environ.deinit();
+                self.environ = prev_environ;
+            }
+
+            for (task.envs) |env| {
+                try self.environ.put(env.key, env.value);
+            }
+
             try self.runBlock(task_scope, task.body.statements);
         },
         .expr => |*expr| {
@@ -272,9 +320,14 @@ fn handleProcess(self: *Interpreter, process: []const u8) Error!void {
     argv[shell_len] = process;
 
     try self.printer.printStyled(self.allocator, .{ .bold = true, .fg = .bright_white }, "{s}\n", .{process});
+
     var child = try std.process.spawn(
         self.io,
-        .{ .argv = argv },
+        .{
+            .argv = argv,
+            .cwd = .{ .dir = self.cwd },
+            .environ_map = &self.environ,
+        },
     );
 
     _ = try child.wait(self.io);

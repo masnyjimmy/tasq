@@ -13,3 +13,5 @@ pub const Interface = @import("interface.zig");
 pub const enums = @import("enums.zig");
 
 pub const @"comptime" = @import("comptime.zig");
+
+pub const dotenv = @import("dotenv.zig");
