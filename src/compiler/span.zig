@@ -9,6 +9,13 @@ pub fn end(self: @This()) u32 {
     return self.start + self.len;
 }
 
+pub fn between(left: Span, right: Span) Span {
+    return .{
+        .start = left.start,
+        .len = right.end() - left.start,
+    };
+}
+
 pub const Registry = struct {
     pub const NodeType = enum {
         leaf,
@@ -21,10 +28,15 @@ pub const Registry = struct {
         attribute,
         decl,
         block,
-        if_stmt,
+        @"if",
+        @"switch",
+        switch_case,
+        @"for",
+
         task_call,
         task_call_arg,
         builtin_call,
+        lambda,
         expr,
     };
 
@@ -44,12 +56,20 @@ pub const Registry = struct {
         decl: struct { name: Span, value: NodeId },
 
         block: struct { stmts: []const NodeId },
-        if_stmt: struct { cond: NodeId, then: NodeId, else_: ?NodeId },
+
+        @"if": struct { cond: NodeId, then: NodeId, else_: ?NodeId },
+
+        @"switch": struct { subject: NodeId },
+        switch_case: struct { patterns: []const NodeId, body: NodeId },
+
+        @"for": struct { subjects: []const NodeId, captures: []const Span, body: NodeId },
 
         task_call: struct { group: ?Span, task: Span, args: Span },
         task_call_arg: struct { name: ?Span, value: NodeId },
 
         builtin_call: struct { name: Span, args: []const NodeId },
+
+        lambda: struct { params: []const Span, body: NodeId },
 
         /// binary   -> children = .{ left, right }        (op needs no span)
         /// unary    -> children = .{ operand }
@@ -92,6 +112,16 @@ pub const Registry = struct {
                         allocator.free(list);
                     },
                     else => {},
+                },
+                .@"for" => |f| {
+                    allocator.free(f.subjects);
+                    allocator.free(f.captures);
+                },
+                .switch_case => |c| {
+                    allocator.free(c.patterns);
+                },
+                .lambda => |l| {
+                    allocator.free(l.params);
                 },
                 else => {},
             }

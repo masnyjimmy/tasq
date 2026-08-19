@@ -5,66 +5,53 @@ const lib = @import("lib");
 const compiler = @import("compiler");
 const platform = compiler.platform;
 const functions = compiler.functions;
-const typing = compiler.typing;
-const Value = typing.Value;
+const Type = compiler.Type;
+const Value = compiler.Value;
+const Scope = @import("Scope.zig");
 
 const Interpreter = @import("interpreter.zig");
 
-const functions_count = functions.function_defs.len;
+const functions_count = functions.definitions.items.len;
 
-pub const Error = error{
-    FunctionFailed,
-};
+pub const Error = Interpreter.Error;
 
-const FunctionType = *const fn (*const Interpreter, []const Value) Error!Value;
+const FunctionType = *const fn (*Interpreter, scope: *Scope, []const Value) Error!Value;
 
 const handlers: [functions_count]FunctionType = .{
     handleEnv,
-    handleEnvWithDefault,
     handleExists,
     handleOs,
     handleStatusCode,
+    handleError,
+    handlePrint,
+    handleAny,
 };
 
 pub fn callFunction(
-    interpreter: *const Interpreter,
-    id: functions.FunctionId,
+    interpreter: *Interpreter,
+    scope: *Scope,
+    id: functions.definitions.Id,
     args: []const Value,
 ) Error!Value {
-    const index = functions.getFunctionIndex(id, args.len) catch unreachable;
+    const index = @intFromEnum(id);
+
     const handler = handlers[index];
 
-    return try handler(interpreter, args);
+    return try handler(interpreter, scope, args);
 }
 
-fn handleEnv(self: *const Interpreter, args: []const Value) Error!Value {
-    const key = args[0].string;
-
-    const value = if (self.environ.get(key)) |value|
-        value
-    else {
-        self.printer.printStyled(
-            self.allocator,
-            .{ .fg = .red },
-            "'{s}' environment variable not found",
-            .{key},
-        ) catch unreachable;
-        return Error.FunctionFailed;
-    };
-
-    return .{ .string = value };
-}
-
-fn handleEnvWithDefault(self: *const Interpreter, args: []const Value) Error!Value {
+fn handleEnv(self: *Interpreter, _: *Scope, args: []const Value) Error!Value {
     const key = args[0].string;
     const default = args[1].string;
 
     return if (self.environ.get(key)) |value| .{
         .string = value,
-    } else .{ .string = default };
+    } else .{
+        .string = default,
+    };
 }
 
-fn handleExists(self: *const Interpreter, args: []const Value) Error!Value {
+fn handleExists(self: *Interpreter, _: *Scope, args: []const Value) Error!Value {
     const path = args[0].string;
 
     const cwd = std.Io.Dir.cwd();
@@ -79,12 +66,60 @@ fn handleExists(self: *const Interpreter, args: []const Value) Error!Value {
     return .{ .bool = result };
 }
 
-fn handleOs(_: *const Interpreter, _: []const Value) Error!Value {
+fn handleOs(_: *Interpreter, _: *Scope, _: []const Value) Error!Value {
     return .{
         .string = @tagName(platform.tag),
     };
 }
 
-fn handleStatusCode(self: *const Interpreter, _: []const Value) Error!Value {
+fn handleStatusCode(self: *Interpreter, _: *Scope, _: []const Value) Error!Value {
     return .{ .number = @floatFromInt(self.status_code) };
+}
+
+fn handleError(self: *Interpreter, _: *Scope, args: []const Value) Error!Value {
+    const message = args[0].string;
+
+    try self.printer.printStyled(
+        self.allocator,
+        .{ .fg = .bright_red },
+        "{s}\n",
+        .{message},
+    );
+
+    return Error.Abort;
+}
+
+fn handlePrint(self: *Interpreter, _: *Scope, args: []const Value) Error!Value {
+    const message = args[0].string;
+
+    try self.printer.print(
+        self.allocator,
+        "{s}\n",
+        .{message},
+    );
+
+    return .void;
+}
+
+fn handleAny(self: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+    const list = args[0].list;
+
+    const test_fn = args[1].lambda;
+
+    for (list.items) |item| {
+        var lambda_scope = try Scope.create(scope, self.allocator, test_fn.scope);
+        defer lambda_scope.destroy();
+
+        try lambda_scope.define(.{
+            .name = test_fn.captures[0].name,
+            .value = item,
+        }, false);
+
+        const result = try self.evaluateExpr(scope, &test_fn.body);
+
+        if (result.eql(.{ .bool = true }))
+            return .{ .bool = true };
+    }
+
+    return .{ .bool = false };
 }

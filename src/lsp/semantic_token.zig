@@ -20,6 +20,7 @@ pub const TokenType = enum(u32) {
     macro,
     decorator,
     namespace,
+    builtin,
 
     pub fn getNames() []const []const u8 {
         return std.meta.fieldNames(@This());
@@ -217,11 +218,42 @@ pub const Collector = struct {
             .decl => |v| try self.walkDecl(&v),
             .task_call => |v| try self.walkTaskCall(&v),
             .if_stmt => |v| try self.walkIfStmt(&v),
+            .switch_stmt => |s| try self.walkSwitchStmt(&s),
+            .for_stmt => |f| try self.walkForStmt(&f),
+            .expr => |e| try self.walkExpr(&e, node_id),
         }
     }
+
+    fn walkForStmt(self: *Collector, for_stmt: *const ast.ForStmt) Error!void {
+        const for_node = self.span_registry.get(for_stmt.id);
+
+        for (for_stmt.subjects, for_node.details.@"for".subjects) |sub, sub_node| {
+            try self.walkExpr(&sub, sub_node);
+        }
+
+        const body = self.span_registry.get(for_node.details.@"for".body).details.block;
+        for (for_stmt.body, body.stmts) |stmt, stmt_node| {
+            try self.walkStatement(&stmt, stmt_node);
+        }
+    }
+
+    fn walkSwitchStmt(self: *Collector, switch_stmt: *const ast.SwitchStmt) Error!void {
+        const switch_node = self.span_registry.get(switch_stmt.id);
+
+        try self.walkExpr(&switch_stmt.subject, switch_node.details.@"switch".subject);
+
+        for (switch_stmt.cases) |case| {
+            const case_node = self.span_registry.get(case.id).details.switch_case;
+            const case_body_node = self.span_registry.get(case_node.body).details.block.stmts;
+            for (case.body, case_body_node) |*stmt, node| {
+                try self.walkStatement(stmt, node);
+            }
+        }
+    }
+
     fn walkIfStmt(self: *Collector, if_stmt: *const ast.IfStmt) Error!void {
         const span_node = self.span_registry.get(if_stmt.id);
-        const if_spans = span_node.details.if_stmt;
+        const if_spans = span_node.details.@"if";
 
         _ = if_spans;
 
@@ -243,7 +275,7 @@ pub const Collector = struct {
         }
     }
 
-    fn walkTaskCallArgs(self: *Collector, args: *const ast.TaskCallArg) Error!void {
+    fn walkTaskCallArgs(self: *Collector, args: *const ast.TaskCall.Arg) Error!void {
         const span_node = self.span_registry.get(args.id);
         const arg_spans = span_node.details.task_call_arg;
 
@@ -306,10 +338,24 @@ pub const Collector = struct {
         try self.add(span_node.name, .variable, &.{TokenModifier.declaration});
         try self.walkExpr(&decl.value, span_node.value);
     }
+    fn walkExpr(self: *Collector, expr: *const ast.Expr, id: NodeId) Error!void {
+        const node = self.span_registry.get(id);
 
-    fn walkExpr(_: *Collector, _: *const ast.Expr, _: NodeId) Error!void {
-        // TODO: ensure that its already handled (keywords, operators, identifier, numbers, strings)
+        switch (expr.*) {
+            .builtin_call => |call| {
+                try self.add(
+                    node.details.builtin_call.name,
+                    .builtin,
+                    null,
+                );
+
+                for (call.args, node.details.builtin_call.args) |arg, arg_span| {
+                    try self.walkExpr(&arg, arg_span);
+                }
+            },
+            else => {},
+        }
     }
 
-    fn walkStringExpr(_: *Collector, _: *const ast.StringExpr, _: NodeId) Error!void {}
+    fn walkStringExpr(_: *Collector, _: *const ast.String, _: NodeId) Error!void {}
 };

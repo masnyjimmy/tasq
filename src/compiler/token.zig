@@ -1,4 +1,3 @@
-const Diagnostics = @import("Diagnostics.zig");
 const Span = @import("span.zig");
 
 // ── Token kinds ───────────────────────────────────────────────────────────────
@@ -22,6 +21,9 @@ pub const TokenKind = enum {
     or_kw,
     not_kw,
     for_kw,
+    switch_kw,
+    continue_kw,
+    break_kw,
 
     // Type keywords
     string_type,
@@ -43,11 +45,13 @@ pub const TokenKind = enum {
     colon, // :
     dcolon, // ::
     dot, // .
+    triple_dot, // ...
     comma, // ,
     apostrophe, // '
     quote, // "
     backtick, // `,
     eq, // =
+    fat_arrow, // =>
     colon_eq, // :=
     plus, // +
     minus, // -
@@ -61,6 +65,7 @@ pub const TokenKind = enum {
     gt_eq, // >=
     pipe, // |
     at, // @
+    underscore, // _
 
     // Backtick process line — entire `...` including interpolations as raw span
 

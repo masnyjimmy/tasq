@@ -19,7 +19,9 @@ pub const tag = enums.castEnum(builtin.os.tag, Tag) orelse @compileError("unsupp
 pub const default_options: ir.Options = switch (tag) {
     .windows => .{
         .shell = &.{ "cmd", "/C" },
-        .script = undefined, //TODO: add
+    },
+    .linux => .{
+        .shell = &.{ "/bin/bash", "-c" },
     },
     else => unreachable,
 };

@@ -3,36 +3,18 @@ const ir = @import("ir.zig");
 const Diagnostics = @import("Diagnostics.zig");
 const Span = @import("span.zig");
 
-const BindingDetails = struct {
-    static: bool,
-    type: ir.Type,
-    origin: *ir.Decl,
-};
-
-const ArgumentDetails = struct {
-    type: ir.Type,
-    origin: *ir.Argument,
-};
-
-const TaskDetails = struct {
-    origin: *ir.Task,
-};
-
-const GroupDetails = struct {
-    origin: *ir.Group,
-};
-
-pub const Details = union(enum) {
-    binding: BindingDetails,
-    argument: ArgumentDetails,
-    task: TaskDetails,
-    group: GroupDetails,
+pub const Origin = union(enum) {
+    capture: *ir.Capture,
+    binding: *ir.Decl,
+    argument: *ir.Argument,
+    task: *ir.Task,
+    group: *ir.Group,
 };
 
 pub const Symbol = struct {
     name: []const u8,
     span: Span,
-    details: Details,
+    origin: Origin,
 
     pub const Type = enum {
         variable,
@@ -41,10 +23,20 @@ pub const Symbol = struct {
     };
 
     pub fn typeOf(self: *const Symbol) Type {
-        return switch (self.details) {
-            .binding, .argument => .variable,
+        return switch (self.origin) {
+            .capture, .binding, .argument => .variable,
             .task => .task,
             .group => .group,
+        };
+    }
+
+    pub fn debugDump(self: *const Symbol) struct {
+        name: []const u8,
+        type: Type,
+    } {
+        return .{
+            .name = self.name,
+            .type = self.typeOf(),
         };
     }
 };

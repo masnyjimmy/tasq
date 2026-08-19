@@ -5,26 +5,20 @@ const sym = @import("symbol.zig");
 const Symbol = sym.Symbol;
 
 pub const Scope = struct {
-    // pub const Kind = enum {
-    //     file,
-    //     group,
-    //     task,
-    // };
-
     const IndexesStorage = std.array_hash_map.String(usize);
 
     parent: ?*Scope,
-    // kind: Kind,
     // symbols
-    symbols: std.ArrayList(Symbol) = .empty,
+    symbols: std.ArrayList(*Symbol) = .empty,
     // indexes
     variables: IndexesStorage = .empty,
     tasks: IndexesStorage = .empty,
     groups: IndexesStorage = .empty,
 
-    pub fn debugDump(_: *const Scope) []const u8 {
-        return "<scope>";
+    pub fn debugDump(self: *const Scope) []const *const Symbol {
+        return self.symbols.items;
     }
+
     pub fn init(parent: ?*Scope) Scope {
         return .{
             .parent = parent,
@@ -32,11 +26,23 @@ pub const Scope = struct {
     }
 
     pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
+        self.variables.deinit(gpa);
+        self.tasks.deinit(gpa);
+        self.groups.deinit(gpa);
+
+        for (self.symbols.items) |item| {
+            gpa.free(item);
+        }
+
         self.symbols.deinit(gpa);
     }
 
     pub fn define(self: *Scope, gpa: std.mem.Allocator, symbol: Symbol) !void {
         const index = self.symbols.items.len;
+
+        const ptr = try gpa.create(Symbol);
+        errdefer gpa.destroy(ptr);
+        ptr.* = symbol;
 
         const symbol_type = symbol.typeOf();
 
@@ -55,10 +61,9 @@ pub const Scope = struct {
             },
         }
 
-        try self.symbols.append(gpa, symbol);
+        try self.symbols.append(gpa, ptr);
     }
 
-    var one = false;
     pub fn resolveLocal(self: *const Scope, name: []const u8, symbol_type: Symbol.Type) ?*Symbol {
         const index = switch (symbol_type) {
             .variable => self.variables.get(name),
@@ -67,7 +72,7 @@ pub const Scope = struct {
         };
 
         return if (index) |i|
-            &self.symbols.items[i]
+            self.symbols.items[i]
         else
             null;
     }
@@ -84,6 +89,7 @@ pub const Scope = struct {
         }
         return cur;
     }
+
     pub fn isRoot(self: *const Scope) bool {
         return @as(*Scope, @constCast(self)).root() == self;
     }
@@ -95,7 +101,7 @@ pub const Scope = struct {
         const out = try allocator.alloc(*ir.Task, self.tasks.count());
 
         for (self.tasks.values(), out) |task_idx, *o| {
-            o.* = self.symbols.items[task_idx].details.task.origin;
+            o.* = self.symbols.items[task_idx].origin.task;
         }
 
         return out;
@@ -108,7 +114,7 @@ pub const Scope = struct {
         const out = try allocator.alloc(*ir.Group, self.groups.count());
 
         for (self.groups.values(), out) |group_idx, *o| {
-            o.* = self.symbols.items[group_idx].details.group.origin;
+            o.* = self.symbols.items[group_idx].origin.group;
         }
 
         return out;

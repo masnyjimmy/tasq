@@ -2,13 +2,12 @@ const std = @import("std");
 
 const Diagnostics = @import("Diagnostics.zig");
 const Span = @import("span.zig");
-const SNode = Span.Registry.Node;
 
 const NodeId = Span.Registry.NodeId;
 
-const typing = @import("typing.zig");
+const @"type" = @import("type.zig");
 
-pub const ArgType = typing.ArgType;
+pub const ArgType = @"type".ArgType;
 
 pub fn hasAttr(attrs: []const Attribute, name: []const u8) bool {
     for (attrs) |attr| {
@@ -31,10 +30,6 @@ pub const Set = struct {
         id: NodeId,
         name: []const u8,
         value: ?MetaValue,
-
-        pub fn nameSpan(node: *SNode) Span {
-            return node.getSpan(0);
-        }
     };
     id: NodeId,
     attrs: []Attribute,
@@ -58,6 +53,12 @@ pub const Task = struct {
     body: StatementBlock,
 };
 
+pub const Attribute = struct {
+    id: NodeId,
+    name: []const u8,
+    value: ?MetaValue,
+};
+
 pub const Argument = struct {
     id: NodeId,
     name: []const u8,
@@ -66,17 +67,7 @@ pub const Argument = struct {
     default: ?Expr,
 };
 
-pub const Attribute = struct {
-    id: NodeId,
-    name: []const u8,
-    value: ?MetaValue,
-};
-
-pub const Decl = struct {
-    id: NodeId,
-    name: []const u8,
-    value: Expr,
-};
+//================= Statements ===================
 
 pub const StatementBlock = []Statement;
 
@@ -85,50 +76,80 @@ pub const Statement = union(enum) {
     task_call: TaskCall, // build  or  go.build
     decl: Decl, // declaration
     if_stmt: IfStmt,
-    // for_stmt: forStmt,
+    switch_stmt: SwitchStmt,
+    expr: Expr,
+    for_stmt: ForStmt,
 };
 
-// 'IF' DOESNT CREATE SCOPE
-pub const IfStmt = struct {
+pub const Decl = struct {
     id: NodeId,
-    cond: Expr, // [Span] Node.object
-    then: StatementBlock,
-    else_: ?StatementBlock,
-};
-
-pub const ProcessStmt = StringExpr;
-
-pub const TaskCallScope = union(enum) {
-    closest,
-    root,
-    group: []const u8, // [Span] TaskCall::extra
-};
-
-pub const TaskCall = struct {
-    id: NodeId,
-    scope: TaskCallScope, // null for same-group calls
-    task: []const u8, // [Span] This::name
-    args: []TaskCallArg,
-};
-
-pub const TaskCallArg = struct {
-    id: NodeId,
-    name: ?[]const u8,
+    name: []const u8,
     value: Expr,
 };
 
+pub const ForStmt = ForCommon(StatementBlock);
+
+pub const SwitchStmt = SwitchCommon(StatementBlock);
+
+pub const IfStmt = IfCommon(StatementBlock);
+
+pub const ProcessStmt = String;
+
+pub const TaskCall = struct {
+    pub const Scope = union(enum) {
+        closest,
+        root,
+        group: []const u8, // [Span] TaskCall::extra
+    };
+    pub const Arg = struct {
+        id: NodeId,
+        name: ?[]const u8,
+        value: Expr,
+    };
+
+    id: NodeId,
+    scope: Scope, // null for same-group calls
+    task: []const u8, // [Span] This::name
+    args: []const Arg,
+};
+
+//================= Expressions ===================
+
 pub const Expr = union(enum) {
+    pub const ListItem = struct {
+        expr: *Expr,
+        is_spread: bool,
+    };
+
     bool_lit: bool,
     number_lit: f64,
     char_lit: u21,
-    string: StringExpr,
-    list: []const Expr,
+    string: String,
+    list: []const ListItem,
     builtin_call: BuiltInCall,
     ident: []const u8,
     binary: *BinaryExpr,
     unary: *UnaryExpr,
     if_expr: *IfExpr,
+    switch_expr: *SwitchExpr,
+    for_expr: *ForExpr,
+    lambda: *Lambda,
+    @"continue",
+    @"break",
 };
+
+pub const Lambda = struct {
+    id: NodeId,
+    params: []const []const u8,
+    body: Expr,
+};
+
+pub const ForExpr = ForCommon(Expr);
+
+pub const SwitchExpr = SwitchCommon(Expr);
+
+/// [span] wrapped in brackets
+pub const IfExpr = IfCommon(Expr);
 
 pub const BuiltInCall = struct {
     id: NodeId,
@@ -136,9 +157,9 @@ pub const BuiltInCall = struct {
     args: []Expr,
 };
 
-pub const StringExpr = union(enum) { lit: []const u8, inter: []const InterStringSeg };
+pub const String = []const StringPart;
 
-pub const InterStringSeg = union(enum) {
+pub const StringPart = union(enum) {
     lit: []const u8,
     expr: Expr,
 };
@@ -175,11 +196,42 @@ pub const UnaryExpr = struct {
 
 pub const UnaryOp = enum { not_op, negate };
 
-pub const IfExpr = struct {
-    cond: Expr,
-    then: Expr,
-    else_: Expr,
-};
+pub fn ForCommon(comptime BodyT: type) type {
+    return struct {
+        id: NodeId,
+        subjects: []const Expr,
+        captures: []?[]const u8,
+        body: BodyT,
+    };
+}
+
+pub fn SwitchCommon(comptime BranchT: type) type {
+    return struct {
+        pub const Pattern = union(enum) {
+            expr: []const Expr,
+            @"else",
+        };
+
+        pub const Case = struct {
+            id: NodeId,
+            pattern: Pattern,
+            body: BranchT,
+        };
+
+        id: NodeId,
+        subject: Expr,
+        cases: []const Case,
+    };
+}
+
+pub fn IfCommon(comptime BranchT: type) type {
+    return struct {
+        id: NodeId,
+        cond: Expr,
+        then: BranchT,
+        @"else": ?BranchT,
+    };
+}
 
 pub const MetaTypeTag = enum {
     null,

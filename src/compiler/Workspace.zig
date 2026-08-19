@@ -167,7 +167,7 @@ pub fn reparse(self: *Workspace, id: FileId) !bool {
         &file.diagnostics,
     );
 
-    file.ir = try sema.analyse(tree);
+    file.ir = try sema.analyse(&tree);
 
     return file.diagnostics.has_error == false;
 }

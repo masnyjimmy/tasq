@@ -29,7 +29,7 @@ pub fn copyFields(comptime Out: type, in: anytype) Out {
 
     inline for (in_ti.fields) |field| {
         if (@hasField(Out, field.name)) {
-            if (field.type != @FieldType(Out, field.name)) @compileError(.{ "type mismatch", field.name });
+            if (field.type != @FieldType(Out, field.name)) @compileError("type mismatch: " ++ field.name);
 
             @field(out, field.name) = @field(in, field.name);
         }

@@ -164,3 +164,9 @@ pub fn EnumMultimap(comptime E: type, comptime V: type) type {
         }
     };
 }
+
+pub fn isValidEnumValue(comptime E: type, value: E) bool {
+    const set = comptime std.EnumSet(E).initFull();
+
+    return set.contains(value);
+}

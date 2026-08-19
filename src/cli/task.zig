@@ -5,7 +5,8 @@ const Scope = inter.symbol.Scope;
 
 const compiler = @import("compiler");
 const ir = compiler.ir;
-const typing = compiler.typing;
+const Type = compiler.Type;
+const ArgType = compiler.ArgType;
 const Value = compiler.Value;
 
 const conzole = @import("conzole");
@@ -39,12 +40,12 @@ const style = struct {
 
 const DESCRIPTION_TEXT_OFFSET = 10;
 
-pub fn compileRunfile(ctx: *const Context) !*const compiler.ir.File {
+pub fn compileRunfile(ctx: *const Context, source_filepath: []const u8) !*const compiler.ir.File {
     const cwd = std.Io.Dir.cwd();
 
     const content = try cwd.readFileAlloc(
         ctx.io,
-        ctx.source_file_path,
+        source_filepath,
         ctx.allocator,
         .unlimited,
     );
@@ -52,52 +53,29 @@ pub fn compileRunfile(ctx: *const Context) !*const compiler.ir.File {
 
     const result = try ctx.workspace.openFile(
         ctx.allocator,
-        ctx.source_file_path,
+        source_filepath,
         content,
         0,
     );
 
     // print compilation diagnostics
 
+    const dd = @import("dump_diagnostics.zig");
+
     var iter = ctx.workspace.files.iterator();
 
     while (iter.next()) |kv| {
         const file = kv.value_ptr;
-        const records = file.diagnostics.records.items;
         const source = file.source;
 
-        for (records) |record| {
-            const lc = try lib.debug.lineColFromIndex(source, record.span.start);
-
-            try ctx.printer.printStyled(ctx.allocator, .{ .fg = .white }, "{[file]s}:{[line]}:{[col]}: ", .{
-                .file = file.uri,
-                .line = lc.line,
-                .col = lc.column,
-            });
-
-            const severity_color: conzole.terminal.Color = switch (record.severity) {
-                .err => .bright_red,
-                .hint => .bright_green,
-                .warn => .yellow,
-            };
-
-            try ctx.printer.printStyled(
-                ctx.allocator,
-                .{ .bold = true, .fg = severity_color },
-                "{f}: ",
-                .{record.severity},
-            );
-
-            try ctx.printer.printStyled(
-                ctx.allocator,
-                .{ .fg = .bright_white },
-                "{s}\n",
-                .{record.message},
-            );
-        }
+        try dd.dump_diagnostics(
+            ctx.allocator,
+            source,
+            file.uri,
+            &file.diagnostics,
+            ctx.printer,
+        );
     }
-
-    try ctx.printer.writer.flush();
 
     if (result.valid == false) {
         return TaskError.CompilationFailed;
@@ -106,8 +84,8 @@ pub fn compileRunfile(ctx: *const Context) !*const compiler.ir.File {
     return ctx.workspace.view(result.id, .ir).source;
 }
 
-pub fn printTasksList(ctx: *const Context) !void {
-    const file = try compileRunfile(ctx);
+pub fn printTasksList(ctx: *const Context, source_filepath: []const u8) !void {
+    const file = try compileRunfile(ctx, source_filepath);
 
     const p = ctx.printer;
 
@@ -157,8 +135,8 @@ pub fn printTasksList(ctx: *const Context) !void {
     }
 }
 
-pub fn printTaskUsage(ctx: *const Context, task_id: []const u8) !void {
-    const file = try compileRunfile(ctx);
+pub fn printTaskUsage(ctx: *const Context, source_filepath: []const u8, task_id: []const u8) !void {
+    const file = try compileRunfile(ctx, source_filepath);
 
     const task = file.findTask(.parse(task_id)) orelse return TaskError.TaskNotFound;
 
@@ -415,7 +393,7 @@ const TaskArgumentParser = struct {
     }
 
     const PrintableArgType = struct {
-        type: typing.ArgType,
+        type: ArgType,
         int: bool,
 
         pub fn format(self: PrintableArgType, w: *std.Io.Writer) !void {
@@ -541,6 +519,16 @@ const TaskArgumentParser = struct {
                             style.err,
                             "positional arguments must be placed before named ones\n",
                             .{},
+                        );
+                        return Error.ParsingFailed;
+                    }
+
+                    if (self.args.items.len <= positional_idx) {
+                        try self.printer.printStyled(
+                            arena.allocator(),
+                            style.err,
+                            "invalid positional argument on {} position: '{s}'\n",
+                            .{ positional_idx, tok.lexeme },
                         );
                         return Error.ParsingFailed;
                     }
@@ -700,53 +688,33 @@ const TaskArgumentParser = struct {
     }
 };
 
-pub fn runTask(ctx: *const Context, task_id: []const u8, args: []const []const u8) !void {
-    const file = try compileRunfile(ctx);
+pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []const u8, args: []const []const u8) !void {
+    const file = try compileRunfile(ctx, source_filepath);
 
     const task = file.findTask(.parse(task_id)) orelse {
         try ctx.printer.printStyled(ctx.allocator, style.err, "Task '{s}' not found\n", .{task_id});
         return TaskError.TaskNotFound;
     };
 
-    var call_stack: inter.CallStack = .init(
-        ctx.allocator,
-        task,
-    );
-    defer call_stack.deinit(ctx.allocator);
-
-    var scope_stack: inter.ScopeStack = blk: {
-        var parser: TaskArgumentParser = try .init(
-            ctx.allocator,
-            task,
-            ctx.printer,
-        );
-        defer parser.deinit(ctx.allocator);
-
-        var arena = std.heap.ArenaAllocator.init(ctx.allocator);
-        defer arena.deinit();
-
-        var values = try parser.parseArguments(
-            &arena,
-            args,
-        );
-
-        break :blk try .init(
-            ctx.allocator,
-            task,
-            values.move(),
-        );
-    };
-    defer scope_stack.deinit(ctx.allocator);
-
-    var interpreter = inter.Interpreter.init(
+    var interpreter: inter.Interpreter = .init(
         ctx.allocator,
         ctx.io,
         ctx.printer,
         &file.options,
-        &call_stack,
-        &scope_stack,
         ctx.environ,
     );
 
-    try interpreter.run();
+    var parser: TaskArgumentParser = try .init(
+        ctx.allocator,
+        task,
+        ctx.printer,
+    );
+    defer parser.deinit(ctx.allocator);
+
+    var arena: std.heap.ArenaAllocator = .init(ctx.allocator);
+    defer arena.deinit();
+
+    var values = try parser.parseArguments(&arena, args);
+
+    try interpreter.run(task, &values);
 }

@@ -16,9 +16,12 @@ pub const Sema = sema_lib.Sema;
 
 pub const ir = @import("ir.zig");
 
-pub const typing = @import("typing.zig");
+pub const @"type" = @import("type.zig");
+pub const Type = @"type".Type;
+pub const ArgType = @"type".ArgType;
 
-pub const Value = typing.Value;
+pub const value = @import("value.zig");
+pub const Value = value.Value;
 
 pub const symbol = @import("symbol.zig");
 

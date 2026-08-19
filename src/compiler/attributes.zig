@@ -1,6 +1,8 @@
 const std = @import("std");
 
-const typing = @import("typing.zig");
+const @"type" = @import("type.zig");
+const Type = @"type".Type;
+const ArgType = @"type".ArgType;
 
 const ast = @import("ast.zig");
 const MetaType = ast.MetaType;
@@ -176,7 +178,7 @@ fn Attributes(comptime specs: []const Spec) type {
             task,
             group,
             setting,
-            argument: typing.ArgType,
+            argument: ArgType,
 
             fn validate(self: *const Target, vf: *const ValidFor) bool {
                 const tt: TargetType = blk: {
@@ -198,8 +200,8 @@ fn Attributes(comptime specs: []const Spec) type {
 
         pub fn get(name: []const u8, target: ?Target) ?Definition {
             const def = blk: {
-                const @"type" = name_map.get(name) orelse return null;
-                break :blk defs[@intFromEnum(@"type")];
+                const attr_type = name_map.get(name) orelse return null;
+                break :blk defs[@intFromEnum(attr_type)];
             };
 
             // validate
@@ -232,11 +234,11 @@ pub const ValidFor = union(TargetType) {
     task,
     group,
     setting,
-    argument: std.EnumSet(typing.ArgType),
+    argument: std.EnumSet(ArgType),
 
     pub const any_argument: ValidFor = .{ .argument = .initEmpty() };
 
-    pub fn arguments(types: []const typing.ArgType) ValidFor {
+    pub fn arguments(types: []const ArgType) ValidFor {
         return .{ .argument = .initMany(types) };
     }
 };

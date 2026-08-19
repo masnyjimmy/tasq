@@ -2,98 +2,321 @@ const std = @import("std");
 const ir = @import("ir.zig");
 
 const lib = @import("lib");
+const enums = lib.enums;
+const ct = lib.@"comptime";
 
-const typing = @import("typing.zig");
-const Type = typing.Type;
-
-pub const FunctionId = enum {
-    status_code,
-    env,
-    exists,
-    os,
-};
-
-fn getFunctionId(name: []const u8) ?FunctionId {
-    const map = std.StaticStringMap(FunctionId).initComptime(.{
-        .{ "statusCode", .status_code },
-        .{ "env", .env },
-        .{ "exists", .exists },
-        .{ "os", .os },
-    });
-
-    return map.get(name);
-}
-
-const FunctionDefinition = struct {
-    const Arg = struct { []const u8, Type };
-
-    id: FunctionId,
-    args: []const Arg,
-    return_type: Type,
-};
-
-fn define(comptime id: FunctionId, comptime args: []const FunctionDefinition.Arg, comptime return_type: Type) FunctionDefinition {
-    return .{
-        .id = id,
-        .args = args,
-        .return_type = return_type,
-    };
-}
-
-pub const function_defs = [_]FunctionDefinition{
-    define(.env, &.{
-        .{ "key", Type.string },
-    }, .string),
-    define(.env, &.{
-        .{ "key", Type.string },
-        .{ "default", Type.string },
-    }, .string),
-    define(.exists, &.{
-        .{ "path", Type.string },
-    }, .bool),
-    define(.os, &.{}, .string),
-    define(.status_code, &.{}, .number),
-};
-
-fn validateFunctionDefinitions() void {
-    inline for (function_defs, 0..) |a, i| {
-        inline for (function_defs[i + 1 ..], i + 1..) |b, j| {
-            if (a.id == b.id and a.args.len == b.args.len) {
-                @compileError(std.fmt.comptimePrint(
-                    "Duplicate overload for function {any} with {} arguments (indexes {} and {})",
-                    .{ a.id, a.args.len, i, j },
-                ));
-            }
-        }
-    }
-}
-
-comptime {
-    validateFunctionDefinitions();
-}
+const @"type" = @import("type.zig");
+const Type = @"type".Type;
+const TypeExpr = @"type".TypeExpr;
 
 pub const Error = error{
     UnknownFunction,
     InvalidArguments,
+} || std.mem.Allocator.Error;
+
+pub const definitions = Functions(&.{
+    .{
+        .name = "env",
+        .args = &.{
+            .{
+                .name = "key",
+                .type = .{ .concrete = Type.string },
+            },
+            .{
+                .name = "default",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.string },
+    },
+    .{
+        .name = "exists",
+        .args = &.{
+            .{
+                .name = "path",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.bool },
+    },
+    .{
+        .name = "os",
+        .args = &.{},
+        .return_type = .{ .concrete = Type.string },
+    },
+    .{
+        .name = "status_code",
+        .args = &.{},
+        .return_type = .{ .concrete = Type.number },
+    },
+    .{
+        .name = "error",
+        .args = &.{
+            .{
+                .name = "message",
+                .type = .{ .concrete = Type.string },
+            },
+            // .{ .name = "code", .type = Type.number },
+        },
+        .return_type = .{ .concrete = Type.noreturn },
+    },
+    .{
+        .name = "print",
+        .args = &.{
+            .{
+                .name = "message",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.void },
+    },
+    .{
+        .name = "any",
+        .args = &.{
+            .{
+                .name = "list",
+                .type = .{
+                    .list = &.{
+                        .generic = "T",
+                    },
+                },
+            },
+            .{
+                .name = "fn",
+                .type = .{
+                    .lambda = &.{
+                        .params = &.{
+                            .{ .generic = "T" },
+                        },
+                        .return_type = .{
+                            .concrete = Type.bool,
+                        },
+                    },
+                },
+            },
+        },
+        .return_type = .{ .concrete = Type.bool },
+    },
+});
+
+fn Functions(comptime specs: []const Spec) type {
+    const FnIdent = blk: {
+        const EnumTag = enums.FitUnsigned(specs.len);
+
+        var unique_names: [specs.len][]const u8 = undefined;
+        var unique_count: usize = 0;
+
+        outer: for (specs) |spec| {
+            for (unique_names[0..unique_count]) |existing| {
+                if (std.mem.eql(u8, existing, spec.name)) continue :outer;
+            }
+            unique_names[unique_count] = spec.name;
+            unique_count += 1;
+        }
+
+        const values = ct.iter(EnumTag, unique_count);
+
+        break :blk @Enum(
+            EnumTag,
+            .exhaustive,
+            unique_names[0..unique_count],
+            &values,
+        );
+    };
+
+    // For each spec (by original index), which unique-name index (i.e. FnId) it maps to.
+    const spec_to_id: [specs.len]FnIdent = blk: {
+        var unique_names: [specs.len][]const u8 = undefined;
+        var unique_count: usize = 0;
+        var ids: [specs.len]FnIdent = undefined;
+
+        for (specs, 0..) |spec, spec_idx| {
+            var found: ?usize = null;
+            for (unique_names[0..unique_count], 0..) |existing, uidx| {
+                if (std.mem.eql(u8, existing, spec.name)) {
+                    found = uidx;
+                    break;
+                }
+            }
+            const uidx = found orelse blk2: {
+                unique_names[unique_count] = spec.name;
+                unique_count += 1;
+                break :blk2 unique_count - 1;
+            };
+            ids[spec_idx] = @enumFromInt(uidx);
+        }
+
+        break :blk ids;
+    };
+
+    const FunctionId = enum(usize) { _ };
+
+    const Definition = struct {
+        id: FunctionId,
+        ident: FnIdent,
+        args: []const Spec.Param,
+        return_type: TypeExpr,
+    };
+
+    const defs = blk: {
+        var defs: [specs.len]Definition = undefined;
+
+        for (specs, 0..) |spec, idx| {
+            defs[idx] = def: {
+                var out = ct.copyFields(Definition, spec);
+                out.id = @enumFromInt(idx);
+                out.ident = spec_to_id[idx];
+
+                break :def out;
+            };
+        }
+        break :blk defs;
+    };
+
+    const name_map = enums.generateEnumNameMap(FnIdent);
+
+    return struct {
+        pub const items = defs;
+
+        pub const Id = FunctionId;
+
+        pub fn resolve(allocator: std.mem.Allocator, name: []const u8, args: []const InArg) Error!ResolvedFunction {
+            const ident = name_map.get(name) orelse return Error.UnknownFunction;
+
+            for (defs) |def| {
+                if (def.ident != ident)
+                    continue;
+
+                if (def.args.len != args.len)
+                    continue;
+
+                var resolved = try resolveArguments(allocator, def.args, args) orelse continue;
+                defer resolved.deinit();
+
+                const params = try allocator.alloc(OutArg, args.len);
+
+                for (def.args, params) |in, *out| {
+                    out.* = try resolveType(allocator, &resolved, in.type);
+                }
+
+                const return_type = try resolveType(allocator, &resolved, def.return_type);
+
+                return .{
+                    .id = def.id,
+                    .params = params,
+                    .return_type = return_type.value,
+                };
+            }
+
+            return Error.InvalidArguments;
+        }
+    };
+}
+const Spec = struct {
+    const Param = struct {
+        name: []const u8,
+        type: TypeExpr,
+    };
+
+    name: []const u8,
+    args: []const Param,
+    return_type: TypeExpr,
 };
 
-pub fn getFunctionDef(name: []const u8, args_num: usize) Error!FunctionDefinition {
-    const id = getFunctionId(name) orelse return Error.UnknownFunction;
+pub const InArg = union(enum) {
+    lambda: struct {
+        params: usize,
+    },
+    value: struct {
+        type: Type,
+    },
+};
 
-    return try getFunctionDefById(id, args_num);
-}
+pub fn resolveArguments(allocator: std.mem.Allocator, params: []const Spec.Param, args: []const InArg) !?std.StringHashMap(Type) {
+    var bindings: std.StringHashMap(Type) = .init(allocator);
+    defer bindings.deinit();
 
-pub fn getFunctionIndex(id: FunctionId, args_num: usize) Error!usize {
-    inline for (function_defs, 0..) |def, idx| {
-        if (def.id == id and def.args.len == args_num) {
-            return idx;
-        }
+    for (params, args) |param, arg| {
+        if (!try matchAndBind(&bindings, param.type, arg))
+            return null;
     }
 
-    return Error.InvalidArguments;
+    return bindings.move(); // move to prevent deinit on returned map
 }
 
-pub fn getFunctionDefById(id: FunctionId, args_num: usize) Error!FunctionDefinition {
-    const index = try getFunctionIndex(id, args_num);
-    return function_defs[index];
+fn matchAndBind(bindings: *std.StringHashMap(Type), p: TypeExpr, a: InArg) !bool {
+    return switch (p) {
+        .concrete => |t| switch (a) {
+            .value => |T| Type.eq(t, T.type),
+            .lambda => false,
+        },
+        .generic => |name| switch (a) {
+            .value => |T| {
+                if (bindings.get(name)) |bound| return Type.eq(bound, T.type);
+                try bindings.put(name, T.type);
+                return true;
+            },
+            .lambda => false,
+        },
+        .list => |elem_p| switch (a) {
+            .value => |T| T.type == .list and try matchAndBind(bindings, elem_p.*, .{
+                .value = .{
+                    .type = T.type.list.*,
+                },
+            }),
+            .lambda => false,
+        },
+        .lambda => |lambda| switch (a) {
+            .value => false,
+            .lambda => |L| lambda.params.len == L.params,
+        },
+    };
+}
+
+pub const OutArg = union(enum) {
+    value: Type,
+    lambda: struct {
+        params: []const Type,
+        return_type: Type,
+    },
+};
+
+pub const ResolvedFunction = struct {
+    id: definitions.Id,
+    params: []const OutArg,
+    return_type: Type,
+};
+
+fn resolveType(allocator: std.mem.Allocator, bindings: *const std.StringHashMap(Type), p: TypeExpr) !OutArg {
+    return switch (p) {
+        .concrete => |t| .{ .value = t },
+        .generic => |name| .{ .value = bindings.get(name) orelse unreachable }, // unbound generic, shouldn't ever happen on builtin functions
+        .list => |elem_p| {
+            const items_type = try allocator.create(Type);
+
+            const resolved_type = try resolveType(allocator, bindings, elem_p.*);
+            items_type.* = resolved_type.value;
+
+            return .{
+                .value = .{ .list = items_type },
+            };
+        },
+        .lambda => |lambda| {
+            const params = try allocator.alloc(Type, lambda.params.len);
+
+            for (lambda.params, params) |in, *out| {
+                const resolved_type = try resolveType(allocator, bindings, in);
+                out.* = resolved_type.value;
+            }
+
+            const return_type = try resolveType(allocator, bindings, lambda.return_type);
+
+            return .{
+                .lambda = .{
+                    .params = params,
+                    .return_type = return_type.value,
+                },
+            };
+        },
+    };
 }
