@@ -14,41 +14,7 @@ pub const Error = error{
     InvalidArguments,
 } || std.mem.Allocator.Error;
 
-pub const definitions = Functions(&.{
-    .{
-        .name = "env",
-        .args = &.{
-            .{
-                .name = "key",
-                .type = .{ .concrete = Type.string },
-            },
-            .{
-                .name = "default",
-                .type = .{ .concrete = Type.string },
-            },
-        },
-        .return_type = .{ .concrete = Type.string },
-    },
-    .{
-        .name = "exists",
-        .args = &.{
-            .{
-                .name = "path",
-                .type = .{ .concrete = Type.string },
-            },
-        },
-        .return_type = .{ .concrete = Type.bool },
-    },
-    .{
-        .name = "os",
-        .args = &.{},
-        .return_type = .{ .concrete = Type.string },
-    },
-    .{
-        .name = "status_code",
-        .args = &.{},
-        .return_type = .{ .concrete = Type.number },
-    },
+const debug_functions: []const Spec = &.{
     .{
         .name = "error",
         .args = &.{
@@ -69,6 +35,185 @@ pub const definitions = Functions(&.{
             },
         },
         .return_type = .{ .concrete = Type.void },
+    },
+};
+
+const type_cast_functions: []const Spec = &.{
+    .{
+        .name = "parse_number",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .result = &.{ .concrete = Type.number } },
+    },
+};
+
+const fs_functions: []const Spec = &.{
+    .{
+        .name = "exists",
+        .args = &.{
+            .{
+                .name = "path",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.bool },
+    },
+};
+
+const string_functions: []const Spec = &.{
+    .{
+        .name = "len",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.number },
+    },
+    .{
+        .name = "split",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+            .{
+                .name = "sep",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .list = &.{ .concrete = Type.string } },
+    },
+    .{
+        .name = "join",
+        .args = &.{
+            .{
+                .name = "strings",
+                .type = .{ .list = &.{ .concrete = Type.string } },
+            },
+            .{
+                .name = "sep",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.string },
+    },
+    .{
+        .name = "lower",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.string },
+    },
+    .{
+        .name = "upper",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.string },
+    },
+    .{
+        .name = "contains",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+            .{
+                .name = "sub",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.bool },
+    },
+    .{
+        .name = "starts_with",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+            .{
+                .name = "sub",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.bool },
+    },
+    .{
+        .name = "ends_with",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+            .{
+                .name = "sub",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.bool },
+    },
+
+    .{
+        .name = "replace",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+            .{
+                .name = "old",
+                .type = .{ .concrete = Type.string },
+            },
+            .{
+                .name = "new",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.string },
+    },
+};
+
+const collections_functions: []const Spec = &.{
+    .{
+        .name = "len",
+        .args = &.{
+            .{
+                .name = "list",
+                .type = .{ .list = &.{ .generic = "T" } },
+            },
+        },
+        .return_type = .{ .concrete = Type.number },
+    },
+    .{
+        .name = "replace",
+        .args = &.{
+            .{
+                .name = "list",
+                .type = .{ .list = &.{ .generic = "T" } },
+            },
+            .{
+                .name = "old",
+                .type = .{ .generic = "T" },
+            },
+            .{
+                .name = "new",
+                .type = .{ .generic = "T" },
+            },
+        },
+        .return_type = .{ .list = &.{ .generic = "T" } },
     },
     .{
         .name = "any",
@@ -97,65 +242,92 @@ pub const definitions = Functions(&.{
         },
         .return_type = .{ .concrete = Type.bool },
     },
-    // type conversion
-    // strings
     .{
-        .name = "len",
+        .name = "all",
         .args = &.{
             .{
-                .name = "str",
-                .type = .{ .concrete = Type.string },
+                .name = "list",
+                .type = .{
+                    .list = &.{
+                        .generic = "T",
+                    },
+                },
+            },
+            .{
+                .name = "fn",
+                .type = .{
+                    .lambda = &.{
+                        .params = &.{
+                            .{ .generic = "T" },
+                        },
+                        .return_type = .{
+                            .concrete = Type.bool,
+                        },
+                    },
+                },
             },
         },
-        .return_type = .{ .concrete = Type.number },
+        .return_type = .{ .concrete = Type.bool },
     },
     .{
-        .name = "len",
+        .name = "reduce",
         .args = &.{
             .{
                 .name = "list",
                 .type = .{ .list = &.{ .generic = "T" } },
             },
+            .{
+                .name = "init",
+                .type = .{ .generic = "T" },
+            },
+            .{
+                .name = "fn",
+                .type = .{
+                    .lambda = &.{
+                        .params = &.{
+                            .{ .generic = "T" },
+                            .{ .generic = "T" },
+                        },
+                        .return_type = .{ .generic = "T" },
+                    },
+                },
+            },
         },
-        .return_type = .{ .concrete = Type.number },
+        .return_type = .{ .generic = "T" },
     },
+};
+
+const misc_functions: []const Spec = &.{
     .{
-        .name = "replace",
+        .name = "env",
         .args = &.{
             .{
-                .name = "str",
-                .type = .{ .concrete = Type.string },
-            },
-            .{
-                .name = "old",
-                .type = .{ .concrete = Type.string },
-            },
-            .{
-                .name = "new",
+                .name = "key",
                 .type = .{ .concrete = Type.string },
             },
         },
+        .return_type = .{ .result = &.{ .concrete = Type.string } },
+    },
+    .{
+        .name = "os",
+        .args = &.{},
         .return_type = .{ .concrete = Type.string },
     },
     .{
-        .name = "replace",
-        .args = &.{
-            .{
-                .name = "list",
-                .type = .{ .list = &.{ .generic = "T" } },
-            },
-            .{
-                .name = "old",
-                .type = .{ .generic = "T" },
-            },
-            .{
-                .name = "new",
-                .type = .{ .generic = "T" },
-            },
-        },
-        .return_type = .{ .list = &.{ .generic = "T" } },
+        .name = "status_code",
+        .args = &.{},
+        .return_type = .{ .concrete = Type.number },
     },
-});
+};
+
+pub const definitions = Functions(
+    debug_functions ++
+        type_cast_functions ++
+        fs_functions ++
+        string_functions ++
+        collections_functions ++
+        misc_functions,
+);
 
 fn Functions(comptime specs: []const Spec) type {
     const FnIdent = blk: {
@@ -231,6 +403,8 @@ fn Functions(comptime specs: []const Spec) type {
         break :blk defs;
     };
 
+    // FIX: heavy comptime meta programming, need this
+    @setEvalBranchQuota(5_000);
     const name_map = enums.generateEnumNameMap(FnIdent);
 
     return struct {
@@ -328,6 +502,10 @@ fn matchAndBind(bindings: *std.StringHashMap(Type), p: TypeExpr, a: InArg) !bool
             .value => false,
             .lambda => |L| lambda.params.len == L.params,
         },
+        .result => |result| switch (a) {
+            .value => |T| try matchAndBind(bindings, result.*, .{ .value = .{ .type = T.type } }),
+            .lambda => false,
+        },
     };
 }
 
@@ -374,6 +552,15 @@ fn resolveType(allocator: std.mem.Allocator, bindings: *const std.StringHashMap(
                     .params = params,
                     .return_type = return_type.value,
                 },
+            };
+        },
+        .result => |result| {
+            const result_type = try allocator.create(Type);
+            const resolved_type = try resolveType(allocator, bindings, result.*);
+            result_type.* = resolved_type.value;
+
+            return .{
+                .value = .{ .result = result_type },
             };
         },
     };
