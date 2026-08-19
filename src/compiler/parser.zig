@@ -621,6 +621,8 @@ pub const Parser = struct {
     fn parseStatement(self: *Parser) ParseError!Wrapped(ast.Statement) {
         switch (self.peek()) {
             .backtick => {
+                _ = self.expect(.backtick) catch unreachable;
+
                 try self.span_registry.put(.string, self.next.span); // opening backtick highlight
 
                 const string = try self.parseStringExpr("`", false);
