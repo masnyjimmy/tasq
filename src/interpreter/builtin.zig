@@ -115,7 +115,7 @@ fn handleAny(self: *Interpreter, scope: *Scope, args: []const Value) Error!Value
             .value = item,
         }, false);
 
-        const result = try self.evaluateExpr(scope, &test_fn.body);
+        const result = try self.evaluateExpr(lambda_scope, &test_fn.body);
 
         if (result.eql(.{ .bool = true }))
             return .{ .bool = true };
