@@ -29,6 +29,7 @@ const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "for", .for_kw },
     .{ "continue", .continue_kw },
     .{ "break", .break_kw },
+    .{ "fallback", .fallback_kw },
 });
 
 // ── Lexer ─────────────────────────────────────────────────────────────────────
@@ -341,6 +342,7 @@ pub const Lexer = struct {
             .for_kw,
             .continue_kw,
             .break_kw,
+            .fallback_kw,
             => {
                 try self.span_registry.put(.keyword, span);
             },

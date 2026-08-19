@@ -1156,7 +1156,11 @@ pub const Parser = struct {
             },
             .at => {
                 const builtin_call = try self.parseBuiltInCall();
-                return .wrap(builtin_call.id, .{ .builtin_call = builtin_call });
+
+                const ptr = try self.arena.allocator().create(ast.BuiltInCall);
+                ptr.* = builtin_call;
+
+                return .wrap(builtin_call.id, .{ .builtin_call = ptr });
             },
             .continue_kw => {
                 const continue_kw = self.expect(.continue_kw) catch unreachable;
@@ -1391,10 +1395,20 @@ pub const Parser = struct {
             _ = try self.expect(.rparen);
         }
 
+        var fallback: ?ast.Expr = null;
+        var fallback_span: ?NodeId = null;
+
+        if (try self.eat(.fallback_kw)) |_| {
+            const result = try self.parseExpr();
+            fallback = result.payload;
+            fallback_span = result.id;
+        }
+
         const id = try self.span_registry.addNode(self.spanFrom(at.span.start), .{
             .builtin_call = .{
                 .name = ident.span,
                 .args = try args_spans.toOwnedSlice(),
+                .fallback = fallback_span,
             },
         });
 
@@ -1402,6 +1416,7 @@ pub const Parser = struct {
             .id = id,
             .name = ident.lexeme,
             .args = try args.toOwnedSlice(self.arena.allocator()),
+            .fallback = fallback,
         };
     }
 

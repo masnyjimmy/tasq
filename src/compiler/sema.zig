@@ -1156,9 +1156,13 @@ pub const Sema = struct {
                 };
             },
             .builtin_call => |v| {
-                const res = try self.analyseBuiltinCall(scope, v);
+                const res = try self.analyseBuiltinCall(scope, v.*);
+
+                const ptr = try self.arena.allocator().create(ir.BuiltinCall);
+                ptr.* = res.builtin_call;
+
                 return .{
-                    .expr = .{ .builtin_call = res.builtin_call },
+                    .expr = .{ .builtin_call = ptr },
                     .is_static = false,
                     .type = res.type,
                 };
@@ -1808,12 +1812,41 @@ pub const Sema = struct {
             }
         }
 
+        var result_type = result.return_type;
+
+        var fallback: ?ir.Expr = null;
+
+        if (call.fallback) |fb_value| {
+            const fallback_span = self.span_registry.getSpan(call_spans.fallback.?);
+
+            if (result.return_type != .result) {
+                try self.diagnostics.err(
+                    fallback_span,
+                    "fallback can be used only on errorable functions",
+                    .{},
+                );
+            }
+
+            const fb_result = try self.analyseExpr(scope, fb_value, call_spans.fallback.?);
+
+            result_type = Type.unify(result_type.result.*, fb_result.type) orelse blk: {
+                try self.diagnostics.err(
+                    fallback_span,
+                    "invalid fallback type",
+                    .{},
+                );
+                break :blk result_type;
+            };
+            fallback = fb_result.expr;
+        }
+
         return .{
             .builtin_call = .{
                 .function = result,
                 .args = args.items,
+                .fallback = fallback,
             },
-            .type = result.return_type,
+            .type = result_type,
         };
     }
 

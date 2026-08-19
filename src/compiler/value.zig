@@ -38,6 +38,11 @@ pub const List = struct {
     items: []const Value,
 };
 
+pub const Result = struct {
+    type: *const Type,
+    value: ?*const Value,
+};
+
 const Tag = enum {
     string,
     number,
@@ -45,6 +50,7 @@ const Tag = enum {
     list,
     void,
     lambda,
+    result,
 };
 
 pub const Value = union(Tag) {
@@ -54,10 +60,12 @@ pub const Value = union(Tag) {
     list: List,
     void,
     lambda: *const ir.Lambda,
+    result: Result,
 
     pub fn typeOf(self: *const Value) Type {
         return switch (self.*) {
             .list => |list| .{ .list = list.items_type },
+            .result => |res| .{ .result = res.type },
             .lambda => unreachable,
             inline else => |_, tag| @unionInit(Type, @tagName(tag), {}),
         };
@@ -84,6 +92,12 @@ pub const Value = union(Tag) {
                     }
                 }
                 try writer.writeAll("]");
+            },
+            .result => |s| {
+                if (s.value) |val|
+                    try writer.print("{f}", .{val})
+                else
+                    try writer.print("error", .{});
             },
             inline else => |_, tag| try writer.print("<{t}>", .{tag}),
         }
@@ -115,6 +129,15 @@ pub const Value = union(Tag) {
 
                 return true;
             },
+            .result => {
+                if (left.result.value == null and right.result.value == null)
+                    return true;
+
+                const l = left.result.value orelse return false;
+                const r = right.result.value orelse return false;
+
+                return eql(l.*, r.*);
+            },
             else => unreachable,
         };
     }
@@ -133,6 +156,19 @@ pub const Value = union(Tag) {
                     .list = .{
                         .items = result,
                         .items_type = list.items_type,
+                    },
+                };
+            },
+            .result => |res| {
+                const val = res.value orelse return self.*;
+
+                const ptr = try allocator.create(Value);
+                ptr.* = try val.clone(allocator);
+
+                return .{
+                    .result = .{
+                        .type = res.type,
+                        .value = ptr,
                     },
                 };
             },

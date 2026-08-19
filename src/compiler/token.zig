@@ -24,6 +24,7 @@ pub const TokenKind = enum {
     switch_kw,
     continue_kw,
     break_kw,
+    fallback_kw,
 
     // Type keywords
     string_type,

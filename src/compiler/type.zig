@@ -1,14 +1,6 @@
 const std = @import("std");
 
-const Tag = enum {
-    string,
-    number,
-    bool,
-    list,
-    noreturn,
-    void,
-    lambda,
-};
+const Tag = enum { string, number, bool, list, noreturn, void, lambda, result };
 
 pub const FuncType = struct {
     params: []const Type,
@@ -23,6 +15,7 @@ pub const Type = union(Tag) {
     noreturn,
     void,
     lambda: *const FuncType,
+    result: *const Type,
 
     pub fn unify(left: Type, right: Type) ?Type {
         if (left == .noreturn) return right;
@@ -56,6 +49,7 @@ pub const Type = union(Tag) {
 
                 return eq(left.lambda.return_type, right.lambda.return_type);
             },
+            .result => eq(left.result.*, right.result.*),
             else => true,
         };
     }
@@ -67,6 +61,7 @@ pub const Type = union(Tag) {
     ) !void {
         switch (self) {
             .list => |t| try writer.print("[]{f}", .{t.*}),
+            .result => |r| try writer.print("!{f}", .{r.*}),
             inline else => |_, tag| try writer.writeAll(@tagName(tag)),
         }
     }
@@ -115,6 +110,7 @@ pub const TypeExpr = union(enum) {
     generic: []const u8,
     list: *const TypeExpr,
     lambda: *const LambdaTypeExpr,
+    result: *const TypeExpr,
 };
 
 pub const LambdaTypeExpr = struct {

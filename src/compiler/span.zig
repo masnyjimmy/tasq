@@ -67,7 +67,7 @@ pub const Registry = struct {
         task_call: struct { group: ?Span, task: Span, args: Span },
         task_call_arg: struct { name: ?Span, value: NodeId },
 
-        builtin_call: struct { name: Span, args: []const NodeId },
+        builtin_call: struct { name: Span, args: []const NodeId, fallback: ?NodeId },
 
         lambda: struct { params: []const Span, body: NodeId },
 

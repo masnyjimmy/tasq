@@ -196,7 +196,7 @@ pub const Expr = union(enum) {
     if_expr: *IfExpr,
     switch_expr: *SwitchExpr,
     for_expr: *ForExpr,
-    builtin_call: BuiltinCall,
+    builtin_call: *BuiltinCall,
     lambda: *Lambda,
     @"continue",
     @"break",
@@ -256,6 +256,7 @@ pub const ResolvedIdent = struct {
 pub const BuiltinCall = struct {
     function: functions.ResolvedFunction,
     args: []Expr,
+    fallback: ?Expr,
 };
 
 pub const BinaryExpr = struct {

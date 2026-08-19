@@ -125,7 +125,7 @@ pub const Expr = union(enum) {
     number_lit: f64,
     string: String,
     list: []const ListItem,
-    builtin_call: BuiltInCall,
+    builtin_call: *BuiltInCall,
     ident: []const u8,
     binary: *BinaryExpr,
     unary: *UnaryExpr,
@@ -154,6 +154,7 @@ pub const BuiltInCall = struct {
     id: NodeId,
     name: []const u8,
     args: []Expr,
+    fallback: ?Expr,
 };
 
 pub const String = []const StringPart;
