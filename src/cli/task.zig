@@ -696,45 +696,25 @@ pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []cons
         return TaskError.TaskNotFound;
     };
 
-    var call_stack: inter.CallStack = .init(
-        ctx.allocator,
-        task,
-    );
-    defer call_stack.deinit(ctx.allocator);
-
-    var scope_stack: inter.ScopeStack = blk: {
-        var parser: TaskArgumentParser = try .init(
-            ctx.allocator,
-            task,
-            ctx.printer,
-        );
-        defer parser.deinit(ctx.allocator);
-
-        var arena = std.heap.ArenaAllocator.init(ctx.allocator);
-        defer arena.deinit();
-
-        var values = try parser.parseArguments(
-            &arena,
-            args,
-        );
-
-        break :blk try .init(
-            ctx.allocator,
-            task,
-            values.move(),
-        );
-    };
-    defer scope_stack.deinit(ctx.allocator);
-
-    var interpreter = inter.Interpreter.init(
+    var interpreter: inter.Interpreter = .init(
         ctx.allocator,
         ctx.io,
         ctx.printer,
         &file.options,
-        &call_stack,
-        &scope_stack,
         ctx.environ,
     );
 
-    try interpreter.run();
+    var parser: TaskArgumentParser = try .init(
+        ctx.allocator,
+        task,
+        ctx.printer,
+    );
+    defer parser.deinit(ctx.allocator);
+
+    var arena: std.heap.ArenaAllocator = .init(ctx.allocator);
+    defer arena.deinit();
+
+    var values = try parser.parseArguments(&arena, args);
+
+    try interpreter.run(task, &values);
 }

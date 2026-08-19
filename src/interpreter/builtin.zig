@@ -7,7 +7,7 @@ const platform = compiler.platform;
 const functions = compiler.functions;
 const Type = compiler.Type;
 const Value = compiler.Value;
-const Scope = @import("symbol.zig").Scope;
+const Scope = @import("Scope.zig");
 
 const Interpreter = @import("interpreter.zig");
 
@@ -15,7 +15,7 @@ const functions_count = functions.definitions.items.len;
 
 pub const Error = Interpreter.Error;
 
-const FunctionType = *const fn (*Interpreter, []const Value) Error!Value;
+const FunctionType = *const fn (*Interpreter, scope: *Scope, []const Value) Error!Value;
 
 const handlers: [functions_count]FunctionType = .{
     handleEnv,
@@ -29,6 +29,7 @@ const handlers: [functions_count]FunctionType = .{
 
 pub fn callFunction(
     interpreter: *Interpreter,
+    scope: *Scope,
     id: functions.definitions.Id,
     args: []const Value,
 ) Error!Value {
@@ -36,10 +37,10 @@ pub fn callFunction(
 
     const handler = handlers[index];
 
-    return try handler(interpreter, args);
+    return try handler(interpreter, scope, args);
 }
 
-fn handleEnv(self: *Interpreter, args: []const Value) Error!Value {
+fn handleEnv(self: *Interpreter, _: *Scope, args: []const Value) Error!Value {
     const key = args[0].string;
     const default = args[1].string;
 
@@ -50,7 +51,7 @@ fn handleEnv(self: *Interpreter, args: []const Value) Error!Value {
     };
 }
 
-fn handleExists(self: *Interpreter, args: []const Value) Error!Value {
+fn handleExists(self: *Interpreter, _: *Scope, args: []const Value) Error!Value {
     const path = args[0].string;
 
     const cwd = std.Io.Dir.cwd();
@@ -65,17 +66,17 @@ fn handleExists(self: *Interpreter, args: []const Value) Error!Value {
     return .{ .bool = result };
 }
 
-fn handleOs(_: *Interpreter, _: []const Value) Error!Value {
+fn handleOs(_: *Interpreter, _: *Scope, _: []const Value) Error!Value {
     return .{
         .string = @tagName(platform.tag),
     };
 }
 
-fn handleStatusCode(self: *Interpreter, _: []const Value) Error!Value {
+fn handleStatusCode(self: *Interpreter, _: *Scope, _: []const Value) Error!Value {
     return .{ .number = @floatFromInt(self.status_code) };
 }
 
-fn handleError(self: *Interpreter, args: []const Value) Error!Value {
+fn handleError(self: *Interpreter, _: *Scope, args: []const Value) Error!Value {
     const message = args[0].string;
 
     try self.printer.printStyled(
@@ -88,7 +89,7 @@ fn handleError(self: *Interpreter, args: []const Value) Error!Value {
     return Error.Abort;
 }
 
-fn handlePrint(self: *Interpreter, args: []const Value) Error!Value {
+fn handlePrint(self: *Interpreter, _: *Scope, args: []const Value) Error!Value {
     const message = args[0].string;
 
     try self.printer.print(
@@ -100,25 +101,21 @@ fn handlePrint(self: *Interpreter, args: []const Value) Error!Value {
     return .void;
 }
 
-fn handleAny(self: *Interpreter, args: []const Value) Error!Value {
+fn handleAny(self: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
     const list = args[0].list;
 
     const test_fn = args[1].lambda;
 
     for (list.items) |item| {
-        var scope: Scope = .init(self.currentScope(), self.allocator, test_fn.scope);
-        defer scope.deinit();
+        var lambda_scope = try Scope.create(scope, self.allocator, test_fn.scope);
+        defer lambda_scope.destroy();
 
-        lib.debug.dump(.{
-            .symbol = item,
-        }, 4);
-
-        try scope.define(.{
+        try lambda_scope.define(.{
             .name = test_fn.captures[0].name,
             .value = item,
-        });
+        }, false);
 
-        const result = try self.evaluateExpr(&scope, &test_fn.body);
+        const result = try self.evaluateExpr(scope, &test_fn.body);
 
         if (result.eql(.{ .bool = true }))
             return .{ .bool = true };

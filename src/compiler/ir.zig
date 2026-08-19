@@ -152,23 +152,27 @@ pub const Decl = struct {
 pub const ProcessStmt = String;
 
 pub const TaskCall = struct {
+    pub const Arg = union(enum) {
+        default: Value,
+        value: Expr,
+    };
+
+    pub const ArgsMap = std.array_hash_map.String(Arg);
     task: *Task,
-    args: TaskCallArgs,
+    args: ArgsMap,
 
-    pub fn debugDump(self: *const TaskCall) struct {
-        group: ?[]const u8,
-        task: []const u8,
-        args: TaskCallArgs,
-    } {
-        return .{
-            .group = if (self.task.group) |g| g.name else null,
-            .task = self.task.name,
-            .args = self.args,
-        };
-    }
+    // pub fn debugDump(self: *const TaskCall) struct {
+    //     group: ?[]const u8,
+    //     task: []const u8,
+    //     args: TaskCallArgs,
+    // } {
+    //     return .{
+    //         .group = if (self.task.group) |g| g.name else null,
+    //         .task = self.task.name,
+    //         .args = self.args,
+    //     };
+    // }
 };
-
-pub const TaskCallArgs = std.StringHashMap(Expr);
 
 //=============== expressions ==================
 
