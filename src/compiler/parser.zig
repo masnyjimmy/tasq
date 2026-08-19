@@ -1545,12 +1545,12 @@ pub const Parser = struct {
 
                 var items: std.ArrayList(ast.MetaValue) = .empty;
 
-                var child_ids = try self.span_registry.getArrayList(NodeId, 2);
-                errdefer child_ids.deinit();
+                var items_spans = try self.span_registry.getArrayList(NodeId, 2);
+                errdefer items_spans.deinit();
 
                 while (try self.eat(.rbracket) == null) {
                     const wrapped = try self.parseMetaValue();
-                    try child_ids.append(wrapped.id);
+                    try items_spans.append(wrapped.id);
                     try items.append(self.arena.allocator(), wrapped.payload);
 
                     if (try self.eat(.comma) == null) {
@@ -1562,12 +1562,42 @@ pub const Parser = struct {
                 const id = try self.span_registry.addNode(
                     self.spanFrom(start),
                     .{ .expr = .{
-                        .list = try child_ids.toOwnedSlice(),
+                        .list = try items_spans.toOwnedSlice(),
                     } },
                 );
 
                 return .wrap(id, .{
                     .list = try items.toOwnedSlice(self.arena.allocator()),
+                });
+            },
+            .lparen => {
+                const lparen = self.expect(.lparen) catch unreachable;
+
+                var elems: std.ArrayList(ast.MetaValue) = .empty;
+
+                var elems_spans = try self.span_registry.getArrayList(NodeId, 0);
+                errdefer elems_spans.deinit();
+
+                while (try self.eat(.rparen) == null) {
+                    const element = try self.parseMetaValue();
+                    try elems_spans.append(element.id);
+                    try elems.append(self.arena.allocator(), element.payload);
+
+                    if (try self.eat(.comma) == null) {
+                        _ = try self.expect(.rparen);
+                        break;
+                    }
+                }
+
+                const id = try self.span_registry.addNode(
+                    self.spanFrom(lparen.span.start),
+                    .{ .expr = .{
+                        .list = try elems_spans.toOwnedSlice(),
+                    } },
+                );
+
+                return .wrap(id, .{
+                    .tuple = try elems.toOwnedSlice(self.arena.allocator()),
                 });
             },
             else => {
