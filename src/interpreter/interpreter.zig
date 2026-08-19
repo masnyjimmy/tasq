@@ -98,35 +98,6 @@ pub fn run(self: *Interpreter, initial_task: *const ir.Task, values: *std.array_
     try self.runBlock(task_scope, initial_task.body.statements);
 }
 
-pub fn runTaskWithGroup(
-    self: *Interpreter,
-    scope: *Scope,
-    group: *const ir.Group,
-    task: *const ir.Task,
-    values: *std.array_hash_map.String(Value),
-) !void {
-    const group_scope = try Scope.create(scope, self.allocator, group.scope);
-    defer group_scope.destroy();
-
-    try bindArgs(group_scope, group.args, values);
-
-    try self.runTask(group_scope, task, values);
-}
-
-pub fn runTask(
-    self: *Interpreter,
-    scope: *Scope,
-    task: *const ir.Task,
-    values: *std.array_hash_map.String(Value),
-) !void {
-    const task_scope = try Scope.create(scope, self.allocator, task.body.scope);
-    defer task_scope.destroy();
-
-    try bindArgs(task_scope, task.args, values);
-
-    try self.runBlock(task_scope, task.body.statements);
-}
-
 pub fn runBlock(self: *Interpreter, scope: *Scope, statements: []const ir.Statement) Error!void {
     for (statements) |*stmt| {
         try self.main(scope, stmt);
@@ -213,10 +184,60 @@ fn main(self: *Interpreter, scope: *Scope, stmt: *const ir.Statement) Error!void
             }
         },
         .task_call => |*task_call| {
-            _ = task_call.task;
+            const task = task_call.task;
 
-            // what to do here?
+            const group_scope: ?*Scope = blk: {
+                if (task.group) |group| {
+                    const group_scope = try Scope.create(scope, self.allocator, group.scope);
+                    errdefer group_scope.destroy();
 
+                    for (group.args) |arg| {
+                        if (task_call.args.get(arg.name)) |in| {
+                            const value = switch (in) {
+                                .default => |def| def,
+                                .value => |*expr| try self.evaluateExpr(scope, expr),
+                            };
+                            try group_scope.define(.{
+                                .name = arg.name,
+                                .value = value,
+                            }, true);
+                        }
+                    }
+
+                    break :blk group_scope;
+                }
+
+                break :blk null;
+            };
+            defer {
+                if (group_scope) |gs| {
+                    gs.destroy();
+                }
+            }
+
+            const task_scope = try Scope.create(group_scope orelse scope, self.allocator, task.body.scope);
+            defer task_scope.destroy();
+
+            for (task.args) |arg| {
+                const in = task_call.args.get(arg.name) orelse {
+                    std.debug.panic(
+                        \\internal error: mssing '{s}' task argument
+                        \\this should have been caught during IR validation
+                    ,
+                        .{arg.name},
+                    );
+                };
+                const value = switch (in) {
+                    .default => |def| def,
+                    .value => |*expr| try self.evaluateExpr(scope, expr),
+                };
+                try task_scope.define(.{
+                    .name = arg.name,
+                    .value = value,
+                }, false);
+            }
+
+            try self.runBlock(task_scope, task.body.statements);
         },
         .expr => |*expr| {
             _ = try self.evaluateExpr(scope, expr);
