@@ -76,11 +76,17 @@ pub const Group = struct {
     }
 };
 
+pub const Env = struct {
+    key: []const u8,
+    value: []const u8,
+};
+
 pub const Task = struct {
     ast_ref: *const ast.Task,
     name: []const u8,
     args: []*Argument,
     private: bool,
+    envs: []const Env,
     desc: ?[]const u8,
     body: StatementBlock,
     group: ?*Group = null,

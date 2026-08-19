@@ -127,6 +127,19 @@ const attr_specs: []const Spec = &.{
         .kind = .validation,
         .valid_for = &.{.arguments(&.{ .list_string, .list_number })},
     },
+
+    .{
+        .name = "env",
+        .value_types = &.{
+            .{
+                .tuple = &.{ .string, .string },
+            },
+        },
+        .allow_default = false,
+        .unique = false,
+        .kind = .validation,
+        .valid_for = &.{.task},
+    },
 };
 
 pub const definitions = Attributes(platform_specs ++ attr_specs);

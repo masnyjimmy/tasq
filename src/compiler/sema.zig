@@ -221,6 +221,24 @@ pub const Sema = struct {
         else
             null;
 
+        const envs = blk: {
+            var envs: std.ArrayList(ir.Env) = .empty;
+
+            if (attributes.get(.env)) |attrs| {
+                for (attrs) |attr| {
+                    const kv = attr.?.tuple;
+                    const key = kv[0].string;
+                    const value = kv[1].string;
+                    try envs.append(self.arena.allocator(), .{
+                        .key = key,
+                        .value = value,
+                    });
+                }
+            }
+
+            break :blk try envs.toOwnedSlice(self.arena.allocator());
+        };
+
         const args = try self.analyseArgs(task_scope, task.args, false);
 
         const ptr = try self.arena.allocator().create(ir.Task);
@@ -230,6 +248,7 @@ pub const Sema = struct {
             .name = task.name,
             .args = args,
             .private = is_private,
+            .envs = envs,
             .desc = desc,
             .body = .{
                 .scope = task_scope,
