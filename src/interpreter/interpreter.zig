@@ -433,7 +433,16 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
             for (call.args, args) |in, *out| {
                 out.* = try self.evaluateExpr(scope, &in);
             }
-            return try builtin.callFunction(self, scope, call.function.id, args);
+
+            const value = try builtin.callFunction(self, scope, call.function.id, args);
+
+            return switch (value) {
+                .result => |r| if (r.value) |v|
+                    v.*
+                else
+                    try self.evaluateExpr(scope, &call.fallback.?),
+                else => value,
+            };
         },
         .lambda => |lambda| .{ .lambda = lambda },
         .@"continue" => Error.Continue,
