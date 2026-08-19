@@ -187,7 +187,6 @@ pub const Expr = union(enum) {
     };
 
     string: String,
-    char_lit: u21,
     number_lit: f64,
     bool_lit: bool,
     list: List,

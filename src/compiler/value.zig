@@ -22,7 +22,6 @@ pub const ValueMapContext = struct {
         hasher.update(@tagName(tag));
         switch (value) {
             .string => |s| hasher.update(s),
-            .char => |c| hasher.update(std.mem.asBytes(&c)),
             .bool => |b| hasher.update(std.mem.asBytes(&b)),
             .number => |n| {
                 std.debug.assert(n == 0 or std.math.isNormal(n));
@@ -41,7 +40,6 @@ pub const List = struct {
 
 const Tag = enum {
     string,
-    char,
     number,
     bool,
     list,
@@ -51,7 +49,6 @@ const Tag = enum {
 
 pub const Value = union(Tag) {
     string: []const u8,
-    char: u21,
     number: f64,
     bool: bool,
     list: List,
@@ -73,7 +70,6 @@ pub const Value = union(Tag) {
     pub fn format(self: *const Value, writer: *std.Io.Writer) !void {
         switch (self.*) {
             .string => |s| try writer.writeAll(s),
-            .char => |ch| try writer.printUnicodeCodepoint(ch),
             .number => |f| try writer.printFloat(f, .{}),
             .bool => |b| try writer.print("{}", .{b}),
             .list => |l| {
@@ -106,7 +102,6 @@ pub const Value = union(Tag) {
 
         return switch (common) {
             .string => std.mem.eql(u8, left.string, right.string),
-            .char => left.char == right.char,
             .number => left.number == right.number,
             .bool => left.bool == right.bool,
             .list => {

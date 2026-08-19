@@ -283,7 +283,6 @@ fn handleProcess(self: *Interpreter, process: []const u8) Error!void {
 pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Error!Value {
     return switch (expr.*) {
         .bool_lit => |lit| .{ .bool = lit },
-        .char_lit => |lit| .{ .char = lit },
         .number_lit => |lit| .{ .number = lit },
         .string => |str| .{ .string = try self.resolveString(scope, str) },
         .list => |list| {

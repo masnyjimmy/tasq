@@ -2,7 +2,6 @@ const std = @import("std");
 
 const Tag = enum {
     string,
-    char,
     number,
     bool,
     list,
@@ -18,7 +17,6 @@ pub const FuncType = struct {
 
 pub const Type = union(Tag) {
     string,
-    char,
     number,
     bool,
     list: *const Type,

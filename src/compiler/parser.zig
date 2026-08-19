@@ -1007,18 +1007,6 @@ pub const Parser = struct {
                 const id = try self.span_registry.addNode(tok.span, .leaf);
                 return .wrap(id, .{ .number_lit = val });
             },
-            .apostrophe => {
-                const start = self.currentPos();
-                const ch = try self.readCharacter();
-                _ = try self.expect(.apostrophe);
-
-                const result = text.processChar(self.arena.allocator(), ch.lexeme) catch unreachable;
-
-                try self.span_registry.put(.string, self.spanFrom(start));
-
-                const id = try self.span_registry.addNode(self.spanFrom(start), .leaf);
-                return .wrap(id, .{ .char_lit = result });
-            },
             .quote => {
                 // parseStringExpr already registers/returns the correct id --
                 // a plain literal reuses its single leaf id, an interpolated

@@ -123,7 +123,6 @@ pub const Expr = union(enum) {
 
     bool_lit: bool,
     number_lit: f64,
-    char_lit: u21,
     string: String,
     list: []const ListItem,
     builtin_call: BuiltInCall,

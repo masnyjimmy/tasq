@@ -1014,15 +1014,6 @@ pub const Sema = struct {
                 .type = .bool,
                 .is_static = true,
             },
-            .char_lit => |ch| {
-                const out = ch;
-
-                return .{
-                    .is_static = true,
-                    .expr = .{ .char_lit = out },
-                    .type = .char,
-                };
-            },
             .string => |s| {
                 const res = try self.analyseString(scope, s, node_id);
 
@@ -1839,7 +1830,6 @@ pub const Sema = struct {
         const expr_type: std.meta.Tag(Type) = switch (expr) {
             .bool_lit => .bool,
             .number_lit => .number,
-            .char_lit => .char,
             .string => |str| if (str.len == 1) .string else {
                 try self.diagnostics.err(span_node.span, "invalid type, expected '{f}' literal, found string interpolation expr", .{expected_type});
                 return SemaError.SemanticError;
@@ -1859,7 +1849,6 @@ pub const Sema = struct {
         return switch (expected_type) {
             .bool => .{ .bool = expr.bool_lit },
             .number => .{ .number = expr.number_lit },
-            .char => .{ .char = expr.char_lit },
             .string => .{ .string = expr.string[0].lit },
             .list => |items_type| {
                 var out: std.ArrayList(Value) = try .initCapacity(self.arena.allocator(), expr.list.len);
