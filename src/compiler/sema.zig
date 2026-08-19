@@ -147,6 +147,9 @@ pub const Sema = struct {
 
         while (iter.next()) |opt| switch (opt.value.*) {
             .shell => |shell| out.shell = shell,
+            .dotenv => |dotenv| out.dotenv = dotenv,
+            .working_dir => |wd| out.working_dir = wd,
+            .fail_fast => |ff| out.fail_fast = ff,
         };
 
         return out;
@@ -2028,6 +2031,9 @@ const OptionResolver = struct {
 
     const OptionValue = union(options.Type) {
         shell: []const []const u8,
+        dotenv: ?[]const u8,
+        working_dir: []const u8,
+        fail_fast: bool,
     };
 
     const Storage = std.EnumMap(options.Type, OptionValue);
@@ -2097,13 +2103,16 @@ const OptionResolver = struct {
 
             const value: ast.MetaValue = decl.value orelse .{ .bool = true };
 
-            if (value.validateType(def.value_type) == false) {
+            for (def.value_types) |vt| {
+                if (value.validateType(vt)) break;
+            } else {
+                const expected = try attrib.typesListToString(self.sema.arena.allocator(), def.value_types, false);
                 try self.sema.diagnostics.err(
                     decl_span,
-                    "invalid '{s}' option value type, expected '{f}'",
-                    .{ decl.name, def.value_type },
+                    "invalid '{s}' option value type, expected '{s}'",
+                    .{ decl.name, expected },
                 );
-                return SemaError.SemanticError;
+                continue;
             }
 
             self.storage.put(def.id, try self.getOptionValue(def.id, value));
@@ -2112,7 +2121,7 @@ const OptionResolver = struct {
 
     fn getOptionValue(self: *OptionResolver, id: options.Type, value: ast.MetaValue) !OptionValue {
         switch (id) {
-            inline .shell => |tag| {
+            .shell => {
                 var out: std.ArrayList([]const u8) = try .initCapacity(
                     self.sema.arena.allocator(),
                     value.list.len,
@@ -2125,11 +2134,26 @@ const OptionResolver = struct {
                     );
                     out.appendAssumeCapacity(string);
                 }
-                return @unionInit(
-                    OptionValue,
-                    @tagName(tag),
-                    out.toOwnedSliceAssert(),
-                );
+                return .{
+                    .shell = try out.toOwnedSlice(self.sema.arena.allocator()),
+                };
+            },
+            .dotenv => {
+                switch (value) {
+                    .bool => |b| {
+                        return .{ .dotenv = if (b) ".env" else null };
+                    },
+                    .string => |str| {
+                        return .{ .dotenv = str };
+                    },
+                    else => unreachable,
+                }
+            },
+            .working_dir => {
+                return .{ .working_dir = value.string };
+            },
+            .fail_fast => {
+                return .{ .fail_fast = value.bool };
             },
         }
     }
