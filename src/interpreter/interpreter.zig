@@ -180,7 +180,11 @@ fn main(self: *Interpreter, scope: *Scope, stmt: *const ir.Statement) Error!void
                     }
                 }
 
-                try self.runBlock(for_scope, for_stmt.body.statements);
+                self.runBlock(for_scope, for_stmt.body.statements) catch |err| switch (err) {
+                    Error.Continue => continue,
+                    Error.Break => break,
+                    else => return err,
+                };
             }
         },
         .task_call => |*task_call| {
