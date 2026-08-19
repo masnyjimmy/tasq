@@ -25,6 +25,10 @@ const handlers: [functions_count]FunctionType = .{
     handleError,
     handlePrint,
     handleAny,
+    handleLen,
+    handleLen,
+    handleReplaceString,
+    handleReplaceList,
 };
 
 pub fn callFunction(
@@ -122,4 +126,55 @@ fn handleAny(self: *Interpreter, scope: *Scope, args: []const Value) Error!Value
     }
 
     return .{ .bool = false };
+}
+
+fn handleLen(_: *Interpreter, _: *Scope, args: []const Value) Error!Value {
+    const length = switch (args[0]) {
+        .string => |str| str.len,
+        .list => |list| list.items.len,
+        else => unreachable,
+    };
+
+    return .{
+        .number = @floatFromInt(length),
+    };
+}
+
+fn handleReplaceString(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+    const str = args[0].string;
+    const old = args[1].string;
+    const new = args[2].string;
+
+    const replaced = try std.mem.replaceOwned(
+        u8,
+        scope.arena.allocator(),
+        str,
+        old,
+        new,
+    );
+
+    return .{
+        .string = replaced,
+    };
+}
+
+fn handleReplaceList(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+    const list = args[0].list;
+    const old = args[1];
+    const new = args[2];
+
+    const replaced = try scope.arena.allocator().dupe(Value, list.items);
+
+    for (replaced) |*item| {
+        if (item.eql(old)) {
+            item.* = try new.clone(scope.arena.allocator());
+        }
+    }
+
+    return .{
+        .list = .{
+            .items = replaced,
+            .items_type = list.items_type,
+        },
+    };
 }

@@ -97,6 +97,64 @@ pub const definitions = Functions(&.{
         },
         .return_type = .{ .concrete = Type.bool },
     },
+    // type conversion
+    // strings
+    .{
+        .name = "len",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.number },
+    },
+    .{
+        .name = "len",
+        .args = &.{
+            .{
+                .name = "list",
+                .type = .{ .list = &.{ .generic = "T" } },
+            },
+        },
+        .return_type = .{ .concrete = Type.number },
+    },
+    .{
+        .name = "replace",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+            .{
+                .name = "old",
+                .type = .{ .concrete = Type.string },
+            },
+            .{
+                .name = "new",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.string },
+    },
+    .{
+        .name = "replace",
+        .args = &.{
+            .{
+                .name = "list",
+                .type = .{ .list = &.{ .generic = "T" } },
+            },
+            .{
+                .name = "old",
+                .type = .{ .generic = "T" },
+            },
+            .{
+                .name = "new",
+                .type = .{ .generic = "T" },
+            },
+        },
+        .return_type = .{ .list = &.{ .generic = "T" } },
+    },
 });
 
 fn Functions(comptime specs: []const Spec) type {
