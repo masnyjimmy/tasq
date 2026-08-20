@@ -20,6 +20,7 @@
    - [4.5 For Expression](#45-for-expression)
    - [4.6 Break and Continue Expressions](#46-break-and-continue-expressions)
    - [4.7 Built-in Functions](#47-built-in-functions)
+   - [4.8 Fallback](#48-fallback)
 5. [Settings](#5-settings)
 6. [Tasks](#6-tasks)
    - [6.1 Arguments](#61-arguments)
@@ -38,6 +39,7 @@
     - [10.1 Platform Attributes](#101-platform-attributes)
     - [10.2 Documentation Attributes](#102-documentation-attributes)
     - [10.3 Modifier Attributes](#103-modifier-attributes)
+    - [10.4 Environment Attributes](#104-environment-attributes)
 11. [Quick Reference](#11-quick-reference)
 12. [Planned Features](#12-planned-features)
 
@@ -76,6 +78,7 @@ Runtime types are used for bindings and expressions evaluated at runtime.
 | `lambda` | An anonymous, inline function value | `\|a, b\| a > b` |
 | `void` | The "no meaningful value" result of certain built-in functions | *(none — cannot be written as a literal)* |
 | `noreturn` | Special type given to a built-in function call, or to `break`/`continue`, that never produces a value (it always diverges) | *(none — cannot be written as a literal)* |
+| `!T` | Result of a fallible built-in function call: either a successful `T` value or an error | *(none — only produced by certain built-in functions)* |
 
 **Rules:**
 
@@ -86,6 +89,7 @@ Runtime types are used for bindings and expressions evaluated at runtime.
 - A `lambda` literal has the form `|<captures>| <expr>` (see [§4.7](#47-built-in-functions) for the notation used to describe a lambda's parameter and return types, e.g. `|T| -> bool`). A lambda's parameter types and return type are **inferred entirely from the context that expects it** — a lambda literal has no meaning on its own. Currently the only such context is a built-in function parameter declared to accept a lambda (e.g. `@any`). A lambda literal cannot be assigned to a binding, stored in a list, or used anywhere its expected type isn't already known.
 - `void` has no literal and cannot be produced directly — it only ever appears as the return type of certain built-in functions (e.g. `@print`). Unlike `noreturn`, `void` **is** a real value and behaves as an ordinary concrete type: it can be assigned to a binding, and two `void`-typed branches unify with each other in `if`/`switch`/`for` — but a `void` branch does **not** unify with a differently-typed branch. Pairing a `void` branch with, say, a `string` branch is a type error.
 - `noreturn` can never be assigned to a binding directly and has no literal form. It only ever appears as the return type of certain built-in functions ([§4.7](#47-built-in-functions)) or the `break`/`continue` expressions ([§4.6](#46-break-and-continue-expressions)). When a `noreturn`-typed branch appears alongside other branches — in an `if` expression ([§4.3](#43-if-expression)), `switch` expression ([§4.4](#44-switch-expression)), or `for` expression ([§4.5](#45-for-expression)) — it unifies with whatever type the other branches produce, since a diverging branch never actually yields a value to compare. If **every** branch is `noreturn`, the expression as a whole is `noreturn`.
+- `!T` has no literal and is produced only by certain built-in functions ([§4.7](#47-built-in-functions)) that can fail. It cannot be assigned to a binding, passed to a process call or task call, stored in a list, or used in **any** other expression context — a `!T` value has exactly one valid use: applying `fallback` (§4.8) directly to the built-in call that produced it. `fallback` unwraps a `!T` into a plain `T`, which can then be used anywhere a `T` is expected.
 
 ### 2.2 Meta Types
 
@@ -99,8 +103,13 @@ Meta types are used exclusively in **attribute values** and **setting values**. 
 | `number` | Numeric value | `16` |
 | `string` | Text | `"bash"` |
 | `list[T]` | Homogeneous list | `["bash", "-c"]` |
+| `tuple[T, U, ...]` | Fixed-size, heterogeneous sequence — each position has its own declared type | `("some_string", 25)` |
 
 Meta type `list[T]` may be **empty** (`[]`) because the expected element type is always known from the consuming setting or attribute definition.
+
+A tuple's size is fixed by how many types are listed in `tuple[T, U, ...]`, and each position's value must match that position's declared type exactly — unlike `list[T]`, a tuple's element types need not all be the same. A tuple's element types may themselves be any meta type, including another `list[T]` or tuple. Note that `tuple[T, U, ...]` is the *type* notation; a tuple *literal* is written with parentheses, e.g. `("some_string", 25)` for a `tuple[string, number]`.
+
+A setting's meta type may also be a **union** of two meta types, written `T | U`, meaning a value of either type is accepted. This is currently only used by the `dotenv` setting (§5).
 
 ### 2.3 Argument Types
 
@@ -332,15 +341,58 @@ Built-in functions are called with an `@` prefix and may appear inside any expre
 
 | Signature | Return Type | Description |
 |-----------|-------------|-------------|
-| `@env(name: string, default: string)` | `string` | Returns the value of environment variable `name`, or `default` if it is not set. |
+| `@env(key: string)` | `!string` | Returns the value of environment variable `key`, or an error if it is not set. There is no overload with a default value — use `fallback` (§4.8) instead, e.g. `@env("PORT") fallback "8080"`. |
 | `@exists(path: string)` | `bool` | Returns `true` if a file or directory exists at `path`. |
 | `@os()` | `string` | Returns the current platform: `"windows"`, `"linux"`, or `"macos"`. |
 | `@status_code()` | `number` | Returns the exit status of the most recently executed process. Errors if no process has been run yet in the current task. |
 | `@error(message: string)` | `noreturn` | Immediately aborts execution and reports `message`. Never produces a value; see [§2.1](#21-runtime-types) for how a `noreturn` branch unifies with other branches in `if`/`switch`/`for` expressions. |
 | `@print(message: string)` | `void` | Prints `message`. Because its return type is `void`, `@print(...)` can be used directly as a statement without binding its result (see [§6.3](#63-task-body)). |
+| `@parse_number(str: string)` | `!number` | Parses `str` as a `number`, or returns an error if `str` isn't a valid numeric literal. |
+| `@len(str: string)` | `number` | Returns the number of characters in `str`. |
+| `@len(list: list[T])` | `number` | Returns the number of elements in `list`. |
+| `@split(str: string, sep: string)` | `list[string]` | Splits `str` into substrings wherever `sep` occurs. |
+| `@join(list: list[string], sep: string)` | `string` | Joins the elements of `list` into a single string, separated by `sep`. |
+| `@lower(str: string)` | `string` | Returns `str` converted to lowercase. |
+| `@upper(str: string)` | `string` | Returns `str` converted to uppercase. |
+| `@contains(str: string, sub: string)` | `bool` | Returns `true` if `str` contains `sub`. |
+| `@starts_with(str: string, prefix: string)` | `bool` | Returns `true` if `str` begins with `prefix`. |
+| `@ends_with(str: string, postfix: string)` | `bool` | Returns `true` if `str` ends with `postfix`. |
+| `@replace(str: string, old: string, new: string)` | `string` | Returns a copy of `str` with every occurrence of `old` replaced by `new`. |
+| `@replace(list: list[T], old: T, new: T)` | `list[T]` | Returns a copy of `list` with every element equal to `old` replaced by `new`. |
+| `@all(list: list[T], predicate: \|T\| -> bool)` | `bool` | Returns `true` if `predicate` evaluates to `true` for every element of `list` (vacuously `true` for an empty list). |
 | `@any(array: list[T], predicate: \|T\| -> bool)` | `bool` | Returns `true` if `predicate` evaluates to `true` for at least one element of `array`, otherwise `false`. `predicate` is a lambda literal (see [§2.1](#21-runtime-types)); `\|T\| -> bool` denotes "a lambda taking one `T` and returning `bool`". |
+| `@reduce(list: list[T], init: T, combine: \|T, T\| -> T)` | `T` | Folds `list` into a single value: starting from `init`, repeatedly calls `combine(accumulator, element)` for each element in order, and returns the final accumulator. `\|T, T\| -> T` denotes "a lambda taking two `T`s (accumulator, then element) and returning a `T`". |
+
+Several entries above share a name with different parameter types (`@len`, `@replace`) — the overload used is determined at compile time from the runtime type of the argument, the same way `list[T]` itself is generic over `T`.
+
+Functions whose return type is `!T` (`@env`, `@parse_number`) can fail; see [§4.8 Fallback](#48-fallback) for the only way to obtain a usable value from them.
 
 > Additional built-in functions will be added in future versions.
+
+### 4.8 Fallback
+
+Some built-in functions can fail; instead of raising an unhandled runtime error, they return a **result type**, written `!T` (§2.1) — either a successful `T` or an error. A `!T` value cannot be stored, passed around, or used in any expression context. The only way to turn it into a usable `T` is the `fallback` keyword, attached directly to the built-in call that produced it.
+
+```
+<builtin_call> fallback <expression>
+```
+
+**Rules:**
+
+- `fallback` is only valid directly after a built-in call whose return type is `!T`. It isn't a general-purpose operator usable anywhere else.
+- Evaluation is **short-circuiting**: if the call succeeds, its unwrapped `T` value is used and the `fallback` expression is never evaluated. The `fallback` expression only runs if the call actually failed.
+- On failure, the `fallback` expression is evaluated and used instead. It must produce type `T` — **or** `noreturn` (e.g. `@error(...)`), in which case it unifies with `T` exactly as `noreturn` branches do elsewhere (see [§2.1](#21-runtime-types)).
+- The overall expression `<builtin_call> fallback <expression>` has type `T` (never `!T`), so — once resolved — it can be used anywhere an ordinary `T` value can: assigned to a binding, interpolated, passed as an argument, and so on.
+
+**Examples:**
+
+```
+// Falls back to a plain default value
+path := @env("PATH") fallback ""
+
+// Falls back to aborting the program (noreturn unifies with number)
+port := @parse_number(@env("PORT") fallback "8080") fallback @error("PORT must be numeric")
+```
 
 ---
 
@@ -393,6 +445,9 @@ set script = ["zsh", "-c"]
 | Setting | Meta Type | Description |
 |---------|-----------|-------------|
 | `script` | `list[string]` | Command and arguments used to invoke each backtick process call. Example: `["sh", "-c"]`. |
+| `dotenv` | `bool \| string` | Whether to read a `.env` file into the environment. The boolean shorthand, `set dotenv`, enables reading the default `.env` file from `working_dir`. `set dotenv = "path/to/file"` also enables it, using `path/to/file` instead of the default. Default: `false` (not read). See [§10.4](#104-environment-attributes) for how loaded values interact with the `[env]` attribute and the pre-existing OS environment. |
+| `working_dir` | `string` | Sets the working directory tasq's spawned processes run in. Also used to resolve the default `.env` path for `dotenv`. Defaults to the directory `tasq` was invoked from if not set. |
+| `fail_fast` | `bool` | When `true`, a task aborts immediately if a process call (backtick invocation) exits with a non-zero status. Default: `false`. |
 
 > Additional settings will be added in future versions.
 
@@ -503,7 +558,7 @@ A single shell process is invoked by enclosing a command in backticks. String in
 `mkdir -p {{output_dir}}/bin`
 ```
 
-Each backtick block is **one process invocation**. The command is run using the interpreter configured in the `script` setting.
+Each backtick block is **one process invocation**. The command is run using the interpreter configured in the `script` setting, in the directory configured by the `working_dir` setting (§5), and aborts the task immediately on a non-zero exit status if `fail_fast` (§5) is enabled.
 
 ### 6.5 Conditional Statements
 
@@ -811,6 +866,8 @@ Or across multiple bracket pairs (equivalent):
 
 All attribute values use **meta types** — they are compile-time literals.
 
+Unless stated otherwise, an attribute may be applied **at most once** per element — once per argument, task, group, or setting. Applying the same attribute twice to the same element is a compile-time error. The current sole exception is `[env]` (§10.4), which may be repeated on the same task to set multiple environment variables.
+
 ---
 
 ### 10.1 Platform Attributes
@@ -943,6 +1000,44 @@ task create_user(
 
 ---
 
+### 10.4 Environment Attributes
+
+Environment attributes set environment variables in a task's scope.
+
+| Attribute | Meta Type | Description |
+|-----------|-----------|-------------|
+| `[env: (string, string)]` | `tuple[string, string]` | Sets an environment variable for this task: the first tuple element is the variable name, the second is its value. |
+
+**Valid on:** `task` definitions only.
+
+**Unique:** **No** — this is the one exception to the general uniqueness rule in [§10](#10-attributes). `[env]` may be written multiple times on the same task, once per variable, to set several environment variables at once.
+
+**Scope:**
+
+- An `[env]` variable is visible to `@env(...)` calls and to spawned processes (backtick calls, §6.4) anywhere within the task it's declared on.
+- If that task calls another task, the variable is **inherited** into the callee. It reverts once control returns back to the caller — `[env]` is scoped dynamically to the call subtree rooted at the declaring task, not a permanent, run-wide mutation. If a called task declares its own `[env]` for the same name, that value takes precedence for the duration of that call, and the earlier one resumes when it returns, following ordinary nested-scope shadowing.
+
+**Precedence:**
+
+When the same environment variable name could come from more than one source, tasq resolves it in this order, most specific first:
+
+1. `[env: (...)]` attributes in effect at the current point in the call chain (above)
+2. Values loaded from a `.env` file, if the `dotenv` setting (§5) is enabled
+3. The pre-existing OS environment
+
+**Example:**
+
+```
+[env: ("NODE_ENV", "production")]
+[env: ("LOG_LEVEL", "warn")]
+task deploy {
+    `echo "Running in {{@env("NODE_ENV") fallback "unknown"}}"`
+    build() // NODE_ENV and LOG_LEVEL are inherited here too
+}
+```
+
+---
+
 ## 11. Quick Reference
 
 ### Operator Summary
@@ -974,6 +1069,7 @@ task create_user(
 | `[private]` | ✓ | ✓ | | |
 | `[long]` `[short]` | | | ✓ | |
 | `[int]` `[min]` `[max]` `[pattern]` `[max_items]` | | | ✓ | |
+| `[env]` (repeatable — see §10) | ✓ | | | |
 
 ### Type System at a Glance
 
@@ -984,6 +1080,7 @@ task create_user(
 | Task/group parameter declarations | Argument types |
 | Inside task body (arguments as values) | Runtime types (mapped from argument types) |
 | Built-in function parameters declared as lambda | Runtime types, restricted to a `lambda` literal — the only context where a lambda literal is valid (§2.1) |
+| Result of a fallible built-in call | `!T`, unusable until unwrapped to `T` via `fallback` (§4.8) |
 
 ---
 
