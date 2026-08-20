@@ -27,13 +27,24 @@ pub fn create(parent: ?*Scope, allocator: std.mem.Allocator, ss: *static_scope.S
     return ptr;
 }
 
+pub fn replace(parent: ?*Scope, allocator: std.mem.Allocator, target: *static_scope.Scope) !*Scope {
+    var curr = parent;
+
+    while (curr != target.parent) {
+        const c = curr orelse unreachable;
+        curr = c.parent;
+    }
+
+    return try create(curr, allocator, target);
+}
+
 pub fn destroy(self: *Scope) void {
     var allocator = self.arena.child_allocator;
     self.arena.deinit();
     allocator.destroy(self);
 }
 
-pub fn define(self: *Scope, symbol: Symbol, comptime can_replace: bool) !void {
+pub fn define(self: *Scope, symbol: Symbol, can_replace: bool) !void {
     std.debug.assert(self.static.resolve(symbol.name, .variable) != null);
     std.debug.assert(can_replace or self.symbols.contains(symbol.name) == false);
 
