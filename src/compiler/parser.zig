@@ -311,7 +311,7 @@ pub const Parser = struct {
         // brace itself -- inconsistent with parseGroup/parseSet, which both
         // capture body_start post-brace.
 
-        const body = try self.parseStatementBlock(false);
+        const body = try self.parseStatementBlock(true);
 
         const id = try self.span_registry.addNode(
             self.spanFrom(start),
