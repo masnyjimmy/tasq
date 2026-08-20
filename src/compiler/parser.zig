@@ -306,6 +306,52 @@ pub const Parser = struct {
             args_span = self.spanFrom(args_start);
         }
 
+        // feat: parse dependencies
+
+        var dependencies: std.ArrayList(ast.TaskCall) = .empty;
+
+        if (try self.eat(.lbracket)) |_| {
+            while (try self.eat(.rbracket) == null) {
+                const call_start = self.currentPos();
+
+                var scope: ast.TaskCall.Scope = .closest;
+                var group_span: ?Span = null;
+                var task_ident = try self.expect(.ident);
+
+                if (try self.eat(.dcolon)) |_| {
+                    const group = task_ident;
+                    task_ident = try self.expect(.ident);
+                    group_span = group.span;
+                    scope = .{ .group = group.lexeme };
+                }
+
+                const args_start = self.currentPos();
+                const args = try self.parseTaskCallArgs();
+
+                const call_args_span = self.spanFrom(args_start);
+
+                const id = try self.span_registry.addNode(self.spanFrom(call_start), .{
+                    .task_call = .{
+                        .group = group_span,
+                        .task = task_ident.span,
+                        .args = call_args_span,
+                    },
+                });
+
+                try dependencies.append(self.arena.allocator(), .{
+                    .id = id,
+                    .task = task_ident.lexeme,
+                    .scope = scope,
+                    .args = args,
+                });
+
+                if (try self.eat(.comma) == null) {
+                    _ = try self.expect(.rbracket);
+                    break;
+                }
+            }
+        }
+
         // FIX: body_start must be captured *after* consuming '{', otherwise
         // the registered body span (and the .wrap node below) includes the
         // brace itself -- inconsistent with parseGroup/parseSet, which both
@@ -313,6 +359,7 @@ pub const Parser = struct {
 
         const body = try self.parseStatementBlock(true);
 
+        //TODO: add dependencies span
         const id = try self.span_registry.addNode(
             self.spanFrom(start),
             .{ .task = .{
@@ -327,6 +374,7 @@ pub const Parser = struct {
             .name = name.lexeme,
             .attrs = attrs,
             .args = arguments,
+            .dependencies = try dependencies.toOwnedSlice(self.arena.allocator()),
             .body = body.payload,
         };
     }

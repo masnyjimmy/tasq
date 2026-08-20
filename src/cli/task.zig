@@ -715,7 +715,7 @@ pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []cons
     var arena: std.heap.ArenaAllocator = .init(ctx.allocator);
     defer arena.deinit();
 
-    var values = try parser.parseArguments(&arena, args);
+    const values = try parser.parseArguments(&arena, args);
 
-    try interpreter.run(task, &values);
+    try interpreter.run(task, values);
 }

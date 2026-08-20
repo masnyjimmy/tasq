@@ -33,7 +33,7 @@ pub fn destroy(self: *Scope) void {
     allocator.destroy(self);
 }
 
-pub fn define(self: *Scope, symbol: Symbol, comptime can_replace: bool) !void {
+pub fn define(self: *Scope, symbol: Symbol, can_replace: bool) !void {
     std.debug.assert(self.static.resolve(symbol.name, .variable) != null);
     std.debug.assert(can_replace or self.symbols.contains(symbol.name) == false);
 

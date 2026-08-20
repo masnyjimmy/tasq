@@ -85,9 +85,11 @@ pub const Task = struct {
     ast_ref: *const ast.Task,
     name: []const u8,
     args: []*Argument,
+    dependecies: []const TaskCall,
     private: bool,
     envs: []const Env,
     desc: ?[]const u8,
+    scope: *Scope,
     body: StatementBlock,
     group: ?*Group = null,
 };
@@ -165,22 +167,11 @@ pub const TaskCall = struct {
         default: Value,
         value: Expr,
     };
-
     pub const ArgsMap = std.array_hash_map.String(Arg);
+
     task: *Task,
     args: ArgsMap,
-
-    // pub fn debugDump(self: *const TaskCall) struct {
-    //     group: ?[]const u8,
-    //     task: []const u8,
-    //     args: TaskCallArgs,
-    // } {
-    //     return .{
-    //         .group = if (self.task.group) |g| g.name else null,
-    //         .task = self.task.name,
-    //         .args = self.args,
-    //     };
-    // }
+    same_group: bool,
 };
 
 //=============== expressions ==================
