@@ -27,17 +27,6 @@ pub fn create(parent: ?*Scope, allocator: std.mem.Allocator, ss: *static_scope.S
     return ptr;
 }
 
-pub fn replace(parent: ?*Scope, allocator: std.mem.Allocator, target: *static_scope.Scope) !*Scope {
-    var curr = parent;
-
-    while (curr != target.parent) {
-        const c = curr orelse unreachable;
-        curr = c.parent;
-    }
-
-    return try create(curr, allocator, target);
-}
-
 pub fn destroy(self: *Scope) void {
     var allocator = self.arena.child_allocator;
     self.arena.deinit();
