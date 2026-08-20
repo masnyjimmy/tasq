@@ -69,56 +69,91 @@ pub fn deinit(self: *Interpreter) void {
     self.cwd.close(self.io);
 }
 
-fn bindArgs(scope: *Scope, args: []*ir.Argument, values: *std.array_hash_map.String(Value)) !void {
-    for (args) |arg| {
-        const kv = values.fetchSwapRemove(arg.name) orelse {
+pub fn run(self: *Interpreter, initial_task: *const ir.Task, values: std.array_hash_map.String(Value)) !void {
+    const root_scope = try Scope.create(null, self.allocator, initial_task.body.scope.root());
+    defer root_scope.destroy();
+
+    try self.runTask(
+        root_scope,
+        initial_task,
+        values,
+        false,
+    );
+}
+
+pub fn runTask(self: *Interpreter, scope: *Scope, task: *const ir.Task, values: std.array_hash_map.String(Value), same_group: bool) !void {
+    const group_scope: ?*Scope = blk: {
+        if (task.group) |group| {
+
+            // if another group call => find by static group scope parent
+            // if same group => find by static group scope,
+            const actual_parent = p: {
+                if (same_group) {
+                    break :p scope.findByStatic(group.scope).?;
+                }
+
+                break :p if (group.scope.parent) |p| scope.findByStatic(p).? else scope.root();
+            };
+            const group_scope = try Scope.create(actual_parent, self.allocator, group.scope);
+            errdefer group_scope.destroy();
+
+            for (group.args) |arg| {
+                // if same group and group arguments are optional
+                const value = values.get(arg.name) orelse {
+                    if (same_group == false) {
+                        std.debug.panic(
+                            \\internal error: missing argument '{s}';
+                            \\this should have been caught during IR validation.
+                        ,
+                            .{arg.name},
+                        );
+                    }
+                    continue;
+                };
+                try group_scope.define(.{
+                    .name = arg.name,
+                    .value = try value.clone(group_scope.arena.allocator()),
+                }, same_group);
+            }
+
+            break :blk group_scope;
+        }
+
+        break :blk null;
+    };
+    defer {
+        if (group_scope) |gs|
+            gs.destroy();
+    }
+
+    const task_scope = try Scope.create(
+        group_scope orelse scope,
+        self.allocator,
+        task.scope,
+    );
+    defer task_scope.destroy();
+
+    for (task.args) |arg| {
+        const value = values.get(arg.name) orelse {
             std.debug.panic(
                 \\internal error: missing argument '{s}';
-                \\this should have been caught during IR validation
+                \\this should have been caught during IR validation.
             ,
                 .{arg.name},
             );
         };
-
-        try scope.define(.{
-            .name = kv.key,
-            .value = try kv.value.clone(scope.arena.allocator()),
+        try task_scope.define(.{
+            .name = arg.name,
+            .value = try value.clone(task_scope.arena.allocator()),
         }, false);
     }
-}
 
-pub fn run(self: *Interpreter, initial_task: *const ir.Task, values: *std.array_hash_map.String(Value)) !void {
-    const root_scope = try Scope.create(null, self.allocator, initial_task.body.scope.root());
-    defer root_scope.destroy();
-
-    const group_scope: ?*Scope = blk: {
-        if (initial_task.group) |group| {
-            const group_scope = try Scope.create(root_scope, self.allocator, group.scope);
-            errdefer group_scope.destroy();
-
-            try bindArgs(group_scope, group.args, values);
-
-            break :blk group_scope;
-        } else {
-            break :blk null;
-        }
-    };
-    defer {
-        if (group_scope) |gs| {
-            gs.destroy();
-        }
+    for (task.dependecies) |*dep| {
+        try self.handleTaskCall(task_scope, dep);
     }
 
-    const task_scope = try Scope.create(
-        group_scope orelse root_scope,
-        self.allocator,
-        initial_task.body.scope,
-    );
-    defer task_scope.destroy();
-
-    try bindArgs(task_scope, initial_task.args, values);
-
-    // apply task env
+    const task_body_scope = try Scope.create(task_scope, self.allocator, task.body.scope);
+    defer task_body_scope.destroy();
 
     const prev_environ = self.environ;
     self.environ = try prev_environ.clone(self.allocator);
@@ -127,11 +162,11 @@ pub fn run(self: *Interpreter, initial_task: *const ir.Task, values: *std.array_
         self.environ = prev_environ;
     }
 
-    for (initial_task.envs) |env| {
+    for (task.envs) |env| {
         try self.environ.put(env.key, env.value);
     }
 
-    try self.runBlock(task_scope, initial_task.body.statements);
+    try self.runBlock(task_body_scope, task.body.statements);
 }
 
 pub fn runBlock(self: *Interpreter, scope: *Scope, statements: []const ir.Statement) Error!void {
@@ -224,77 +259,29 @@ fn main(self: *Interpreter, scope: *Scope, stmt: *const ir.Statement) Error!void
             }
         },
         .task_call => |*task_call| {
-            const task = task_call.task;
-
-            const group_scope: ?*Scope = blk: {
-                if (task.group) |group| {
-                    const group_scope = try Scope.create(scope, self.allocator, group.scope);
-                    errdefer group_scope.destroy();
-
-                    for (group.args) |arg| {
-                        if (task_call.args.get(arg.name)) |in| {
-                            const value = switch (in) {
-                                .default => |def| def,
-                                .value => |*expr| try self.evaluateExpr(scope, expr),
-                            };
-                            try group_scope.define(.{
-                                .name = arg.name,
-                                .value = value,
-                            }, true);
-                        }
-                    }
-
-                    break :blk group_scope;
-                }
-
-                break :blk null;
-            };
-            defer {
-                if (group_scope) |gs| {
-                    gs.destroy();
-                }
-            }
-
-            const task_scope = try Scope.create(group_scope orelse scope, self.allocator, task.body.scope);
-            defer task_scope.destroy();
-
-            for (task.args) |arg| {
-                const in = task_call.args.get(arg.name) orelse {
-                    std.debug.panic(
-                        \\internal error: mssing '{s}' task argument
-                        \\this should have been caught during IR validation
-                    ,
-                        .{arg.name},
-                    );
-                };
-                const value = switch (in) {
-                    .default => |def| def,
-                    .value => |*expr| try self.evaluateExpr(scope, expr),
-                };
-                try task_scope.define(.{
-                    .name = arg.name,
-                    .value = value,
-                }, false);
-            }
-
-            // apply task environ
-            const prev_environ = self.environ;
-            self.environ = try prev_environ.clone(self.allocator);
-            defer {
-                self.environ.deinit();
-                self.environ = prev_environ;
-            }
-
-            for (task.envs) |env| {
-                try self.environ.put(env.key, env.value);
-            }
-
-            try self.runBlock(task_scope, task.body.statements);
+            try self.handleTaskCall(scope, task_call);
         },
         .expr => |*expr| {
             _ = try self.evaluateExpr(scope, expr);
         },
     }
+}
+
+fn handleTaskCall(self: *Interpreter, scope: *Scope, task_call: *const ir.TaskCall) Error!void {
+    const task = task_call.task;
+
+    var values: std.array_hash_map.String(Value) = .empty;
+    defer values.deinit(self.allocator);
+    var it = task_call.args.iterator();
+
+    while (it.next()) |kv| {
+        switch (kv.value_ptr.*) {
+            .default => |def| try values.put(self.allocator, kv.key_ptr.*, def),
+            .value => |expr| try values.put(self.allocator, kv.key_ptr.*, try self.evaluateExpr(scope, &expr)),
+        }
+    }
+
+    try self.runTask(scope, task, values, task_call.same_group);
 }
 
 fn handleDecl(self: *Interpreter, scope: *Scope, decl: *const ir.Decl) Error!Value {

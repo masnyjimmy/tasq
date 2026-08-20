@@ -830,6 +830,7 @@ pub const Sema = struct {
         return .{
             .task = task,
             .args = args,
+            .same_group = is_same_group_call,
         };
     }
 
@@ -2032,7 +2033,7 @@ pub const Sema = struct {
         if (previous_symbol) |prev| {
             try self.diagnostics.err(symbol.span, "'{s}' {s} already defined", .{ symbol.name, @tagName(symbol_type) });
             try self.diagnostics.hint(prev.span, "{s} defined already here", .{@tagName(symbol_type)});
-            return SemaError.SemanticError;
+            return;
         }
 
         try scope.define(self.arena.allocator(), symbol);
