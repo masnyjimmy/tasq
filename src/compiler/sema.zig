@@ -702,19 +702,28 @@ pub const Sema = struct {
         const pos_count = blk: {
             for (call.args, 0..) |arg, idx| {
                 if (arg.name != null) break :blk idx;
-                const arg_span = self.span_registry.getSpan(arg.id);
 
-                const result = try self.analyseExpr(scope, arg.value, arg.id);
+                const arg_spans = self.span_registry.get(arg.id).details.task_call_arg;
+
+                const result = try self.analyseExpr(scope, arg.value, arg_spans.value);
 
                 if (idx >= task.args.len) {
-                    try self.diagnostics.err(arg_span, "invalid positional arguments count, got '{}', expected '{}'", .{ idx + 1, task.args.len });
+                    try self.diagnostics.err(
+                        self.span_registry.getSpan(arg.id),
+                        "invalid positional arguments count, got '{}', expected '{}'",
+                        .{ idx + 1, task.args.len },
+                    );
                     return SemaError.SemanticError;
                 }
 
                 const t = task.args[idx];
 
                 if (!Type.eq(t.type.typeOf(), result.type)) {
-                    try self.diagnostics.err(arg_span, "invalid argument type, got '{f}', expected '{f}'", .{ result.type, t.type.typeOf() });
+                    try self.diagnostics.err(
+                        self.span_registry.getSpan(arg.id),
+                        "invalid argument type, got '{f}', expected '{f}'",
+                        .{ result.type, t.type.typeOf() },
+                    );
                     return SemaError.SemanticError;
                 }
 
@@ -739,7 +748,7 @@ pub const Sema = struct {
             );
 
             // collect task's own args
-            for (task.args) |arg|
+            for (task.args[pos_count..]) |arg|
                 out.putAssumeCapacity(
                     arg.name,
                     .{ .arg = arg, .from_group = false },
@@ -758,12 +767,12 @@ pub const Sema = struct {
         };
 
         for (call.args[pos_count..]) |arg| {
-            const arg_span = self.span_registry.getSpan(arg.id);
+            const arg_spans = self.span_registry.get(arg.id).details.task_call_arg;
             const arg_name = arg.name.?; //TODO: assertion can be wrong here, as it can be user error propably, check it
 
             if (args.contains(arg_name)) {
                 try self.diagnostics.err(
-                    arg_span,
+                    self.span_registry.getSpan(arg.id),
                     "duplicate argument '{s}'",
                     .{arg_name},
                 );
@@ -774,7 +783,7 @@ pub const Sema = struct {
                 target.value.arg
             else {
                 try self.diagnostics.err(
-                    arg_span,
+                    arg_spans.name.?,
                     "unknown argument '{s}'",
                     .{arg_name},
                 );
@@ -784,12 +793,12 @@ pub const Sema = struct {
             const value = try self.analyseExpr(
                 scope,
                 arg.value,
-                arg.id,
+                arg_spans.value,
             );
 
             if (value.type.eq(target_arg.type.typeOf()) == false) {
                 try self.diagnostics.err(
-                    arg_span,
+                    self.span_registry.getSpan(arg_spans.value),
                     "invalid argument value type, got '{f}', expected '{f}'",
                     .{
                         value.type,
