@@ -85,6 +85,7 @@ pub const Task = struct {
     ast_ref: *const ast.Task,
     name: []const u8,
     args: []*Argument,
+    dependecies: []const TaskCall,
     private: bool,
     envs: []const Env,
     desc: ?[]const u8,

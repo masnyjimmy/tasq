@@ -61,6 +61,8 @@ pub const Sema = struct {
 
         try self.secondPass(&file);
 
+        try CycleChecker.checkCycles(self, &file);
+
         return file;
     }
 
@@ -213,8 +215,6 @@ pub const Sema = struct {
         var attributes = try AttributesResolver.resolve(self, .task, task.attrs);
         defer attributes.deinit(self.arena.allocator());
 
-        const task_scope = try self.createScope(scope);
-
         const is_private = attributes.contains(.private);
         const desc = if (attributes.getAssertOne(.desc)) |value|
             value.?.string
@@ -239,6 +239,8 @@ pub const Sema = struct {
             break :blk try envs.toOwnedSlice(self.arena.allocator());
         };
 
+        const task_scope = try self.createScope(scope);
+
         const args = try self.analyseArgs(task_scope, task.args, false);
 
         const ptr = try self.arena.allocator().create(ir.Task);
@@ -247,13 +249,12 @@ pub const Sema = struct {
             .ast_ref = task,
             .name = task.name,
             .args = args,
+            .dependecies = undefined,
             .private = is_private,
             .envs = envs,
             .desc = desc,
-            .body = .{
-                .scope = task_scope,
-                .statements = undefined,
-            },
+            .scope = task_scope,
+            .body = undefined,
         };
 
         return ptr;
@@ -528,7 +529,18 @@ pub const Sema = struct {
 
     fn analyseTaskBody(self: *Sema, target: *ir.Task, task: ast.Task) !void {
         const node = self.span_registry.get(task.id);
-        target.body.statements = try self.analyseStatements(target.body.scope, task.body, node.details.task.body);
+
+        var deps: std.ArrayList(ir.TaskCall) = try .initCapacity(self.arena.allocator(), task.dependencies.len);
+        for (task.dependencies) |dep|
+            try deps.append(self.arena.allocator(), try self.analyseTaskCall(target.scope, dep));
+
+        const task_body_scope = try self.createScope(target.scope);
+
+        target.dependecies = try deps.toOwnedSlice(self.arena.allocator());
+        target.body = .{
+            .scope = task_body_scope,
+            .statements = try self.analyseStatements(task_body_scope, task.body, node.details.task.body),
+        };
     }
 
     //=============== statements =================
@@ -1675,7 +1687,6 @@ pub const Sema = struct {
     fn analyseString(self: *Sema, scope: *Scope, string: ast.String, node_id: NodeId) SemaError!StringResult {
         var parts: std.ArrayList(ir.StringPart) = try .initCapacity(self.arena.allocator(), string.len);
         const parts_spans = self.span_registry.get(node_id).details.expr.list;
-
         var is_static: bool = true;
 
         for (string, parts_spans) |part, part_span| {
@@ -2043,6 +2054,67 @@ pub const Sema = struct {
             };
         }
     };
+};
+
+const CycleChecker = struct {
+    const State = enum {
+        unvisited,
+        in_progress,
+        done,
+    };
+
+    const StateMap = std.AutoHashMap(*ir.Task, State);
+    fn checkCycles(self: *Sema, file: *ir.File) !void {
+        var states: StateMap = .init(self.arena.allocator());
+        defer states.deinit();
+
+        var stack: std.ArrayList(*ir.Task) = .empty;
+        defer stack.deinit(self.arena.allocator());
+
+        for (file.tasks) |task| {
+            const state = states.get(task) orelse .unvisited;
+            if (state == .unvisited) {
+                try visit(self, task, &states, &stack);
+            }
+        }
+
+        for (file.groups) |group| {
+            for (group.tasks) |task| {
+                const state = states.get(task) orelse .unvisited;
+                if (state == .unvisited) {
+                    try visit(self, task, &states, &stack);
+                }
+            }
+        }
+    }
+
+    fn visit(self: *Sema, task: *ir.Task, states: *StateMap, stack: *std.ArrayList(*ir.Task)) !void {
+        try states.put(task, .in_progress);
+        try stack.append(self.arena.allocator(), task);
+
+        for (task.dependecies) |dep| {
+            const s = states.get(dep.task) orelse .unvisited;
+            switch (s) {
+                //TODO: add real span
+                .in_progress => try self.diagnostics.err(
+                    .{
+                        .start = 0,
+                        .len = 0,
+                    },
+                    "dependency loop, '{s}::{s}' depend on itself what is not allowed",
+                    .{
+                        if (task.group) |g| g.name orelse "<anonymous>" else "",
+                        task.name,
+                    },
+                ),
+                .done => {},
+                .unvisited => try visit(self, dep.task, states, stack),
+            }
+        }
+
+        _ = stack.pop();
+        try states.put(task, .done);
+    }
 };
 
 const OptionResolver = struct {

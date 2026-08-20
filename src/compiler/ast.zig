@@ -50,6 +50,7 @@ pub const Task = struct {
     name: []const u8,
     attrs: []Attribute,
     args: []Argument,
+    dependencies: []const TaskCall,
     body: StatementBlock,
 };
 
