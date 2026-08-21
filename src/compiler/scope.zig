@@ -3,6 +3,7 @@ const ir = @import("ir.zig");
 
 const sym = @import("symbol.zig");
 const Symbol = sym.Symbol;
+const NodeId = @import("span.zig").Registry.NodeId;
 
 pub const Scope = struct {
     const IndexesStorage = std.array_hash_map.String(usize);
@@ -14,6 +15,8 @@ pub const Scope = struct {
     variables: IndexesStorage = .empty,
     tasks: IndexesStorage = .empty,
     groups: IndexesStorage = .empty,
+    // child scopes
+    children: std.hash_map.AutoHashMapUnmanaged(NodeId, *Scope) = .empty,
 
     pub fn debugDump(self: *const Scope) []const *const Symbol {
         return self.symbols.items;
@@ -35,6 +38,14 @@ pub const Scope = struct {
         }
 
         self.symbols.deinit(gpa);
+    }
+
+    pub fn put_child(self: *Scope, allocator: std.mem.Allocator, node_id: NodeId, scope: *Scope) !void {
+        try self.children.putNoClobber(allocator, node_id, scope);
+    }
+
+    pub fn child(self: *const Scope, node_id: NodeId) ?*Scope {
+        return self.children.get(node_id);
     }
 
     pub fn define(self: *Scope, gpa: std.mem.Allocator, symbol: Symbol) !void {
