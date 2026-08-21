@@ -49,9 +49,14 @@ pub const Sema = struct {
         };
     }
 
-    fn createScope(self: *Sema, parent: ?*Scope) !*Scope {
+    fn createScope(self: *Sema, parent: ?*Scope, node_id: ?NodeId) !*Scope {
         const ptr = try self.arena.allocator().create(Scope);
         ptr.* = .init(parent);
+
+        if (parent) |p|
+            if (node_id) |id|
+                try p.put_child(self.arena.allocator(), id, ptr);
+
         return ptr;
     }
 
@@ -69,7 +74,7 @@ pub const Sema = struct {
     fn firstPass(self: *Sema, file: *const ast.File) !ir.File {
 
         // create scope
-        const root_scope = try self.createScope(null);
+        const root_scope = try self.createScope(null, null);
 
         const options = try self.analyseOptions(file.options);
 
@@ -158,7 +163,7 @@ pub const Sema = struct {
     }
 
     fn collectGroupSignature(self: *Sema, scope: *Scope, group: *const ast.Group) !*ir.Group {
-        const groupScope = try self.createScope(scope);
+        const groupScope = try self.createScope(scope, group.id);
 
         const args = try self.analyseArgs(groupScope, group.args, true);
 
@@ -239,7 +244,7 @@ pub const Sema = struct {
             break :blk try envs.toOwnedSlice(self.arena.allocator());
         };
 
-        const task_scope = try self.createScope(scope);
+        const task_scope = try self.createScope(scope, task.id);
 
         const args = try self.analyseArgs(task_scope, task.args, false);
 
@@ -534,7 +539,7 @@ pub const Sema = struct {
         for (task.dependencies) |dep|
             try deps.append(self.arena.allocator(), try self.analyseTaskCall(target.scope, dep));
 
-        const task_body_scope = try self.createScope(target.scope);
+        const task_body_scope = try self.createScope(target.scope, task.id);
 
         target.dependecies = try deps.toOwnedSlice(self.arena.allocator());
         target.body = .{
@@ -546,7 +551,7 @@ pub const Sema = struct {
     //=============== statements =================
 
     fn analyseStatementBlock(self: *Sema, parent_scope: *Scope, block: ast.StatementBlock, span_node_id: NodeId) !ir.StatementBlock {
-        const block_scope = try self.createScope(parent_scope);
+        const block_scope = try self.createScope(parent_scope, span_node_id);
 
         const stmts = try self.analyseStatements(block_scope, block, span_node_id);
 
@@ -860,7 +865,7 @@ pub const Sema = struct {
             return SemaError.SemanticError;
         }
 
-        const for_scope = try self.createScope(scope);
+        const for_scope = try self.createScope(scope, for_stmt.id);
 
         var subjects: std.ArrayList(ir.Expr) = try .initCapacity(self.arena.allocator(), for_stmt.subjects.len);
         var captures: std.ArrayList(?*ir.Capture) = try .initCapacity(self.arena.allocator(), for_stmt.captures.len);
@@ -1601,7 +1606,7 @@ pub const Sema = struct {
 
         const for_spans = self.span_registry.get(for_expr.id).details.@"for";
 
-        const for_scope = try self.createScope(scope);
+        const for_scope = try self.createScope(scope, for_expr.id);
 
         var subjects: std.ArrayList(ir.Expr) = try .initCapacity(self.arena.allocator(), for_expr.subjects.len);
         var captures: std.ArrayList(?*ir.Capture) = try .initCapacity(self.arena.allocator(), for_expr.captures.len);
@@ -1808,7 +1813,7 @@ pub const Sema = struct {
 
                     const lambda = expr.lambda;
 
-                    const lambda_scope = try self.createScope(scope);
+                    const lambda_scope = try self.createScope(scope, call_spans.args[idx]);
 
                     const captures = try self.arena.allocator().alloc(ir.Capture, l.params.len);
 
