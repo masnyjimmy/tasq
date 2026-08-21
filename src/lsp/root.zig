@@ -6,6 +6,8 @@ const lsp = @import("lsp_kit");
 const compiler = @import("compiler");
 const Workspace = compiler.Workspace;
 
+pub const semantic_token = @import("semantic_token.zig");
+
 pub fn run(
     allocator: std.mem.Allocator,
     io: std.Io,

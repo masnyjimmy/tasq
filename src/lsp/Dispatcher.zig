@@ -233,9 +233,10 @@ pub fn @"textDocument/semanticTokens/full"(
 
     const source_view = self.workspace.view(file_id, .source);
     const ast_view = self.workspace.view(file_id, .tree);
+    const ir_view = self.workspace.view(file_id, .ir);
     const span_registry = self.workspace.view(file_id, .span);
 
-    const raw_tokens = try sem.Collector.collect(arena, ast_view.source, span_registry.source);
+    const raw_tokens = try sem.Collector.collect(arena, ast_view.source, ir_view.source.scope, span_registry.source);
 
     var data: std.ArrayList(u32) = .empty;
     var prev_line: u32 = 0;
