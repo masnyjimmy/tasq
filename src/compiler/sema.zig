@@ -1886,6 +1886,12 @@ pub const Sema = struct {
                 break :blk result_type;
             };
             fallback = fb_result.expr;
+        } else if (result_type == .result) {
+            try self.diagnostics.err(
+                self.span_registry.getSpan(call.id),
+                "'{s}' requires fallback expression",
+                .{call.name},
+            );
         }
 
         return .{
