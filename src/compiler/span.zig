@@ -195,6 +195,10 @@ pub const Registry = struct {
 
     /// Flat, untyped/highlighting spans (strings, keywords, ...).
     pub fn put(self: *Registry, st: Type, span: Span) !void {
+        // FIX: temporary fix for string interpolation end
+        if (span.len == 0)
+            return;
+
         try self.spans.append(self.allocator, .{ .type = st, .span = span });
     }
 
