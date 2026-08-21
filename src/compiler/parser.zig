@@ -112,14 +112,8 @@ pub const Parser = struct {
         );
     }
 
-    fn synchronize(self: *Parser) !TokenKind {
-        return try self.synchronizeTo(&.{
-            .task_kw, .group_kw, .set_kw, .rbrace, .eof,
-        });
-    }
-
     fn synchronizeTo(self: *Parser, comptime tts: []const TokenKind) !TokenKind {
-        const to_map = comptime std.enums.EnumSet(TokenKind).initMany(tts);
+        const to_map = comptime std.enums.EnumSet(TokenKind).initMany(tts ++ [_]TokenKind{.eof});
 
         while (true) {
             const tk = self.peek();
@@ -127,7 +121,7 @@ pub const Parser = struct {
                 return tk;
             }
 
-            _ = try self.advance();
+            _ = try self.advance(false);
         }
     }
 
@@ -141,23 +135,28 @@ pub const Parser = struct {
 
         while (self.peek() != .eof) {
             const attrs = try self.collectAttributes();
-            const tok_start = self.currentPos();
-            const tok = try self.advance();
 
-            switch (tok.kind) {
+            switch (self.peek()) {
                 .set_kw => {
-                    const set = try self.parseSet(attrs, tok_start);
+                    const set_kw = self.expect(.set_kw) catch unreachable;
+                    const set = try self.parseSet(attrs, set_kw.span.start);
                     try options.append(self.arena.allocator(), set);
                 },
                 .ident => {
+                    const ident = self.expect(.ident) catch unreachable;
                     if (attrs.len != 0) {
                         try self.addDiagnostic(.err, "unexpected attributes before declaration", .{});
                     }
 
                     _ = self.expect(.colon_eq) catch |err| switch (err) {
                         ParseError.UnexpectedToken => {
-                            _ = try self.synchronize();
-                            continue;
+                            switch (try self.synchronizeTo(&.{ .rbrace, .task_kw, .group_kw, .set_kw })) {
+                                .rbrace => {
+                                    _ = self.expect(.rbrace) catch unreachable;
+                                    continue;
+                                },
+                                else => continue,
+                            }
                         },
                         else => return err,
                     };
@@ -165,43 +164,60 @@ pub const Parser = struct {
                     const value = try self.parseExpr();
 
                     const id = try self.span_registry.addNode(
-                        self.spanFrom(tok_start),
-                        .{ .decl = .{ .name = tok.span, .value = value.id } },
+                        self.spanFrom(ident.span.start),
+                        .{ .decl = .{ .name = ident.span, .value = value.id } },
                     );
 
                     const decl = ast.Decl{
                         .id = id,
-                        .name = tok.lexeme,
+                        .name = ident.lexeme,
                         .value = value.payload,
                     };
 
                     try decls.append(self.arena.allocator(), decl);
                 },
                 .group_kw => {
-                    const group = self.parseGroup(attrs, tok_start) catch |err| switch (err) {
+                    const group_kw = self.expect(.group_kw) catch unreachable;
+                    const group = self.parseGroup(attrs, group_kw.span.start) catch |err| switch (err) {
                         ParseError.UnexpectedToken => {
-                            _ = try self.synchronize();
-                            continue;
+                            switch (try self.synchronizeTo(&.{ .rbrace, .task_kw, .group_kw, .set_kw })) {
+                                .rbrace => {
+                                    _ = self.expect(.rbrace) catch unreachable;
+                                    continue;
+                                },
+                                else => continue,
+                            }
                         },
                         else => return err,
                     };
                     try groups.append(self.arena.allocator(), group);
                 },
                 .task_kw => {
-                    const task = self.parseTask(attrs, tok_start) catch |err| switch (err) {
+                    const task_kw = self.expect(.task_kw) catch unreachable;
+                    const task = self.parseTask(attrs, task_kw.span.start) catch |err| switch (err) {
                         ParseError.UnexpectedToken => {
-                            _ = try self.synchronize();
-                            continue;
+                            switch (try self.synchronizeTo(&.{ .rbrace, .task_kw, .group_kw, .set_kw })) {
+                                .rbrace => {
+                                    _ = self.expect(.rbrace) catch unreachable;
+                                    continue;
+                                },
+                                else => continue,
+                            }
                         },
                         else => return err,
                     };
                     try tasks.append(self.arena.allocator(), task);
-                    continue;
                 },
                 else => |invalid_token| {
                     try self.addDiagnostic(.err, "Unexpected token: '{s}'", .{@tagName(invalid_token)});
                     // synchronize
-                    _ = try self.synchronize();
+                    switch (try self.synchronizeTo(&.{ .rbrace, .task_kw, .group_kw, .set_kw })) {
+                        .rbrace => {
+                            _ = self.expect(.rbrace) catch unreachable;
+                            continue;
+                        },
+                        else => continue,
+                    }
                 },
             }
         }
@@ -226,6 +242,7 @@ pub const Parser = struct {
             args_span = self.spanFrom(lp.span.start);
         }
 
+        // TODO: when lbrace not found then return empty group
         _ = try self.expect(.lbrace);
 
         var decls: std.ArrayList(ast.Decl) = try .initCapacity(self.arena.allocator(), 5);
@@ -235,11 +252,10 @@ pub const Parser = struct {
 
         while (try self.eat(.rbrace) == null) {
             const temp_attrs = try self.collectAttributes();
-            const tok_start = self.currentPos();
-            const tok = try self.advance();
 
-            switch (tok.kind) {
+            switch (self.peek()) {
                 .ident => {
+                    const ident = self.expect(.ident) catch unreachable;
                     if (temp_attrs.len != 0) {
                         try self.addDiagnostic(.err, "unexpected attributes before declaration", .{});
                     }
@@ -248,13 +264,13 @@ pub const Parser = struct {
                     const value = try self.parseExpr();
 
                     const id = try self.span_registry.addNode(
-                        self.spanFrom(tok_start),
-                        .{ .decl = .{ .name = tok.span, .value = value.id } },
+                        self.spanFrom(ident.span.start),
+                        .{ .decl = .{ .name = ident.span, .value = value.id } },
                     );
 
                     const decl = ast.Decl{
                         .id = id,
-                        .name = tok.lexeme,
+                        .name = ident.lexeme,
                         .value = value.payload,
                     };
 
@@ -262,12 +278,13 @@ pub const Parser = struct {
                     continue;
                 },
                 .task_kw => {
-                    const task = try self.parseTask(temp_attrs, tok.span.start);
+                    const task_kw = self.expect(.task_kw) catch unreachable;
+                    const task = try self.parseTask(temp_attrs, task_kw.span.start);
                     try tasks.append(self.arena.allocator(), task);
                     continue;
                 },
-                else => {
-                    try self.addDiagnostic(.err, "Unexpected token: {s}.", .{@tagName(tok.kind)});
+                else => |token| {
+                    try self.addDiagnostic(.err, "Unexpected token: {s}.", .{@tagName(token)});
                     _ = try self.synchronizeTo(&.{ .task_kw, .rbrace, .eof });
                 },
             }
@@ -326,7 +343,24 @@ pub const Parser = struct {
                 }
 
                 const args_start = self.currentPos();
-                const args = try self.parseTaskCallArgs();
+                const args = self.parseTaskCallArgs() catch |err| {
+                    switch (try self.synchronizeTo(&.{ .comma, .rbracket, .at, .backtick, .ident, .for_kw, .switch_kw, .if_kw, .lbrace })) {
+                        .comma => {
+                            _ = self.expect(.comma) catch unreachable;
+                            continue;
+                        },
+                        .rbracket => continue,
+                        .at,
+                        .backtick,
+                        .ident,
+                        .for_kw,
+                        .switch_kw,
+                        .if_kw,
+                        .lbrace,
+                        => break,
+                        else => return err,
+                    }
+                };
 
                 const call_args_span = self.spanFrom(args_start);
 
@@ -455,7 +489,7 @@ pub const Parser = struct {
                     switch (try self.synchronizeTo(&.{ .comma, .rbracket, .eof })) {
                         .comma => {
                             // skip lbracket and start over
-                            _ = try self.advance();
+                            _ = self.expect(.comma) catch unreachable;
                             continue;
                         },
                         else => break,
@@ -473,7 +507,7 @@ pub const Parser = struct {
                         switch (try self.synchronizeTo(&.{ .comma, .rbracket, .eof })) {
                             .comma => {
                                 // skip lbracket and start over
-                                _ = try self.advance();
+                                _ = self.expect(.comma) catch unreachable;
                                 continue;
                             },
                             else => break,
@@ -508,7 +542,7 @@ pub const Parser = struct {
             ParseError.UnexpectedToken => {
                 switch (try self.synchronizeTo(&.{.rbracket})) {
                     .rbracket => {
-                        _ = try self.advance();
+                        _ = self.expect(.rbracket) catch unreachable;
                     },
                     else => {},
                 }
@@ -530,11 +564,11 @@ pub const Parser = struct {
                 ParseError.UnexpectedToken => {
                     switch (try self.synchronizeTo(&.{ .comma, .rparen, .lbrace, .eof })) {
                         .comma => {
-                            _ = try self.advance();
+                            _ = self.expect(.comma) catch unreachable;
                             continue;
                         },
                         .rparen => {
-                            _ = try self.advance();
+                            _ = self.expect(.rparen) catch unreachable;
                             break;
                         },
                         else => break,
@@ -547,11 +581,11 @@ pub const Parser = struct {
                 ParseError.UnexpectedToken => {
                     switch (try self.synchronizeTo(&.{ .comma, .rparen, .lbrace, .eof })) {
                         .comma => {
-                            _ = try self.advance();
+                            _ = self.expect(.comma) catch unreachable;
                             continue;
                         },
                         .rparen => {
-                            _ = try self.advance();
+                            _ = self.expect(.rparen) catch unreachable;
                             break;
                         },
                         else => break,
@@ -564,11 +598,11 @@ pub const Parser = struct {
                 ParseError.UnexpectedToken => {
                     switch (try self.synchronizeTo(&.{ .comma, .rparen, .lbrace, .eof })) {
                         .comma => {
-                            _ = try self.advance();
+                            _ = self.expect(.comma) catch unreachable;
                             continue;
                         },
                         .rparen => {
-                            _ = try self.advance();
+                            _ = self.expect(.rparen) catch unreachable;
                             break;
                         },
                         else => break,
@@ -585,11 +619,11 @@ pub const Parser = struct {
                     ParseError.UnexpectedToken => {
                         switch (try self.synchronizeTo(&.{ .comma, .rparen, .lbrace, .eof })) {
                             .comma => {
-                                _ = try self.advance();
+                                _ = self.expect(.comma) catch unreachable;
                                 break :blk;
                             },
                             .rparen => {
-                                _ = try self.advance();
+                                _ = self.expect(.rparen) catch unreachable;
                                 break;
                             },
                             else => break,
@@ -639,7 +673,7 @@ pub const Parser = struct {
             break :blk null;
         };
 
-        const tok = try self.advance();
+        const tok = try self.advance(false);
 
         const result: ast.ArgType = switch (tok.kind) {
             .string_type => if (list_op_span != null) .list_string else .string,
@@ -660,6 +694,7 @@ pub const Parser = struct {
                 return ParseError.UnexpectedToken;
             },
         };
+        try self.consume(tok);
 
         return .{ .span = self.spanFrom(start), .value = result };
     }
@@ -681,8 +716,8 @@ pub const Parser = struct {
                 return .wrap(string.id, .{ .process = string.payload });
             },
             .ident => {
+                const ident_tok = self.expect(.ident) catch unreachable;
                 const start = self.currentPos();
-                const ident_tok = try self.advance();
 
                 if (try self.eat(.colon_eq)) |_| {
                     const value = try self.parseExpr();
@@ -731,15 +766,14 @@ pub const Parser = struct {
             },
             // ::task => root task call
             .dcolon => {
-                const start = self.currentPos();
-                _ = try self.advance();
+                const dcolon = self.expect(.dcolon) catch unreachable;
                 const ident_tok = try self.expect(.ident);
 
                 const args_start = self.currentPos();
                 const args = try self.parseTaskCallArgs();
 
                 const args_span = self.spanFrom(args_start);
-                const span = self.spanFrom(start);
+                const span = self.spanFrom(dcolon.span.start);
 
                 const id = try self.span_registry.addNode(span, .{ .task_call = .{
                     .group = null,
@@ -803,7 +837,15 @@ pub const Parser = struct {
 
         if (lbrace) |_| {
             while (try self.eat(.rbrace) == null) {
-                const stmt = try self.parseStatement();
+                const stmt = self.parseStatement() catch |err| switch (err) {
+                    ParseError.UnexpectedToken => {
+                        switch (try self.synchronizeTo(&.{ .rbrace, .backtick, .at, .ident })) {
+                            .eof => break,
+                            else => continue,
+                        }
+                    },
+                    else => return err,
+                };
                 try spans_nodes.append(stmt.id);
                 try stmts.append(self.arena.allocator(), stmt.payload);
             }
@@ -894,22 +936,26 @@ pub const Parser = struct {
 
     fn parseOr(self: *Parser) ParseError!Wrapped(ast.Expr) {
         const start = self.currentPos();
-        const left = try self.parseAnd();
+        var left = try self.parseAnd();
 
-        if (try self.eat(.or_kw) == null) return left;
+        while (try self.eat(.or_kw) != null) {
+            const right = try self.parseAnd();
+            left = try self.makeBinary(start, .or_op, left, right);
+        }
 
-        const right = try self.parseAnd();
-        return self.makeBinary(start, .or_op, left, right);
+        return left;
     }
 
     fn parseAnd(self: *Parser) ParseError!Wrapped(ast.Expr) {
         const start = self.currentPos();
-        const left = try self.parseNot();
+        var left = try self.parseNot();
 
-        if (try self.eat(.and_kw) == null) return left;
+        while (try self.eat(.and_kw) != null) {
+            const right = try self.parseNot();
+            left = try self.makeBinary(start, .and_op, left, right);
+        }
 
-        const right = try self.parseNot();
-        return self.makeBinary(start, .and_op, left, right);
+        return left;
     }
 
     fn parseNot(self: *Parser) ParseError!Wrapped(ast.Expr) {
@@ -948,7 +994,7 @@ pub const Parser = struct {
             .gt_eq => .gt_eq,
             else => return left,
         };
-        _ = try self.advance();
+        _ = try self.advance(true);
 
         const right = try self.parseAddSub();
         return self.makeBinary(start, op, left, right);
@@ -956,32 +1002,36 @@ pub const Parser = struct {
 
     fn parseAddSub(self: *Parser) ParseError!Wrapped(ast.Expr) {
         const start = self.currentPos();
-        const left = try self.parseMulDiv();
+        var left = try self.parseMulDiv();
 
-        const op: ast.BinaryOp = switch (self.peek()) {
-            .plus => .add,
-            .minus => .sub,
-            else => return left,
-        };
-        _ = try self.advance();
+        while (true) {
+            const op: ast.BinaryOp = switch (self.peek()) {
+                .plus => .add,
+                .minus => .sub,
+                else => return left,
+            };
+            _ = try self.advance(true);
 
-        const right = try self.parseMulDiv();
-        return self.makeBinary(start, op, left, right);
+            const right = try self.parseMulDiv();
+            left = try self.makeBinary(start, op, left, right);
+        }
     }
 
     fn parseMulDiv(self: *Parser) ParseError!Wrapped(ast.Expr) {
         const start = self.currentPos();
-        const left = try self.parseUnary();
+        var left = try self.parseUnary();
 
-        const op: ast.BinaryOp = switch (self.peek()) {
-            .star => .mul,
-            .slash => .div,
-            else => return left,
-        };
-        _ = try self.advance();
+        while (true) {
+            const op: ast.BinaryOp = switch (self.peek()) {
+                .star => .mul,
+                .slash => .div,
+                else => return left,
+            };
+            _ = try self.advance(true);
 
-        const right = try self.parseUnary();
-        return self.makeBinary(start, op, left, right);
+            const right = try self.parseUnary();
+            left = try self.makeBinary(start, op, left, right);
+        }
     }
 
     /// Shared builder for every binary-expr precedence level.
@@ -1222,7 +1272,8 @@ pub const Parser = struct {
                 const id = try self.span_registry.addNode(break_kw.span, .leaf);
                 return .wrap(id, .@"break");
             },
-            else => {
+            else => |tag| {
+                std.debug.print("invalid expr elem: {t}\n", .{tag});
                 try self.addDiagnostic(
                     .err,
                     "expected expression, found '{s}'",
@@ -1456,7 +1507,7 @@ pub const Parser = struct {
 
         const id = try self.span_registry.addNode(self.spanFrom(at.span.start), .{
             .builtin_call = .{
-                .name = ident.span,
+                .name = Span.between(at.span, ident.span),
                 .args = try args_spans.toOwnedSlice(),
                 .fallback = fallback_span,
             },
@@ -1561,7 +1612,7 @@ pub const Parser = struct {
                 return .wrap(id, .{ .bool = false });
             },
             .number => {
-                const tok = try self.advance();
+                const tok = self.expect(.number) catch unreachable;
 
                 const val = std.fmt.parseFloat(f64, tok.lexeme) catch {
                     try self.addDiagnostic(.err, "invalid number literal", .{});
@@ -1678,7 +1729,7 @@ pub const Parser = struct {
     }
 
     fn expect(self: *Parser, kind: TokenKind) ParseError!Token {
-        if (self.next.kind == kind) return self.advance();
+        if (self.next.kind == kind) return try self.advance(true);
 
         try self.addDiagnostic(
             .err,
@@ -1690,13 +1741,51 @@ pub const Parser = struct {
     }
 
     fn eat(self: *Parser, kind: TokenKind) !?Token {
-        if (self.next.kind == kind) return try self.advance();
+        if (self.next.kind == kind) return try self.advance(true);
         return null;
     }
 
-    fn advance(self: *Parser) !Token {
+    fn consume(self: *Parser, token: Token) !void {
+        switch (token.kind) {
+            .set_kw,
+            .task_kw,
+            .group_kw,
+            .if_kw,
+            .else_kw,
+            .and_kw,
+            .or_kw,
+            .not_kw,
+            .switch_kw,
+            .for_kw,
+            .continue_kw,
+            .break_kw,
+            .fallback_kw,
+            => {
+                try self.span_registry.put(.keyword, token.span);
+            },
+            .string_type, .flag_type, .number_type => {
+                try self.span_registry.put(.type, token.span);
+            },
+            .number => {
+                try self.span_registry.put(.number, token.span);
+            },
+            .colon_eq, .eq_eq, .plus, .minus, .star, .slash, .bang_eq, .lt, .lt_eq, .gt, .gt_eq, .triple_dot, .fat_arrow => {
+                try self.span_registry.put(.operator, token.span);
+            },
+            .quote, .apostrophe, .backtick => {
+                try self.span_registry.put(.string, token.span);
+            },
+            else => {},
+        }
+    }
+
+    fn advance(self: *Parser, comptime should_consume: bool) !Token {
         const tok = try self.lexer.next();
-        return self.setNextFetchCurrent(tok);
+        const out = self.setNextFetchCurrent(tok);
+        if (should_consume) {
+            try self.consume(out);
+        }
+        return out;
     }
 
     fn setNextFetchCurrent(self: *Parser, tok: Token) Token {
