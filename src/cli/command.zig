@@ -135,7 +135,7 @@ fn Dump(ctx: *const Context) !void {
             var span_registry = compiler.Span.Registry.init(c.app.allocator);
             defer span_registry.deinit();
 
-            var lexer = compiler.Lexer.init(s, &span_registry);
+            var lexer = compiler.Lexer.init(s);
 
             var parser = try compiler.Parser.init(
                 &arena,

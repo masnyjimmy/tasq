@@ -46,13 +46,10 @@ pub const Lexer = struct {
     source: []const u8,
     pos: u32,
 
-    span_registry: *Span.Registry,
-
-    pub fn init(source: []const u8, span_registry: *Span.Registry) Lexer {
+    pub fn init(source: []const u8) Lexer {
         return .{
             .source = source,
             .pos = 0,
-            .span_registry = span_registry,
         };
     }
 
@@ -325,42 +322,6 @@ pub const Lexer = struct {
     // ── Token constructors ────────────────────────────────────────────────────
 
     fn makeToken(self: *Lexer, kind: TokenKind, start: u32, len: u32) !Token {
-        const span: Span = .{
-            .start = start,
-            .len = len,
-        };
-        switch (kind) {
-            .set_kw,
-            .task_kw,
-            .group_kw,
-            .if_kw,
-            .else_kw,
-            .and_kw,
-            .or_kw,
-            .not_kw,
-            .switch_kw,
-            .for_kw,
-            .continue_kw,
-            .break_kw,
-            .fallback_kw,
-            => {
-                try self.span_registry.put(.keyword, span);
-            },
-            .string_type, .flag_type, .number_type => {
-                try self.span_registry.put(.type, span);
-            },
-            .number => {
-                try self.span_registry.put(.number, span);
-            },
-            .colon_eq, .eq_eq, .plus, .minus, .star, .slash, .bang_eq, .lt, .lt_eq, .gt, .gt_eq, .triple_dot => {
-                try self.span_registry.put(.operator, span);
-            },
-            .quote, .apostrophe, .backtick => {
-                try self.span_registry.put(.string, span);
-            },
-            else => {},
-        }
-
         return .{
             .kind = kind,
             .span = .{

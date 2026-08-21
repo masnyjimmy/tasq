@@ -144,10 +144,7 @@ pub fn reparse(self: *Workspace, id: FileId) !bool {
 
     const lex = @import("lexer.zig");
     const parse = @import("parser.zig");
-    var lexer: lex.Lexer = .init(
-        file.source,
-        &file.span_registry,
-    );
+    var lexer: lex.Lexer = .init(file.source);
 
     var parser: parse.Parser = try .init(
         &file.arena,
