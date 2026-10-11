@@ -120,7 +120,7 @@ pub const StatementBlock = struct {
 
 pub const Statement = union(enum) {
     decl: *Decl,
-    process: ProcessStmt,
+    process: Process,
     task_call: TaskCall,
     for_stmt: ForStmt,
     switch_stmt: SwitchStmt,
@@ -161,7 +161,7 @@ pub const Decl = struct {
     is_static: bool, // inferred by sema
 };
 
-pub const ProcessStmt = String;
+pub const Process = String;
 
 pub const TaskCall = struct {
     pub const Arg = union(enum) {
@@ -199,6 +199,7 @@ pub const Expr = union(enum) {
     for_expr: *ForExpr,
     builtin_call: *BuiltinCall,
     lambda: *Lambda,
+    process: Process,
     @"continue",
     @"break",
 };
