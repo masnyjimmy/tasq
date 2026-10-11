@@ -249,7 +249,7 @@ pub const Expr = struct {
         .paren_expr,  .string,     .string_expr,
         .binary_expr, .unary_expr, .builtin_call,
         .@"if",       .@"for",     .@"switch",
-        .lambda,
+        .lambda,      .process,
     };
 
     node: *const cst.Node,
@@ -267,6 +267,7 @@ pub const Expr = struct {
         @"if": IfExpr,
         @"switch": SwitchExpr,
         @"for": ForExpr,
+        process: Process,
         lambda: Lambda,
     };
 
@@ -289,6 +290,7 @@ pub const Expr = struct {
             .@"switch" => .{ .@"switch" = .from(self.node) },
             .@"for" => .{ .@"for" = .from(self.node) },
             .lambda => .{ .lambda = .from(self.node) },
+            .process => .{ .process = .from(self.node) },
             else => unreachable,
         };
     }
