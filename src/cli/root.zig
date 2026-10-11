@@ -27,6 +27,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
 
     const cmd = try command.buildCommand(allocator);
     defer cmd.destroy();
+
     cmd.execute(allocator, args[1..], &diag, .{
         .allocator = allocator,
         .io = io,
@@ -34,7 +35,9 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
         .printer = &printer,
         .workspace = &workspace,
     }) catch |err| return switch (err) {
-        conzole.command.CommandError.InvalidArguments => {
+        conzole.command.CommandError.InvalidArguments,
+        conzole.command.CommandError.CommandFailed,
+        => {
             try printer.printStyled(allocator, .{ .fg = .bright_red }, "{f}\n", .{diag});
         },
         else => err,

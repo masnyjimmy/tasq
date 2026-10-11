@@ -1,7 +1,7 @@
 const std = @import("std");
-const ast = @import("ast.zig");
+const cst = @import("cst.zig");
 const ir = @import("ir.zig");
-const Span = @import("span.zig");
+const Span = @import("Span.zig");
 
 const Diagnostics = @import("Diagnostics.zig");
 
@@ -17,8 +17,7 @@ pub const FileState = struct {
     version: i32,
     source: []const u8, // owned
     arena: std.heap.ArenaAllocator,
-    span_registry: Span.Registry,
-    tree: ?ast.File = null,
+    tree: ?*cst.Node = null,
     ir: ?ir.File = null,
     diagnostics: Diagnostics,
 
@@ -27,52 +26,8 @@ pub const FileState = struct {
         allocator.free(self.source);
         self.arena.deinit();
         self.diagnostics.deinit();
-        self.span_registry.deinit();
     }
 };
-
-const ViewType = enum {
-    source,
-    tree,
-    ir,
-    span,
-    diagnostics,
-
-    pub fn Type(comptime self: ViewType) type {
-        return switch (self) {
-            .source => []const u8,
-            .tree => *const ast.File,
-            .ir => *const ir.File,
-            .span => *const Span.Registry,
-            .diagnostics => *const Diagnostics,
-        };
-    }
-};
-pub fn FileView(comptime view_type: ViewType) type {
-    return struct {
-        workspace: *Workspace,
-        id: FileId,
-        source: view_type.Type(),
-        diagnostics: *Diagnostics,
-
-        fn fromFileState(workspace: *Workspace, id: FileId, fs: *FileState) @This() {
-            return .{
-                .workspace = workspace,
-                .id = id,
-                .source = switch (view_type) {
-                    .source => fs.source,
-                    .tree => &fs.tree.?,
-                    .ir => &fs.ir.?,
-                    .span => &fs.span_registry,
-                    .diagnostics => &fs.diagnostics,
-                },
-                .diagnostics = &fs.diagnostics,
-            };
-        }
-    };
-}
-
-pub const SourceView = FileView(.source);
 
 files: std.array_hash_map.Auto(FileId, FileState) = .empty,
 uri_to_id: std.StringHashMapUnmanaged(FileId) = .empty,
@@ -111,7 +66,6 @@ pub fn openFile(self: *Workspace, allocator: std.mem.Allocator, uri: []const u8,
         .version = version,
         .source = try allocator.dupe(u8, text),
         .arena = .init(allocator),
-        .span_registry = .init(allocator),
         .diagnostics = .init(allocator),
     });
 
@@ -127,44 +81,50 @@ pub fn getId(self: *Workspace, uri: []const u8) ?FileId {
     return self.uri_to_id.get(uri);
 }
 
-pub fn view(self: *Workspace, id: FileId, comptime view_type: ViewType) FileView(view_type) {
-    const file = self.files.getPtr(id).?;
-
-    return .fromFileState(self, id, file);
+pub fn getFileState(self: *Workspace, id: FileId) *const FileState {
+    return self.files.getPtr(id).?;
 }
 
 pub fn reparse(self: *Workspace, id: FileId) !bool {
     const file = self.files.getPtr(id).?;
 
     _ = file.arena.reset(.retain_capacity);
-    file.span_registry.clear();
     file.diagnostics.clear();
     file.tree = null;
     file.ir = null;
 
-    const lex = @import("lexer.zig");
-    const parse = @import("parser.zig");
-    var lexer: lex.Lexer = .init(file.source);
+    file.tree = blk: {
+        const lex = @import("lexer.zig");
+        const tree = @import("tree.zig");
+        const parse = @import("parser.zig");
 
-    var parser: parse.Parser = try .init(
-        &file.arena,
-        &lexer,
-        &file.span_registry,
-        &file.diagnostics,
-    );
+        var lexer: lex.Lexer = .init(file.arena.allocator(), file.source);
+        defer lexer.deinit();
 
-    const tree = try parser.parseFile();
+        const lex_tree = try tree.TreeReader.read(
+            file.arena.allocator(),
+            &lexer,
+            &file.diagnostics,
+        );
 
-    file.tree = tree;
+        var cursor: tree.Cursor = .init(lex_tree);
 
-    const Sema = @import("sema.zig").Sema;
-    var sema: Sema = .init(
-        &file.arena,
-        &file.span_registry,
-        &file.diagnostics,
-    );
+        var parser: parse.Parser = try .init(
+            file.arena.allocator(),
+            &cursor,
+            &file.diagnostics,
+        );
+        defer parser.deinit();
 
-    file.ir = try sema.analyse(&tree);
+        break :blk try parser.parseFile();
+    };
+
+    file.ir = blk: {
+        const sem = @import("sema.zig");
+        var sema: sem.Sema = .init(&file.arena, &file.diagnostics);
+
+        break :blk try sema.analyseFile(file.tree.?);
+    };
 
     return file.diagnostics.has_error == false;
 }

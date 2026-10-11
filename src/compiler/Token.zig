@@ -1,8 +1,9 @@
-const Span = @import("span.zig");
+const Span = @import("Span.zig");
 
+const Token = @This();
 // ── Token kinds ───────────────────────────────────────────────────────────────
 
-pub const TokenKind = enum {
+pub const Kind = enum {
     // Literals
     char,
     string,
@@ -67,6 +68,11 @@ pub const TokenKind = enum {
     pipe, // |
     at, // @
     underscore, // _
+    dollar, // $
+
+    // trivia
+    whitespace,
+    comment,
 
     // Backtick process line — entire `...` including interpolations as raw span
 
@@ -77,12 +83,21 @@ pub const TokenKind = enum {
     string_inter,
     string_delim,
     eof,
+
+    pub fn isTrivia(self: Kind) bool {
+        return switch (self) {
+            .whitespace, .comment => true,
+            else => false,
+        };
+    }
 };
 
 // ── Token ─────────────────────────────────────────────────────────────────────
 
-pub const Token = struct {
-    kind: TokenKind,
-    span: Span,
-    lexeme: []const u8,
-};
+kind: Kind,
+span: Span,
+lexeme: []const u8,
+
+pub fn isSyntetic(self: *Token) bool {
+    return self.kind != .eof and self.span.len == 0;
+}

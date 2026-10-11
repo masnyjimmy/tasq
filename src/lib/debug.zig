@@ -31,6 +31,27 @@ fn isSimpleType(comptime T: type) bool {
     };
 }
 
+const VString = struct {
+    data: []const u8,
+
+    pub fn format(self: @This(), w: *std.Io.Writer) !void {
+        for (self.data) |ch| {
+            switch (ch) {
+                '\t' => try w.writeAll("\\t"),
+                '\n' => try w.writeAll("\\n"),
+                '\r' => try w.writeAll("\\r"),
+                '\\' => try w.writeAll("\\\\"),
+                '"' => try w.writeAll("\\\""),
+                else => try w.writeByte(ch),
+            }
+        }
+    }
+};
+
+pub fn vstring(str: []const u8) VString {
+    return .{ .data = str };
+}
+
 // FIX: use `gpa` consistently everywhere — original code mixed in std.heap.page_allocator
 // FIX: deinit/toOwnedSlice now take an allocator in Zig 0.15+ (unmanaged-by-default migration)
 // FIX: removed the trailing null byte — you're printing with {s} on a Zig slice, not a C string
@@ -85,6 +106,17 @@ pub fn dump(
             std.debug.print(fmt, args);
         }
 
+        // NEW: color-aware print. When WANTS_COLOR is false, the color/reset
+        // codes are skipped entirely instead of being baked into the format
+        // string, so plain terminals / piped output stay clean.
+        pub fn cprint(comptime color: []const u8, comptime fmt: []const u8, args: anytype) void {
+            if (WANTS_COLOR) {
+                std.debug.print(color ++ fmt ++ C_RESET, args);
+            } else {
+                std.debug.print(fmt, args);
+            }
+        }
+
         // FIX: removed all `try` — this function returns void, errors are silently dropped
         // with `catch return` at each callsite that can fail
 
@@ -104,7 +136,7 @@ pub fn dump(
 
             switch (ti) {
                 .int, .float, .bool => {
-                    print(C_NUM ++ "{any}" ++ C_RESET, .{value_});
+                    cprint(C_NUM, "{any}", .{value_});
                 },
 
                 .@"enum" => |e| {
@@ -115,9 +147,9 @@ pub fn dump(
                     } else false;
 
                     if (has_field) {
-                        print(C_ENUM ++ ".{s}" ++ C_RESET, .{@tagName(value_)});
+                        cprint(C_ENUM, ".{s}", .{@tagName(value_)});
                     } else {
-                        print(C_ENUM ++ "{}" ++ C_RESET, .{@intFromEnum(value_)});
+                        cprint(C_ENUM, "{}", .{@intFromEnum(value_)});
                     }
                 },
 
@@ -125,7 +157,7 @@ pub fn dump(
                     if (value_) |v| {
                         self.dump(v, depth);
                     } else {
-                        print(C_DIM ++ "null" ++ C_RESET, .{});
+                        cprint(C_DIM, "null", .{});
                     }
                 },
 
@@ -140,13 +172,13 @@ pub fn dump(
                         // FIX: was passing std.heap.page_allocator; use self.allocator.allocator()
                         const str = visualizeString(self.allocator.allocator(), value_) catch return;
                         defer self.allocator.allocator().free(str);
-                        print(C_STR ++ "\"{s}\"" ++ C_RESET, .{str});
+                        cprint(C_STR, "\"{s}\"", .{str});
                         return;
                     }
 
                     // ── Empty slice → [] ──────────────────────────────────
                     if (p.size == .slice and value_.len == 0) {
-                        print(C_DIM ++ "[]" ++ C_RESET, .{});
+                        cprint(C_DIM, "[]", .{});
                         return;
                     }
 
@@ -157,7 +189,7 @@ pub fn dump(
 
                     // ── Null-ish pointer ──────────────────────────────────
                     if (addr < 4096) {
-                        print(C_DIM ++ "null" ++ C_RESET, .{});
+                        cprint(C_DIM, "null", .{});
                         return;
                     }
 
@@ -167,10 +199,7 @@ pub fn dump(
                         return;
                     };
                     if (gop.found_existing) {
-                        print(
-                            C_REF ++ "-> #{d}" ++ C_RESET,
-                            .{gop.value_ptr.*},
-                        );
+                        cprint(C_REF, "-> #{d}", .{gop.value_ptr.*});
                         return;
                     }
 
@@ -178,7 +207,8 @@ pub fn dump(
                     gop.value_ptr.* = id;
                     self.next_id += 1;
 
-                    print(C_REF ++ "[#{d}]" ++ C_RESET ++ " ", .{id});
+                    cprint(C_REF, "[#{d}]", .{id});
+                    print(" ", .{});
 
                     if (p.size == .slice) {
                         print("[\n", .{});
@@ -201,9 +231,9 @@ pub fn dump(
                         // FIX: removed `try` — dump returns void
                         const str = visualizeString(self.allocator.allocator(), &value_) catch return;
                         defer self.allocator.allocator().free(str);
-                        print(C_STR ++ "\"{s}\"" ++ C_RESET, .{str});
+                        cprint(C_STR, "\"{s}\"", .{str});
                     } else if (value_.len == 0) {
-                        print(C_DIM ++ "[]" ++ C_RESET, .{});
+                        cprint(C_DIM, "[]", .{});
                     } else {
                         print("[\n", .{});
                         for (value_, 0..) |item, i| {
@@ -229,7 +259,7 @@ pub fn dump(
                         var iter = @constCast(&value_).iterator();
                         const first = iter.next();
                         if (first == null) {
-                            print(C_DIM ++ "{{}}" ++ C_RESET, .{});
+                            cprint(C_DIM, "{{}}", .{});
                             return;
                         }
                         print("{{\n", .{});
@@ -254,14 +284,15 @@ pub fn dump(
 
                     const fields = ti.@"struct".fields;
                     if (fields.len == 0) {
-                        print(C_DIM ++ "{}" ++ C_RESET, .{});
+                        cprint(C_DIM, "{}", .{});
                         return;
                     }
 
                     print("{{\n", .{});
                     inline for (fields, 0..) |field, i| {
                         indent(child_pad);
-                        print(C_KEY ++ "{s}" ++ C_RESET ++ ": ", .{field.name});
+                        cprint(C_KEY, "{s}", .{field.name});
+                        print(": ", .{});
                         self.dump(@field(value_, field.name), depth + 1);
                         if (i + 1 < fields.len) print(",", .{});
                         print("\n", .{});
@@ -271,13 +302,14 @@ pub fn dump(
                 },
 
                 .@"union" => {
-                    print(C_ENUM ++ ".{s}" ++ C_RESET ++ " = ", .{@tagName(value_)});
+                    cprint(C_ENUM, ".{s}", .{@tagName(value_)});
+                    print(" = ", .{});
                     switch (value_) {
                         inline else => |payload| self.dump(payload, depth), // FIX: removed `try`
                     }
                 },
 
-                else => print(C_DIM ++ "<{s}>" ++ C_RESET, .{@tagName(ti)}),
+                else => cprint(C_DIM, "<{s}>", .{@tagName(ti)}),
             }
         }
     };
@@ -293,3 +325,5 @@ pub fn dump(
     dumper.dump(value, 0);
     Dumper.print("\n", .{});
 }
+
+pub var WANTS_COLOR: bool = true;

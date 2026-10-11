@@ -408,6 +408,8 @@ fn Functions(comptime specs: []const Spec) type {
     const name_map = enums.generateEnumNameMap(FnIdent);
 
     return struct {
+        pub const DefinitionT = Definition;
+
         pub const items = defs;
 
         pub const Id = FunctionId;
@@ -444,8 +446,8 @@ fn Functions(comptime specs: []const Spec) type {
         }
     };
 }
-const Spec = struct {
-    const Param = struct {
+pub const Spec = struct {
+    pub const Param = struct {
         name: []const u8,
         type: TypeExpr,
     };

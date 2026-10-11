@@ -1,17 +1,19 @@
 const std = @import("std");
 
-const Span = @import("span.zig");
+const Span = @import("Span.zig");
 
 pub const Severity = enum {
     err,
     warn,
     hint,
+    unnecessary,
 
     pub fn format(self: Severity, writer: *std.Io.Writer) !void {
         return switch (self) {
             .err => writer.writeAll("error"),
             .warn => writer.writeAll("warning"),
             .hint => writer.writeAll("hint"),
+            .unnecessary => writer.writeAll("unnecessary"),
         };
     }
 };
@@ -67,4 +69,8 @@ pub fn warn(self: *Diagnostics, span: Span, comptime fmt: []const u8, args: anyt
 
 pub fn hint(self: *Diagnostics, span: Span, comptime fmt: []const u8, args: anytype) !void {
     try self.append(.hint, span, fmt, args);
+}
+
+pub fn uneccesary(self: *Diagnostics, span: Span, comptime fmt: []const u8, args: anytype) !void {
+    try self.append(.unnecessary, span, fmt, args);
 }

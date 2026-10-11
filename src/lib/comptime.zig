@@ -1,3 +1,5 @@
+const std = @import("std");
+
 pub fn iter(comptime T: type, comptime max: comptime_int) [max]T {
     comptime {
         var out: [max]T = undefined;
@@ -37,3 +39,19 @@ pub fn copyFields(comptime Out: type, in: anytype) Out {
 
     return out;
 }
+
+pub const StringBuilder = struct {
+    buffer: []const u8,
+
+    pub fn init(comptime str: []const u8) StringBuilder {
+        return .{ .buffer = str };
+    }
+
+    pub fn append(comptime self: *StringBuilder, comptime fmt: []const u8, args: anytype) void {
+        self.buffer = self.buffer ++ std.fmt.comptimePrint(fmt, args);
+    }
+
+    pub fn appendRaw(comptime self: *StringBuilder, comptime str: []const u8) void {
+        self.buffer = self.buffer ++ str;
+    }
+};

@@ -81,7 +81,7 @@ pub fn compileRunfile(ctx: *const Context, source_filepath: []const u8) !*const 
         return TaskError.CompilationFailed;
     }
 
-    return ctx.workspace.view(result.id, .ir).source;
+    return &ctx.workspace.getFileState(result.id).ir.?;
 }
 
 pub fn printTasksList(ctx: *const Context, source_filepath: []const u8) !void {

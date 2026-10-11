@@ -1,7 +1,8 @@
 const ir = @import("ir.zig");
 
 const Diagnostics = @import("Diagnostics.zig");
-const Span = @import("span.zig");
+const Span = @import("Span.zig");
+const @"type" = @import("type.zig");
 
 pub const Origin = union(enum) {
     capture: *ir.Capture,
@@ -9,6 +10,15 @@ pub const Origin = union(enum) {
     argument: *ir.Argument,
     task: *ir.Task,
     group: *ir.Group,
+
+    pub fn valueType(self: *const Origin) ?@"type".Type {
+        return switch (self.*) {
+            .capture => |c| c.type,
+            .binding => |b| b.type,
+            .argument => |a| a.type.typeOf(),
+            else => null,
+        };
+    }
 };
 
 pub const Symbol = struct {
@@ -33,10 +43,12 @@ pub const Symbol = struct {
     pub fn debugDump(self: *const Symbol) struct {
         name: []const u8,
         type: Type,
+        value_type: ?@"type".Type,
     } {
         return .{
             .name = self.name,
             .type = self.typeOf(),
+            .value_type = self.origin.valueType(),
         };
     }
 };

@@ -1,6 +1,5 @@
-const ast = @import("ast.zig");
-
-const MetaType = ast.MetaType;
+const meta = @import("meta.zig");
+const MetaType = meta.Type;
 
 const lib = @import("lib");
 const enums = lib.enums;
@@ -61,6 +60,7 @@ fn OptionsGroup(comptime specs: []const Spec) type {
     const name_map = enums.generateEnumNameMap(Id);
 
     return struct {
+        pub const raw = defs;
         pub const Type = Id;
 
         pub fn get(name: []const u8) ?Definition {

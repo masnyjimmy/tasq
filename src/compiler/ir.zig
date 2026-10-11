@@ -1,6 +1,7 @@
 // src/compiler/ir.zig
 
 const std = @import("std");
+const hst = @import("cst.zig");
 const ast = @import("ast.zig");
 const functions = @import("functions.zig");
 
@@ -8,8 +9,8 @@ const @"type" = @import("type.zig");
 const Type = @"type".Type;
 const ArgType = @"type".ArgType;
 
-const value = @import("value.zig");
-const Value = value.Value;
+const runtime = @import("runtime.zig");
+const Value = runtime.Value;
 
 const attrib = @import("attributes.zig");
 const opt = @import("options.zig");
@@ -60,7 +61,7 @@ pub const Options = struct {
 
 pub const Group = struct {
     name: ?[]const u8, // null = anonymous
-    args: []*Argument,
+    args: []const *Argument,
     decls: []*Decl,
     tasks: []*Task,
     scope: *Scope,
@@ -82,9 +83,9 @@ pub const Env = struct {
 };
 
 pub const Task = struct {
-    ast_ref: *const ast.Task,
+    st_ref: ast.Task,
     name: []const u8,
-    args: []*Argument,
+    args: []const *Argument,
     dependecies: []const TaskCall,
     private: bool,
     envs: []const Env,
@@ -266,12 +267,28 @@ pub const BinaryExpr = struct {
     type: Type, // result type — filled by sema
 };
 
-pub const BinaryOp = ast.BinaryOp;
+pub const BinaryOp = enum {
+    add,
+    sub,
+    mul,
+    div,
+    eq,
+    neq,
+    lt,
+    gt,
+    lt_eq,
+    gt_eq,
+    and_op,
+    or_op,
 
+    pub fn format(self: @This(), w: *std.Io.Writer) !void {
+        try w.print("{s}", .{@tagName(self)});
+    }
+};
 pub const UnaryExpr = struct {
     op: UnaryOp,
     operand: Expr,
     type: Type,
 };
 
-pub const UnaryOp = ast.UnaryOp;
+pub const UnaryOp = enum { not_op, negate };

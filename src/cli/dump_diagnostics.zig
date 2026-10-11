@@ -29,6 +29,7 @@ pub fn dump_diagnostics(
             .err => .bright_red,
             .hint => .bright_green,
             .warn => .yellow,
+            .unnecessary => .bright_black,
         };
 
         try printer.printStyled(

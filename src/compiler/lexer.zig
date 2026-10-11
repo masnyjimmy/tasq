@@ -1,12 +1,10 @@
 const std = @import("std");
 const lib = @import("lib");
 
-const token = @import("token.zig");
+const Token = @import("Token.zig");
+const TokenKind = Token.Kind;
 
-const TokenKind = token.TokenKind;
-const Token = token.Token;
-
-const Span = @import("span.zig");
+const Span = @import("Span.zig");
 
 // ── Keyword map ───────────────────────────────────────────────────────────────
 
@@ -42,50 +40,167 @@ fn hexValue(c: u8) u32 {
         else => unreachable,
     };
 }
+
+const StringCtx = struct {
+    terminator: u8,
+    close_kind: TokenKind,
+    multiline: bool,
+    interporable: bool,
+};
+
+const CharCtx = struct {
+    terminator: u8,
+    close_kind: TokenKind,
+};
+
+const Mode = union(enum) {
+    code,
+    interp,
+    string: StringCtx,
+    char: CharCtx,
+};
+
 pub const Lexer = struct {
+    const Error = std.mem.Allocator.Error;
+
     source: []const u8,
     pos: u32,
+    allocator: std.mem.Allocator,
+    mode_stack: std.ArrayList(Mode) = .empty,
 
-    pub fn init(source: []const u8) Lexer {
+    pub fn init(allocator: std.mem.Allocator, source: []const u8) Lexer {
         return .{
             .source = source,
+            .allocator = allocator,
             .pos = 0,
         };
     }
 
+    pub fn deinit(self: *Lexer) void {
+        self.mode_stack.deinit(self.allocator);
+    }
+
+    fn mode(self: *Lexer) Mode {
+        return self.mode_stack.getLastOrNull() orelse .code;
+    }
+
     // ── Public interface ──────────────────────────────────────────────────────
 
-    pub fn next(self: *Lexer) !Token {
+    pub fn read(allocator: std.mem.Allocator, source: []const u8) ![]Token {
+        var lexer = Lexer.init(allocator, source);
+        defer lexer.deinit();
+
+        var out: std.ArrayList(Token) = .empty;
+
         while (true) {
-            self.skipWhitespace();
+            const token = try lexer.next();
+            try out.append(allocator, token);
+
+            if (token.kind == .eof) {
+                break;
+            }
+        }
+
+        return try out.toOwnedSlice(allocator);
+    }
+
+    pub fn next(self: *Lexer) Error!Token {
+        if (self.peek() == 0) {
+            self.mode_stack.clearRetainingCapacity();
+            return self.makeToken(.eof, self.pos, 0);
+        }
+
+        const start = self.pos;
+        const token = switch (self.mode()) {
+            .code => try self.nextCode(),
+            .string => |ctx| try self.nextString(ctx),
+            .interp => try self.nextInterp(),
+            .char => |ctx| try self.nextChar(ctx),
+        };
+
+        std.debug.assert(token.kind == .eof or self.pos > start);
+        return token;
+    }
+
+    pub fn nextChar(self: *Lexer, ctx: CharCtx) Error!Token {
+        if (self.peek() == ctx.terminator) {
+            _ = self.mode_stack.pop();
+            return try self.consumeChar(ctx.close_kind);
+        }
+
+        if (self.peek() == '\n') {
+            _ = self.mode_stack.pop();
+            return try self.next();
+        }
+
+        var lexer = self.stringLexer();
+        return try lexer.lexCharacter();
+    }
+
+    pub fn nextString(self: *Lexer, ctx: StringCtx) Error!Token {
+        if (self.peek() == ctx.terminator) {
+            _ = self.mode_stack.pop();
+            return try self.consumeChar(ctx.close_kind);
+        }
+
+        if (!ctx.multiline and self.peek() == '\n') {
+            _ = self.mode_stack.pop();
+            return try self.next();
+        }
+
+        if (ctx.interporable) {
+            if (self.peek() == '{') {
+                try self.mode_stack.append(self.allocator, .interp);
+                return try self.nextCode();
+            }
+        }
+
+        var lexer = self.stringLexer();
+
+        const terminators: []const []const u8 = if (ctx.interporable)
+            &.{ &.{ctx.terminator}, "{" }
+        else
+            &.{&.{ctx.terminator}};
+
+        const token = try lexer.lexString(
+            terminators,
+            ctx.multiline,
+        );
+
+        if (token.kind == .unterminated_string)
+            _ = self.mode_stack.pop();
+
+        return token;
+    }
+
+    pub fn nextInterp(self: *Lexer) Error!Token {
+        if (self.peek() == '}') {
+            _ = self.mode_stack.pop();
+            return self.consumeChar(.rbrace);
+        }
+
+        return self.nextCode();
+    }
+
+    pub fn nextCode(self: *Lexer) Error!Token {
+        while (true) {
+            if (std.ascii.isWhitespace(self.peek())) {
+                return self.lexWhitespace();
+            }
 
             switch (self.peek()) {
                 0 => return try self.makeToken(.eof, self.pos, 0),
                 // Comments — skip and loop
                 '/' => {
                     if (self.peekAt(1) == '/') {
-                        self.skipLineComment();
-                        continue;
+                        return self.lexLineComment();
                     }
-                    // Single / is always invalid in TSQ
                     return self.consumeChar(.slash);
                 },
 
                 // Single-char symbols
-                '{' => {
-                    if (self.peekAt(1) == '{') {
-                        return self.consumeTwo(.ldbrace);
-                    }
-
-                    return self.consumeChar(.lbrace);
-                },
-                '}' => {
-                    if (self.peekAt(1) == '}') {
-                        return self.consumeTwo(.rdbrace);
-                    }
-
-                    return self.consumeChar(.rbrace);
-                },
+                '{' => return self.consumeChar(.lbrace),
+                '}' => return self.consumeChar(.rbrace),
                 '[' => return self.consumeChar(.lbracket),
                 ']' => return self.consumeChar(.rbracket),
                 '(' => return self.consumeChar(.lparen),
@@ -97,9 +212,31 @@ pub const Lexer = struct {
                         else => return self.consumeChar(.colon),
                     }
                 },
-                '\'' => return self.consumeChar(.apostrophe),
-                '"' => return self.consumeChar(.quote),
-                '`' => return self.consumeChar(.backtick),
+                '\'' => {
+                    try self.mode_stack.append(self.allocator, .{ .char = .{
+                        .terminator = '\'',
+                        .close_kind = .apostrophe,
+                    } });
+                    return self.consumeChar(.apostrophe);
+                },
+                '"' => {
+                    try self.mode_stack.append(self.allocator, .{ .string = .{
+                        .terminator = '\"',
+                        .close_kind = .quote,
+                        .multiline = false,
+                        .interporable = false,
+                    } });
+                    return self.consumeChar(.quote);
+                },
+                '`' => {
+                    try self.mode_stack.append(self.allocator, .{ .string = .{
+                        .terminator = '`',
+                        .close_kind = .backtick,
+                        .multiline = false,
+                        .interporable = true,
+                    } });
+                    return self.consumeChar(.backtick);
+                },
                 '.' => {
                     if (self.peekAt(1) == '.' and self.peekAt(2) == '.') {
                         return self.consumeN(.triple_dot, 3);
@@ -140,6 +277,9 @@ pub const Lexer = struct {
                 '@' => {
                     return self.consumeChar(.at);
                 },
+                '$' => {
+                    return self.consumeChar(.dollar);
+                },
                 // Numbers
                 '0'...'9' => return self.lexNumber(),
 
@@ -172,6 +312,7 @@ pub const Lexer = struct {
             terminators: []const []const u8,
             allow_new_line: bool,
         ) !Token {
+            const lexer = self.lexer;
             const start = self.lexer.pos;
 
             while (true) {
@@ -181,20 +322,22 @@ pub const Lexer = struct {
                     }
                 }
 
-                switch (self.lexer.peek()) {
+                switch (lexer.peek()) {
                     // new line is normal char if allowed
                     0 => return try self.lexer.makeToken(.unterminated_string, start, self.lexer.pos - start),
-                    '\n' => {
-                        if (allow_new_line == false) {
-                            return self.lexer.consumeInvalid();
-                        }
+                    '\n' => if (allow_new_line == false) {
+                        return try lexer.makeToken(.unterminated_string, start, lexer.pos - start);
                     },
                     // escape character => handle through lexCharacter,
                     '\\' => {
-                        const out = try self.lexCharacter();
-                        if (out.kind == .invalid_char)
-                            return out;
+                        const escape_start = lexer.pos;
+                        const escape = try self.lexCharacter();
 
+                        if (escape.kind == .invalid_char) {
+                            if (escape_start == start) return escape;
+                            lexer.pos = escape_start;
+                            return try lexer.makeToken(.string, start, escape_start - start);
+                        }
                         continue;
                     },
                     // else check delimiter
@@ -309,14 +452,16 @@ pub const Lexer = struct {
         }
     }
 
-    fn skipLineComment(self: *Lexer) void {
-        // caller already confirmed source[pos..pos+2] == "//"
+    fn lexLineComment(self: *Lexer) !Token {
+        const start = self.pos;
+        self.pos += 2;
         while (true) {
             switch (self.peek()) {
                 0, '\n' => break,
-                else => {},
+                else => self.pos += 1,
             }
         }
+        return try self.makeToken(.comment, start, self.pos - start);
     }
 
     // ── Token constructors ────────────────────────────────────────────────────
@@ -439,6 +584,14 @@ pub const Lexer = struct {
         }
 
         return try self.makeToken(.unterminated_backtick, start, self.pos - start);
+    }
+
+    fn lexWhitespace(self: *Lexer) !Token {
+        const start = self.pos;
+        while (std.ascii.isWhitespace(self.peek())) {
+            self.pos += 1;
+        }
+        return self.makeToken(.whitespace, start, self.pos - start);
     }
 
     // ── Char utils ────────────────────────────────────────────────────────────

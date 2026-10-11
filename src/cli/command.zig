@@ -70,6 +70,7 @@ fn RunList(ctx: *const Context) !void {
 }
 
 fn RunLsp(ctx: *const Context) !void {
+    // TODO: uncomment later
     const lsp = @import("lsp");
 
     try lsp.run(ctx.app.allocator, ctx.app.io);
@@ -82,7 +83,6 @@ fn Dump(ctx: *const Context) !void {
         source,
         tree,
         ir,
-        spans,
 
         const string = blk: {
             var out: []const u8 = "";
@@ -132,37 +132,35 @@ fn Dump(ctx: *const Context) !void {
                 return;
             }
 
-            var span_registry = compiler.Span.Registry.init(c.app.allocator);
-            defer span_registry.deinit();
+            var lexer = compiler.Lexer.init(arena.allocator(), s);
 
-            var lexer = compiler.Lexer.init(s);
-
-            var parser = try compiler.Parser.init(
-                &arena,
+            const lex_tree = try compiler.token_tree.TreeReader.read(
+                arena.allocator(),
                 &lexer,
-                &span_registry,
                 d,
             );
 
-            const ast = try parser.parseFile();
+            var cursor: compiler.token_tree.Cursor = .init(lex_tree);
+
+            var parser = try compiler.Parser.init(
+                arena.allocator(),
+                &cursor,
+                d,
+            );
+
+            const syntax_tree = try parser.parseFile();
 
             if (t == .tree) {
-                lib.debug.dump(ast, 4);
-                return;
-            }
-
-            if (t == .spans) {
-                lib.debug.dump(span_registry.nodes, 4);
+                try compiler.cst.debug.printTree(c.app.printer.writer, syntax_tree);
                 return;
             }
 
             var sema = compiler.Sema.init(
                 &arena,
-                &span_registry,
                 d,
             );
 
-            const ir = try sema.analyse(&ast);
+            const ir = try sema.analyseFile(syntax_tree);
             lib.debug.dump(ir, 4);
         }
     };

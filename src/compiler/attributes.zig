@@ -4,8 +4,7 @@ const @"type" = @import("type.zig");
 const Type = @"type".Type;
 const ArgType = @"type".ArgType;
 
-const ast = @import("ast.zig");
-const MetaType = ast.MetaType;
+const meta = @import("meta.zig");
 
 const lib = @import("lib");
 const enums = lib.enums;
@@ -93,7 +92,7 @@ const attr_specs: []const Spec = &.{
         .allow_default = false,
         .unique = true,
         .kind = .validation,
-        .valid_for = &.{.arguments(&.{ .number, .list_string })},
+        .valid_for = &.{.arguments(&.{ .number, .list_number })},
     },
     .{
         .name = "max",
@@ -102,6 +101,22 @@ const attr_specs: []const Spec = &.{
         .unique = true,
         .kind = .validation,
         .valid_for = &.{.arguments(&.{ .number, .list_number })},
+    },
+    .{
+        .name = "min_length",
+        .value_types = &.{.number},
+        .allow_default = false,
+        .unique = true,
+        .kind = .validation,
+        .valid_for = &.{.arguments(&.{ .string, .list_string })},
+    },
+    .{
+        .name = "max_length",
+        .value_types = &.{.number},
+        .allow_default = false,
+        .unique = true,
+        .kind = .validation,
+        .valid_for = &.{.arguments(&.{ .string, .list_string })},
     },
     .{
         .name = "pattern",
@@ -161,7 +176,7 @@ fn Attributes(comptime specs: []const Spec) type {
 
     const Definition = struct {
         type: AttributeType,
-        value_types: []const MetaType,
+        value_types: []const meta.Type,
         allow_default: bool,
         unique: bool,
         kind: Kind,
@@ -186,6 +201,8 @@ fn Attributes(comptime specs: []const Spec) type {
 
     return struct {
         pub const Type = AttributeType;
+
+        pub const raw = defs;
 
         pub const Target = union(TargetType) {
             task,
@@ -234,7 +251,7 @@ fn Attributes(comptime specs: []const Spec) type {
 
 const Spec = struct {
     name: []const u8,
-    value_types: []const MetaType,
+    value_types: []const meta.Type,
     allow_default: bool,
     unique: bool,
     kind: Kind,
@@ -256,7 +273,7 @@ pub const ValidFor = union(TargetType) {
     }
 };
 
-pub fn typesListToString(allocator: std.mem.Allocator, ts: []const ast.MetaType, default: bool) ![]const u8 {
+pub fn typesListToString(allocator: std.mem.Allocator, ts: []const meta.Type, default: bool) ![]const u8 {
     const out = blk: {
         var out = try std.ArrayList([]const u8).initCapacity(allocator, ts.len);
 

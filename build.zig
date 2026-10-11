@@ -70,6 +70,7 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("lib", lib_mod);
     exe.root_module.addImport("compiler", compiler_mod);
+    exe.root_module.addImport("conzole", conzole_mod);
     exe.root_module.addImport("cli", cli_mod);
     exe.root_module.addImport("lsp", lsp_mod);
 

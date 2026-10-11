@@ -140,13 +140,13 @@ pub fn EnumMultimap(comptime E: type, comptime V: type) type {
                 null;
         }
 
-        pub fn getAssertOne(self: *Self, key: E) ?V {
+        pub fn getAssertOne(self: *const Self, key: E) ?V {
             const count_ = self.countOf(key);
             std.debug.assert(count_ <= 1);
 
             return switch (count_) {
                 0 => null,
-                1 => self.storage.getPtr(key).getLast(),
+                1 => self.storage.getPtrConst(key).getLast(),
                 else => unreachable,
             };
         }

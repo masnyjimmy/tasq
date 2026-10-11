@@ -3,7 +3,7 @@ const ir = @import("ir.zig");
 
 const sym = @import("symbol.zig");
 const Symbol = sym.Symbol;
-const NodeId = @import("span.zig").Registry.NodeId;
+const cst = @import("cst.zig");
 
 pub const Scope = struct {
     const IndexesStorage = std.array_hash_map.String(usize);
@@ -16,7 +16,11 @@ pub const Scope = struct {
     tasks: IndexesStorage = .empty,
     groups: IndexesStorage = .empty,
     // child scopes
-    children: std.hash_map.AutoHashMapUnmanaged(NodeId, *Scope) = .empty,
+    children: std.hash_map.AutoHashMapUnmanaged(*const cst.Node, *Scope) = .empty,
+
+    pub const empty: Scope = .{
+        .parent = null,
+    };
 
     pub fn debugDump(self: *const Scope) []const *const Symbol {
         return self.symbols.items;
@@ -40,12 +44,12 @@ pub const Scope = struct {
         self.symbols.deinit(gpa);
     }
 
-    pub fn put_child(self: *Scope, allocator: std.mem.Allocator, node_id: NodeId, scope: *Scope) !void {
-        try self.children.putNoClobber(allocator, node_id, scope);
+    pub fn put_child(self: *Scope, allocator: std.mem.Allocator, node: *const cst.Node, scope: *Scope) !void {
+        try self.children.putNoClobber(allocator, node, scope);
     }
 
-    pub fn child(self: *const Scope, node_id: NodeId) ?*Scope {
-        return self.children.get(node_id);
+    pub fn child(self: *const Scope, node: *const cst.Node) ?*Scope {
+        return self.children.get(node);
     }
 
     pub fn define(self: *Scope, gpa: std.mem.Allocator, symbol: Symbol) !void {
@@ -95,6 +99,14 @@ pub const Scope = struct {
 
     pub fn root(self: *Scope) *Scope {
         var cur: *Scope = self;
+        while (cur.parent) |parent| {
+            cur = parent;
+        }
+        return cur;
+    }
+
+    pub fn rootConst(self: *const Scope) *const Scope {
+        var cur: *const Scope = self;
         while (cur.parent) |parent| {
             cur = parent;
         }

@@ -1,12 +1,19 @@
 const std = @import("std");
 
+pub const Error = error{
+    InvalidStringFormat,
+    EmptyCharLiteral,
+    CharLiteralTooLong,
+    OutOfMemory,
+};
+
 const LiteralParser = struct {
     gpa: std.mem.Allocator,
     input: []const u8,
     output: std.ArrayList(u8),
     pos: usize = 0,
 
-    pub fn init(gpa: std.mem.Allocator, input: []const u8) !LiteralParser {
+    pub fn init(gpa: std.mem.Allocator, input: []const u8) Error!LiteralParser {
         return .{
             .gpa = gpa,
             .input = input,
@@ -14,7 +21,7 @@ const LiteralParser = struct {
         };
     }
 
-    pub fn processString(self: *@This()) ![]const u8 {
+    pub fn processString(self: *@This()) Error![]const u8 {
         while (self.pos < self.input.len) {
             try self.appendNextChar();
         }
@@ -22,7 +29,7 @@ const LiteralParser = struct {
         return try self.output.toOwnedSlice(self.gpa);
     }
 
-    pub fn processChar(self: *@This()) !u21 {
+    pub fn processChar(self: *@This()) Error!u21 {
         if (self.pos >= self.input.len) return error.EmptyCharLiteral;
 
         const cp = try self.readOneCodepoint();
@@ -31,15 +38,15 @@ const LiteralParser = struct {
         return cp;
     }
 
-    fn appendNextChar(self: *@This()) !void {
+    fn appendNextChar(self: *@This()) Error!void {
         const cp = try self.readOneCodepoint();
 
         var buf: [4]u8 = undefined;
-        const n = try std.unicode.utf8Encode(cp, &buf);
+        const n = std.unicode.utf8Encode(cp, &buf) catch return error.InvalidStringFormat;
         try self.output.appendSlice(self.gpa, buf[0..n]);
     }
 
-    fn readOneCodepoint(self: *@This()) !u21 {
+    fn readOneCodepoint(self: *@This()) Error!u21 {
         if (self.pos >= self.input.len) return error.InvalidStringFormat;
 
         switch (self.input[self.pos]) {
@@ -66,7 +73,7 @@ const LiteralParser = struct {
         }
     }
 
-    fn readEscapeCodepoint(self: *@This()) !u21 {
+    fn readEscapeCodepoint(self: *@This()) Error!u21 {
         if (self.pos + 1 >= self.input.len) return error.InvalidStringFormat;
 
         const esc = self.input[self.pos + 1];
@@ -106,7 +113,7 @@ const LiteralParser = struct {
         }
     }
 
-    fn readHexEscape(self: *@This()) !u21 {
+    fn readHexEscape(self: *@This()) Error!u21 {
         if (self.pos + 3 >= self.input.len) return error.InvalidStringFormat;
 
         const a = self.input[self.pos + 2];
@@ -116,12 +123,13 @@ const LiteralParser = struct {
             return error.InvalidStringFormat;
         }
 
-        const byte = try std.fmt.parseInt(u8, self.input[self.pos + 2 .. self.pos + 4], 16);
+        const byte = std.fmt.parseInt(u8, self.input[self.pos + 2 .. self.pos + 4], 16) catch
+            return error.InvalidStringFormat;
         self.pos += 4;
         return @as(u21, byte);
     }
 
-    fn readUnicodeEscape(self: *@This()) !u21 {
+    fn readUnicodeEscape(self: *@This()) Error!u21 {
         if (self.pos + 2 >= self.input.len or self.input[self.pos + 2] != '{') {
             return error.InvalidStringFormat;
         }
@@ -136,7 +144,8 @@ const LiteralParser = struct {
 
         if (i >= self.input.len or digits == 0) return error.InvalidStringFormat;
 
-        const codepoint_u32 = try std.fmt.parseInt(u32, self.input[self.pos + 3 .. i], 16);
+        const codepoint_u32 = std.fmt.parseInt(u32, self.input[self.pos + 3 .. i], 16) catch
+            return error.InvalidStringFormat;
         if (codepoint_u32 > 0x10ffff or (codepoint_u32 >= 0xd800 and codepoint_u32 <= 0xdfff)) {
             return error.InvalidStringFormat;
         }
@@ -146,27 +155,24 @@ const LiteralParser = struct {
     }
 };
 
-pub const LiteralError = error{
-    InvalidStringFormat,
-    EmptyCharLiteral,
-    CharLiteralTooLong,
-};
-
-pub fn processString(gpa: std.mem.Allocator, input: []const u8) ![]const u8 {
+pub fn processString(gpa: std.mem.Allocator, input: []const u8) Error![]const u8 {
     var parser = try LiteralParser.init(gpa, input);
+    errdefer parser.output.deinit(gpa);
     return try parser.processString();
 }
 
-pub fn processChar(gpa: std.mem.Allocator, input: []const u8) !u21 {
+pub fn processChar(gpa: std.mem.Allocator, input: []const u8) Error!u21 {
     var parser = try LiteralParser.init(gpa, input);
+    defer parser.output.deinit(gpa);
     return try parser.processChar();
 }
 
-pub fn readFirstUnicode(data: []const u8) !u21 {
+pub fn readFirstUnicode(data: []const u8) Error!u21 {
     if (data.len == 0)
         return 0;
 
-    const len = try std.unicode.utf8ByteSequenceLength(data[0]);
+    const len = std.unicode.utf8ByteSequenceLength(data[0]) catch return error.InvalidStringFormat;
+    if (len > data.len) return error.InvalidStringFormat;
 
-    return try std.unicode.utf8Decode(data[0..len]);
+    return std.unicode.utf8Decode(data[0..len]) catch return error.InvalidStringFormat;
 }
