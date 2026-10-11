@@ -22,7 +22,7 @@ const EXPR_START: FollowSet = .set(&.{
     .true_kw,   .false_kw, .number,   .ident,
     .lparen,    .quote,    .backtick, .lbracket,
     .switch_kw, .if_kw,    .at,       .not_kw,
-    .minus,
+    .minus,     .dollar,
 });
 const STMT_START: FollowSet = FollowSet.set(&.{
     .ident,  .if_kw,  .switch_kw,
@@ -691,6 +691,7 @@ pub const Parser = struct {
 
                 try self.close(.paren_expr);
             },
+            .dollar => try self.parseProcess(follow),
             .backtick => try self.parseStringExpr(follow),
             .quote => try self.parseString(follow),
             .lbracket => {
