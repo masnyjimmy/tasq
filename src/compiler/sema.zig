@@ -1282,6 +1282,15 @@ pub const Sema = struct {
                     .is_static = result.is_static,
                 };
             },
+            .process => |process| {
+                const result = try self.analyseStringExpr(process.string, scope);
+
+                return .{
+                    .expr = .{ .process = result.expr },
+                    .type = result.type,
+                    .is_static = false,
+                };
+            },
         };
     }
 
