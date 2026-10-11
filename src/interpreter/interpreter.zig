@@ -17,7 +17,7 @@ const builtin = @import("builtin.zig");
 
 pub const Interpreter = @This();
 
-pub const Error = std.Io.Writer.Error || binary_mod.Error || std.mem.Allocator.Error || std.process.SpawnError || error{
+pub const Error = std.Io.Writer.Error || std.Io.Reader.Error || binary_mod.Error || std.mem.Allocator.Error || std.process.SpawnError || error{
     Abort,
     Break,
     Continue,
@@ -183,7 +183,7 @@ fn main(self: *Interpreter, scope: *Scope, stmt: *const ir.Statement) Error!void
         .process => |proc_expr| {
             const process = try self.resolveString(scope, proc_expr);
 
-            try self.handleProcess(process);
+            try self.handleProcess(process, true, null);
         },
         .if_stmt => |*if_stmt| {
             const cond = try self.evaluateExpr(scope, &if_stmt.cond);
@@ -297,7 +297,7 @@ fn handleDecl(self: *Interpreter, scope: *Scope, decl: *const ir.Decl) Error!Val
     return value;
 }
 
-fn handleProcess(self: *Interpreter, process: []const u8) Error!void {
+fn handleProcess(self: *Interpreter, process: []const u8, comptime echo: bool, out: ?*std.Io.Writer) Error!void {
     const shell_len = self.options.shell.len;
 
     var argv = try self.allocator.alloc([]const u8, shell_len + 1);
@@ -306,7 +306,14 @@ fn handleProcess(self: *Interpreter, process: []const u8) Error!void {
     @memcpy(argv[0..shell_len], self.options.shell);
     argv[shell_len] = process;
 
-    try self.printer.printStyled(self.allocator, .{ .bold = true, .fg = .bright_white }, "{s}\n", .{process});
+    if (comptime echo) {
+        try self.printer.printStyled(
+            self.allocator,
+            .{ .bold = true, .fg = .bright_white },
+            "{s}\n",
+            .{process},
+        );
+    }
 
     var child = try std.process.spawn(
         self.io,
@@ -314,8 +321,23 @@ fn handleProcess(self: *Interpreter, process: []const u8) Error!void {
             .argv = argv,
             .cwd = .{ .dir = self.cwd },
             .environ_map = &self.environ,
+            .stdout = if (out == null)
+                .inherit
+            else
+                .pipe,
         },
     );
+
+    if (out) |output| {
+        var buffer: [4096]u8 = undefined;
+        var file_reader: std.Io.File.Reader = .initStreaming(
+            child.stdout.?,
+            self.io,
+            &buffer,
+        );
+
+        _ = try file_reader.interface.streamRemaining(output);
+    }
 
     _ = try child.wait(self.io);
 }
