@@ -249,7 +249,8 @@ pub const Expr = struct {
         .paren_expr,  .string,     .string_expr,
         .binary_expr, .unary_expr, .builtin_call,
         .@"if",       .@"for",     .@"switch",
-        .lambda,      .process,
+        .lambda,      .process,    .@"continue",
+        .@"break",
     };
 
     node: *const cst.Node,
@@ -269,6 +270,8 @@ pub const Expr = struct {
         @"for": ForExpr,
         process: Process,
         lambda: Lambda,
+        @"continue": cst.Token,
+        @"break": cst.Token,
     };
 
     pub fn from(node: *const cst.Node) Expr {
@@ -291,6 +294,8 @@ pub const Expr = struct {
             .@"for" => .{ .@"for" = .from(self.node) },
             .lambda => .{ .lambda = .from(self.node) },
             .process => .{ .process = .from(self.node) },
+            .@"continue" => .{ .@"continue" = self.node.childToken(.continue_kw) orelse unreachable },
+            .@"break" => .{ .@"break" = self.node.childToken(.break_kw) orelse unreachable },
             else => unreachable,
         };
     }
