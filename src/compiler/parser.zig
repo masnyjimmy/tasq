@@ -651,7 +651,7 @@ pub const Parser = struct {
             .and_kw => 2,
             .eq_eq, .bang_eq, .lt, .gt, .lt_eq, .gt_eq => 3,
             .plus, .minus => 4,
-            .star, .slash => 5,
+            .star, .slash, .percent => 5,
             else => return null,
         };
         const a = x * 2;

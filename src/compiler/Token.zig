@@ -69,6 +69,7 @@ pub const Kind = enum {
     at, // @
     underscore, // _
     dollar, // $
+    percent, // %
 
     // trivia
     whitespace,

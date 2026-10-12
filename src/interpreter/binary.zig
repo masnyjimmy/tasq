@@ -25,7 +25,7 @@ pub fn evalBinary(allocator: std.mem.Allocator, op: ir.BinaryOp, left: Value, ri
         break :blk .{ left, right };
     };
     return switch (op) {
-        .add, .sub, .mul, .div => evalArithmetic(op, l, r),
+        .add, .sub, .mul, .div, .mod => evalArithmetic(op, l, r),
         .gt, .gt_eq, .lt, .lt_eq => evalOrdering(op, l, r),
         .eq, .neq => evalEquality(op, l, r),
         .and_op, .or_op => evalLogical(op, l, r),
@@ -59,6 +59,7 @@ fn evalArithmetic(op: ir.BinaryOp, left: Value, right: Value) Value {
                 .sub => left_value - right_value,
                 .div => left_value / right_value,
                 .mul => left_value * right_value,
+                .mod => @rem(left_value, right_value),
                 else => unreachable,
             };
 

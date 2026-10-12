@@ -281,6 +281,7 @@ pub const BinaryOp = enum {
     gt_eq,
     and_op,
     or_op,
+    mod,
 
     pub fn format(self: @This(), w: *std.Io.Writer) !void {
         try w.print("{s}", .{@tagName(self)});

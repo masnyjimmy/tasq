@@ -298,9 +298,10 @@ pub const Expr = struct {
 
 pub const BinaryExpr = struct {
     const OP_TOKENS: []const cst.Token.Kind = &.{
-        .plus,  .minus,   .star,   .slash,
-        .eq_eq, .bang_eq, .lt,     .gt,
-        .lt_eq, .gt_eq,   .and_kw, .or_kw,
+        .plus,    .minus,   .star,   .slash,
+        .eq_eq,   .bang_eq, .lt,     .gt,
+        .lt_eq,   .gt_eq,   .and_kw, .or_kw,
+        .percent,
     };
 
     node: *const cst.Node,
@@ -403,7 +404,7 @@ pub const StringPart = union(enum) {
     expr: Expr,
 
     fn next(it: *cst.Iterator) ?StringPart {
-        if (it.idx == 0 or it.idx == it.items.len - 1)
+        if (it.idx == 0)
             _ = it.expectToken(.backtick);
 
         if (it.eatToken(.lbrace) != null) {
@@ -416,10 +417,12 @@ pub const StringPart = union(enum) {
                 null;
         }
 
-        return if (it.expectToken(.string)) |token|
-            .{ .lit = token }
-        else
-            null;
+        if (it.eatToken(.string)) |token| {
+            return .{ .lit = token };
+        }
+
+        _ = it.expectToken(.backtick);
+        return null;
     }
 };
 

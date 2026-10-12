@@ -17,7 +17,7 @@ pub fn binaryResultType(op: ir.BinaryOp, left: Type, right: Type) Error!BinaryRe
     }
 
     return switch (op) {
-        .add, .sub, .mul, .div => if (commonNumeric(left, right)) |cmn|
+        .add, .sub, .mul, .div, .mod => if (commonNumeric(left, right)) |cmn|
             .{
                 .result_type = cmn,
                 .coerce_to = cmn,

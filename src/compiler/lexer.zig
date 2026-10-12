@@ -280,6 +280,9 @@ pub const Lexer = struct {
                 '$' => {
                     return self.consumeChar(.dollar);
                 },
+                '%' => {
+                    return self.consumeChar(.percent);
+                },
                 // Numbers
                 '0'...'9' => return self.lexNumber(),
 

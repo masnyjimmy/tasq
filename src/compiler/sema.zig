@@ -1141,6 +1141,7 @@ pub const Sema = struct {
                         .gt_eq => .gt_eq,
                         .and_kw => .and_op,
                         .or_kw => .or_op,
+                        .percent => .mod,
                         else => unreachable,
                     }
                 else
