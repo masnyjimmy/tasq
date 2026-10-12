@@ -14,13 +14,14 @@
 3. [Bindings](#3-bindings)
 4. [Expressions](#4-expressions)
    - [4.1 Operators](#41-operators)
-   - [4.2 String Interpolation](#42-string-interpolation)
+   - [4.2 String Literals and Interpolation](#42-string-literals-and-interpolation)
    - [4.3 If Expression](#43-if-expression)
    - [4.4 Switch Expression](#44-switch-expression)
    - [4.5 For Expression](#45-for-expression)
    - [4.6 Break and Continue Expressions](#46-break-and-continue-expressions)
    - [4.7 Built-in Functions](#47-built-in-functions)
    - [4.8 Fallback](#48-fallback)
+   - [4.9 Process Expressions](#49-process-expressions)
 5. [Settings](#5-settings)
 6. [Tasks](#6-tasks)
    - [6.1 Arguments](#61-arguments)
@@ -73,8 +74,8 @@ Runtime types are used for bindings and expressions evaluated at runtime.
 | `bool` | Boolean value | `true`, `false` |
 | `char` | A single character | `'a'` |
 | `number` | Integer or floating-point value | `42`, `3.14` |
-| `string` | UTF-8 text value | `"hello"` |
-| `list[T]` | Homogeneous ordered collection of type `T` | `[1, 2, 3]`, `[[1,2],[3,4]]` |
+| `string` | UTF-8 text value | `"hello"`, `` `hello {name}` `` (see [§4.2](#42-string-literals-and-interpolation)) |
+| `[]T` | Homogeneous ordered collection of type `T` | `[1, 2, 3]`, `[[1,2],[3,4]]` |
 | `lambda` | An anonymous, inline function value | `\|a, b\| a > b` |
 | `void` | The "no meaningful value" result of certain built-in functions | *(none — cannot be written as a literal)* |
 | `noreturn` | Special type given to a built-in function call, or to `break`/`continue`, that never produces a value (it always diverges) | *(none — cannot be written as a literal)* |
@@ -84,8 +85,8 @@ Runtime types are used for bindings and expressions evaluated at runtime.
 
 - There is **no implicit type casting**. Use built-in functions for any conversion.
 - All binding types are **inferred** from the assigned expression. No explicit type annotation is written for bindings.
-- `list[T]` may be **nested** — `T` can itself be a list type (e.g. `list[list[number]]`). All elements must share the same type.
-- A `list[T]` literal must **not be empty** at a point where its element type cannot be determined from context, since `T` cannot be inferred from an empty literal.
+- `[]T` may be **nested** — `T` can itself be a list type (e.g. `[][]number`). All elements must share the same type.
+- A `[]T` literal must **not be empty** at a point where its element type cannot be determined from context, since `T` cannot be inferred from an empty literal.
 - A `lambda` literal has the form `|<captures>| <expr>` (see [§4.7](#47-built-in-functions) for the notation used to describe a lambda's parameter and return types, e.g. `|T| -> bool`). A lambda's parameter types and return type are **inferred entirely from the context that expects it** — a lambda literal has no meaning on its own. Currently the only such context is a built-in function parameter declared to accept a lambda (e.g. `@any`). A lambda literal cannot be assigned to a binding, stored in a list, or used anywhere its expected type isn't already known.
 - `void` has no literal and cannot be produced directly — it only ever appears as the return type of certain built-in functions (e.g. `@print`). Unlike `noreturn`, `void` **is** a real value and behaves as an ordinary concrete type: it can be assigned to a binding, and two `void`-typed branches unify with each other in `if`/`switch`/`for` — but a `void` branch does **not** unify with a differently-typed branch. Pairing a `void` branch with, say, a `string` branch is a type error.
 - `noreturn` can never be assigned to a binding directly and has no literal form. It only ever appears as the return type of certain built-in functions ([§4.7](#47-built-in-functions)) or the `break`/`continue` expressions ([§4.6](#46-break-and-continue-expressions)). When a `noreturn`-typed branch appears alongside other branches — in an `if` expression ([§4.3](#43-if-expression)), `switch` expression ([§4.4](#44-switch-expression)), or `for` expression ([§4.5](#45-for-expression)) — it unifies with whatever type the other branches produce, since a diverging branch never actually yields a value to compare. If **every** branch is `noreturn`, the expression as a whole is `noreturn`.
@@ -93,7 +94,7 @@ Runtime types are used for bindings and expressions evaluated at runtime.
 
 ### 2.2 Meta Types
 
-Meta types are used exclusively in **attribute values** and **setting values**. They are always **compile-time literals** — no expressions, variables, built-in calls, or interpolation of any kind are allowed.
+Meta types are used exclusively in **attribute values** and **setting values**. They are always **compile-time literals** — no expressions, variables, built-in calls, or interpolation of any kind are allowed. In particular, a meta `string` must be written as a basic `"..."` literal; interpolated strings ([§4.2](#42-string-literals-and-interpolation)) and process calls are not allowed.
 
 | Type | Description | Literal Example |
 |------|-------------|-----------------|
@@ -102,12 +103,12 @@ Meta types are used exclusively in **attribute values** and **setting values**. 
 | `char` | A single character | `'a'` |
 | `number` | Numeric value | `16` |
 | `string` | Text | `"bash"` |
-| `list[T]` | Homogeneous list | `["bash", "-c"]` |
-| `tuple[T, U, ...]` | Fixed-size, heterogeneous sequence — each position has its own declared type | `("some_string", 25)` |
+| `[]T` | Homogeneous list | `["bash", "-c"]` |
+| `(T,U,...)` | Fixed-size, heterogeneous sequence — each position has its own declared type | `("some_string", 25)` |
 
-Meta type `list[T]` may be **empty** (`[]`) because the expected element type is always known from the consuming setting or attribute definition.
+Meta type `[]T` may be **empty** (`[]`) because the expected element type is always known from the consuming setting or attribute definition.
 
-A tuple's size is fixed by how many types are listed in `tuple[T, U, ...]`, and each position's value must match that position's declared type exactly — unlike `list[T]`, a tuple's element types need not all be the same. A tuple's element types may themselves be any meta type, including another `list[T]` or tuple. Note that `tuple[T, U, ...]` is the *type* notation; a tuple *literal* is written with parentheses, e.g. `("some_string", 25)` for a `tuple[string, number]`.
+A tuple's size is fixed by how many types are listed in `(T,U,...)`, and each position's value must match that position's declared type exactly — unlike `[]T`, a tuple's element types need not all be the same. A tuple's element types may themselves be any meta type, including a `[]T` or another tuple. Both the tuple *type* and the tuple *literal* are written with parentheses: the type lists types, e.g. `(string,number)`, while the literal lists values, e.g. `("some_string", 25)`.
 
 A setting's meta type may also be a **union** of two meta types, written `T | U`, meaning a value of either type is accepted. This is currently only used by the `dotenv` setting (§5).
 
@@ -119,8 +120,8 @@ Argument types are used in task and group parameter declarations. They are a res
 |---------------|--------------|:-----------:|-------|
 | `string` | `string` | ✓ | |
 | `number` | `number` | ✓ | Constrain to integers with `[int]` |
-| `string_list` | `list[string]` | | |
-| `number_list` | `list[number]` | | |
+| `string_list` | `[]string` | | |
+| `number_list` | `[]number` | | |
 | `flag` | `bool` | | Implicit default: `false` |
 
 **Notes:**
@@ -167,7 +168,7 @@ task example {
     // Task scope bindings
     prefix    := "build-"
     full_name := prefix + "output"
-    `echo {{full_name}}`
+    $`echo {full_name}`
 }
 ```
 
@@ -181,18 +182,18 @@ Expressions produce a typed value. They are used in binding declarations, task c
 
 | Category | Operators | Operand Type(s) | Result Type |
 |----------|-----------|-----------------|-------------|
-| Arithmetic | `+` `-` `*` `/` | `number` | `number` |
+| Arithmetic | `+` `-` `*` `/` `%` | `number` | `number` |
 | Comparison | `>` `<` `>=` `<=` | `number` | `bool` |
 | Equality | `==` `!=` | any matching type | `bool` |
 | Boolean | `and` `or` | `bool` | `bool` |
 | Boolean negation | `!` | `bool` | `bool` |
 | Unary minus | `-<expr>` | `number` | `number` |
-| List spread | `[...list, item, ...]` | list: `list[T]`, items: `T` | `list[T]` |
+| List spread | `[...list, item, ...]` | list: `[]T`, items: `T` | `[]T` |
 
 **Rules:**
 
 - There is **no implicit type coercion**. Operands must match the expected types exactly.
-- Precedence follows standard mathematical convention (`*` and `/` before `+` and `-`). Boolean operators have lower precedence than comparisons.
+- Precedence follows standard mathematical convention (`*`, `/` and `%` before `+` and `-`). Boolean operators have lower precedence than comparisons.
 
 **List spread example:**
 
@@ -201,26 +202,83 @@ base  := [1, 2, 3]
 extra := [...base, 4, 5]  // [1, 2, 3, 4, 5]
 ```
 
-### 4.2 String Interpolation
+**Modulo:**
 
-Inside `string` literals and backtick process calls, any expression may be embedded using double curly braces:
+`a % b` computes the remainder of dividing `a` by `b`, using truncated division:
 
-```
-"text {{<expression>}} text"
-`command {{<expression>}}`
-```
-
-The embedded expression is evaluated at runtime and converted to its string representation.
-
-**Examples:**
+- The result takes the **sign of the left operand** `a`. The sign of the divisor `b` does not affect the sign of the result.
+- A zero result produced from a negative left operand is negative zero, and is printed as `-0`.
+- A zero divisor does **not** raise an error; the result is `NaN` (currently printed as `-nan`).
 
 ```
-greeting := "Hello, {{name}}!"
-url      := "http://{{host}}:{{base_port + 1}}"
+a := [-3, 0, -5, 3, 3]
+b := [3, 3, 3, -3, 0]
 
-`echo "Running on {{@os()}} with {{worker_count}} workers"`
-`mkdir -p {{output_dir}}/{{@env("BUILD_ID", "local")}}`
+task test {
+    for(a, b) |l, r, idx| {
+        @print(`{idx + 1}. {l} % {r} = {l % r}`)
+    }
+}
 ```
+
+Output of `tasq test`:
+
+```
+1. -3 % 3 = -0
+2. 0 % 3 = 0
+3. -5 % 3 = -2
+4. 3 % -3 = 0
+5. 3 % 0 = -nan
+```
+
+### 4.2 String Literals and Interpolation
+
+tasq has three kinds of text literal:
+
+| Literal | Type | Interpolation | Description |
+|---------|------|:-------------:|-------------|
+| `"text"` | `string` | No | **Basic string.** Its content is taken as written (apart from escape sequences). `{` and `}` have no special meaning. |
+| `` `text {<expr>}` `` | `string` | Yes | **Interpolated string.** Any expression may be embedded using **single curly braces**. |
+| `'c'` | `char` | No | A single character. |
+
+Process calls are written with a `$` prefix on a backtick literal (`` $`command` ``) — see [§4.9](#49-process-expressions) and [§6.4](#64-process-calls). There is no `$"..."` form; only `` $`...` `` is valid.
+
+**Interpolation:**
+
+Inside an interpolated string, and inside a process call, any expression may be embedded using `{<expression>}`. The embedded expression is evaluated at runtime and converted to its string representation.
+
+```
+greeting := `Hello, {name}!`
+url      := `http://{host}:{base_port + 1}`
+
+$`echo "Running on {@os()} with {worker_count} workers"`
+$`mkdir -p {output_dir}/{@env("BUILD_ID") fallback "local"}`
+```
+
+Because `{` begins an interpolation in these literals, a literal brace must be escaped (`\{`, `\}`), for example when writing shell code that uses braces:
+
+```
+$`awk '\{print $1\}' input.txt`
+```
+
+**Escape sequences:**
+
+The following escape sequences are supported, and are valid in **every** literal kind (`"..."`, `` `...` ``, `` $`...` `` and `'c'`), even where an escape isn't strictly necessary (e.g. `\{` inside a basic `"..."` string):
+
+| Escape | Meaning |
+|--------|---------|
+| `\n` | Newline |
+| `\t` | Tab |
+| `\r` | Carriage return |
+| `\\` | Backslash |
+| `\"` | Double quote |
+| `\'` | Single quote |
+| ``\` `` | Backtick |
+| `\0` | Null character |
+| `\xNN` | Character with the two-digit hexadecimal code `NN` |
+| `\u{NNNN...}` | Unicode code point given as hexadecimal digits |
+| `\{` | Literal `{` (prevents interpolation) |
+| `\}` | Literal `}` |
 
 ### 4.3 If Expression
 
@@ -281,17 +339,17 @@ rgb := switch(color) {
 
 ### 4.5 For Expression
 
-`for` can be used as an expression that maps, filters, or otherwise processes one or more lists in lock-step, producing a new list. Because the result is always a list, a `for` expression is written **inside square brackets**:
+`for` can be used as an expression that maps, filters, or otherwise processes one or more lists in lock-step, producing a new list. A `for` expression is used wherever an expression is expected (for example, on the right-hand side of a binding) and is **not** wrapped in brackets:
 
 ```
-[for(<subjects>) |<captures>| <expr>]
+for(<subjects>) |<captures>| <expr>
 ```
 
 **Rules:**
 
 - `<subjects>` is one or more comma-separated list-valued expressions, iterated in lock-step. If the subjects don't all have the same length, iteration runs only for the length of the **shortest** one — no error is raised (see [§6.7](#67-for-statement) for an example).
 - `<captures>` binds an identifier to the current element of each corresponding subject, in order. Use `_` for a capture whose value isn't needed. The number of captures must equal the number of subjects, **or** the number of subjects **+ 1** — the extra, final capture receives the current 0-based iteration index as a `number` (see [§6.7](#67-for-statement)).
-- `<expr>` is evaluated once per iteration; its result becomes the corresponding element of the produced list. The overall result type is `list[T]`, where `T` is the type of `<expr>`.
+- `<expr>` is evaluated once per iteration; its result becomes the corresponding element of the produced list. The overall result type is `[]T`, where `T` is the type of `<expr>`.
 - `<expr>` may itself be an `if` or `switch` expression containing `break` or `continue` branches (both `noreturn` — see [§4.6](#46-break-and-continue-expressions)); such branches unify with whatever type the surviving branches produce, exactly as with `@error(...)`.
 
 **Example:**
@@ -299,9 +357,9 @@ rgb := switch(color) {
 ```
 input := [1, 2, 3]
 
-doubled := [for(input) |i| i * 2]
+doubled := for(input) |i| i * 2
 
-@print("{{doubled}}") // "[2, 4, 6]"
+@print(`{doubled}`) // "[2, 4, 6]"
 ```
 
 ### 4.6 Break and Continue Expressions
@@ -327,12 +385,12 @@ Both have type `noreturn` (see [§2.1](#21-runtime-types)). Like `@error(...)`, 
 for(numbers) |n| {
     if (n < 0) continue
     if (n > 100) break
-    @print("{{n}}")
+    @print(`{n}`)
 }
 ```
 
 ```
-positives := [for(numbers) |n| if (n < 0) continue else n]
+positives := for(numbers) |n| if (n < 0) continue else n
 ```
 
 ### 4.7 Built-in Functions
@@ -349,21 +407,21 @@ Built-in functions are called with an `@` prefix and may appear inside any expre
 | `@print(message: string)` | `void` | Prints `message`. Because its return type is `void`, `@print(...)` can be used directly as a statement without binding its result (see [§6.3](#63-task-body)). |
 | `@parse_number(str: string)` | `!number` | Parses `str` as a `number`, or returns an error if `str` isn't a valid numeric literal. |
 | `@len(str: string)` | `number` | Returns the number of characters in `str`. |
-| `@len(list: list[T])` | `number` | Returns the number of elements in `list`. |
-| `@split(str: string, sep: string)` | `list[string]` | Splits `str` into substrings wherever `sep` occurs. |
-| `@join(list: list[string], sep: string)` | `string` | Joins the elements of `list` into a single string, separated by `sep`. |
+| `@len(list: []T)` | `number` | Returns the number of elements in `list`. |
+| `@split(str: string, sep: string)` | `[]string` | Splits `str` into substrings wherever `sep` occurs. |
+| `@join(list: []string, sep: string)` | `string` | Joins the elements of `list` into a single string, separated by `sep`. |
 | `@lower(str: string)` | `string` | Returns `str` converted to lowercase. |
 | `@upper(str: string)` | `string` | Returns `str` converted to uppercase. |
 | `@contains(str: string, sub: string)` | `bool` | Returns `true` if `str` contains `sub`. |
 | `@starts_with(str: string, prefix: string)` | `bool` | Returns `true` if `str` begins with `prefix`. |
 | `@ends_with(str: string, postfix: string)` | `bool` | Returns `true` if `str` ends with `postfix`. |
 | `@replace(str: string, old: string, new: string)` | `string` | Returns a copy of `str` with every occurrence of `old` replaced by `new`. |
-| `@replace(list: list[T], old: T, new: T)` | `list[T]` | Returns a copy of `list` with every element equal to `old` replaced by `new`. |
-| `@all(list: list[T], predicate: \|T\| -> bool)` | `bool` | Returns `true` if `predicate` evaluates to `true` for every element of `list` (vacuously `true` for an empty list). |
-| `@any(array: list[T], predicate: \|T\| -> bool)` | `bool` | Returns `true` if `predicate` evaluates to `true` for at least one element of `array`, otherwise `false`. `predicate` is a lambda literal (see [§2.1](#21-runtime-types)); `\|T\| -> bool` denotes "a lambda taking one `T` and returning `bool`". |
-| `@reduce(list: list[T], init: T, combine: \|T, T\| -> T)` | `T` | Folds `list` into a single value: starting from `init`, repeatedly calls `combine(accumulator, element)` for each element in order, and returns the final accumulator. `\|T, T\| -> T` denotes "a lambda taking two `T`s (accumulator, then element) and returning a `T`". |
+| `@replace(list: []T, old: T, new: T)` | `[]T` | Returns a copy of `list` with every element equal to `old` replaced by `new`. |
+| `@all(list: []T, predicate: \|T\| -> bool)` | `bool` | Returns `true` if `predicate` evaluates to `true` for every element of `list` (vacuously `true` for an empty list). |
+| `@any(array: []T, predicate: \|T\| -> bool)` | `bool` | Returns `true` if `predicate` evaluates to `true` for at least one element of `array`, otherwise `false`. `predicate` is a lambda literal (see [§2.1](#21-runtime-types)); `\|T\| -> bool` denotes "a lambda taking one `T` and returning `bool`". |
+| `@reduce(list: []T, init: T, combine: \|T, T\| -> T)` | `T` | Folds `list` into a single value: starting from `init`, repeatedly calls `combine(accumulator, element)` for each element in order, and returns the final accumulator. `\|T, T\| -> T` denotes "a lambda taking two `T`s (accumulator, then element) and returning a `T`". |
 
-Several entries above share a name with different parameter types (`@len`, `@replace`) — the overload used is determined at compile time from the runtime type of the argument, the same way `list[T]` itself is generic over `T`.
+Several entries above share a name with different parameter types (`@len`, `@replace`) — the overload used is determined at compile time from the runtime type of the argument, the same way `[]T` itself is generic over `T`.
 
 Functions whose return type is `!T` (`@env`, `@parse_number`) can fail; see [§4.8 Fallback](#48-fallback) for the only way to obtain a usable value from them.
 
@@ -393,6 +451,31 @@ path := @env("PATH") fallback ""
 // Falls back to aborting the program (noreturn unifies with number)
 port := @parse_number(@env("PORT") fallback "8080") fallback @error("PORT must be numeric")
 ```
+
+### 4.9 Process Expressions
+
+A process call written as `` $`command` `` can be used as an **expression**. The command is run, and the expression evaluates to what the process wrote to stdout, as a `string`.
+
+```
+<binding> := $`<command>`
+```
+
+**Rules:**
+
+- Only `$` followed by a backtick literal is a process call. There is no `$"..."` form.
+- Process calls support the same `{<expr>}` interpolation and escape sequences as interpolated strings (see [§4.2](#42-string-literals-and-interpolation)).
+- A process call is a **process expression** whenever it appears where an expression is expected (a binding's right-hand side, an argument, inside an interpolation, and so on). A process call standing on its own as a task statement is a **process statement** instead ([§6.4](#64-process-calls)).
+- Unlike the statement form, a process expression is **not echoed**, and its stdout is **not** forwarded to the terminal — it is captured as the expression's value.
+- Whitespace is trimmed from the result: leading and trailing whitespace, including the final newline, is not part of the produced `string`.
+
+**Examples:**
+
+```
+greeting := $`echo "Hello"`            // "Hello"
+branch   := $`git rev-parse --abbrev-ref HEAD`
+```
+
+> **Work in progress:** the behavior of a process expression whose command fails (for example, exiting with a non-zero status), including how it interacts with `fail_fast` ([§5](#5-settings)) and `@status_code()` ([§4.7](#47-built-in-functions)), is not yet defined.
 
 ---
 
@@ -444,10 +527,10 @@ set script = ["zsh", "-c"]
 
 | Setting | Meta Type | Description |
 |---------|-----------|-------------|
-| `script` | `list[string]` | Command and arguments used to invoke each backtick process call. Example: `["sh", "-c"]`. |
+| `script` | `[]string` | Command and arguments used to invoke each process call. Example: `["sh", "-c"]`. |
 | `dotenv` | `bool \| string` | Whether to read a `.env` file into the environment. The boolean shorthand, `set dotenv`, enables reading the default `.env` file from `working_dir`. `set dotenv = "path/to/file"` also enables it, using `path/to/file` instead of the default. Default: `false` (not read). See [§10.4](#104-environment-attributes) for how loaded values interact with the `[env]` attribute and the pre-existing OS environment. |
 | `working_dir` | `string` | Sets the working directory tasq's spawned processes run in. Also used to resolve the default `.env` path for `dotenv`. Defaults to the directory `tasq` was invoked from if not set. |
-| `fail_fast` | `bool` | When `true`, a task aborts immediately if a process call (backtick invocation) exits with a non-zero status. Default: `false`. |
+| `fail_fast` | `bool` | When `true`, a task aborts immediately if a process call exits with a non-zero status. Default: `false`. |
 
 > Additional settings will be added in future versions.
 
@@ -501,7 +584,7 @@ See [§10.3 Modifier Attributes](#103-modifier-attributes) for all attributes ap
 
 ### 6.2 Argument Ordering
 
-An argument is **named** when it has a short name (`-x`), a long name (`--xyz`), or both — these are what a user types on the command line to identify it, as opposed to a positional argument, which is identified purely by its position. A user can control an argument's CLI names explicitly with attributes, e.g. `[short: 's', long: 'long']` (see [§10.3](#103-modifier-attributes)); otherwise they're assigned automatically (see below and [§9](#9-command-line-interface)).
+An argument is **named** when it has a short name (`-x`), a long name (`--xyz`), or both — these are what a user types on the command line to identify it, as opposed to a positional argument, which is identified purely by its position. A user can control an argument's CLI names explicitly with attributes, e.g. `[short: 's', long: "long"]` (see [§10.3](#103-modifier-attributes)); otherwise they're assigned automatically (see below and [§9](#9-command-line-interface)).
 
 Arguments in a task or group declaration must appear in the following order. Violating this order is a **compile-time semantic error**.
 
@@ -540,7 +623,7 @@ A task body may contain any combination of the following:
 | Element | Syntax |
 |---------|--------|
 | Binding declaration | `name := <expr>` |
-| Process call | `` `shell command` `` |
+| Process call | `` $`shell command` `` |
 | Conditional statement | `if / else if / else` |
 | Switch statement | `switch(...) { ... }` |
 | For statement | `for(...) \|...\| { ... }` |
@@ -550,15 +633,21 @@ Internally, if a line in a task body doesn't match any of the statement forms ab
 
 ### 6.4 Process Calls
 
-A single shell process is invoked by enclosing a command in backticks. String interpolation with `{{ }}` is supported:
+A single shell process is invoked by writing a command in a backtick literal prefixed with `$`. String interpolation with `{ }` and escape sequences are supported (see [§4.2](#42-string-literals-and-interpolation)):
 
 ```
-`echo "Hello, {{name}}!"`
-`cargo build --release`
-`mkdir -p {{output_dir}}/bin`
+$`echo "Hello, {name}!"`
+$`cargo build --release`
+$`mkdir -p {output_dir}/bin`
 ```
 
-Each backtick block is **one process invocation**. The command is run using the interpreter configured in the `script` setting, in the directory configured by the `working_dir` setting (§5), and aborts the task immediately on a non-zero exit status if `fail_fast` (§5) is enabled.
+Each `` $`...` `` literal is **one process invocation**. The command is run using the interpreter configured in the `script` setting, in the directory configured by the `working_dir` setting (§5), and aborts the task immediately on a non-zero exit status if `fail_fast` (§5) is enabled.
+
+**Process statement vs. process expression:**
+
+A process call standing on its own as a statement in a task body is a **process statement**. It **echoes the command itself** (after interpolation) and then sends the process's output to stdout.
+
+A process call used inside an expression — for example `out := $`echo "Hello"`` — is a **process expression**: it does not echo anything, and evaluates to the process's stdout as a `string`. See [§4.9](#49-process-expressions).
 
 ### 6.5 Conditional Statements
 
@@ -626,16 +715,16 @@ Where `<body>` is either a single statement or a block of statements enclosed in
 ```
 switch(color) {
     "red" => {
-        `echo "warm color"`
+        $`echo "warm color"`
     },
-    "blue" => `echo "cool color"`,
+    "blue" => $`echo "cool color"`,
     else => @error("Invalid color"),
 }
 ```
 
 ### 6.7 For Statement
 
-`for` used as a **statement** iterates over one or more lists in lock-step, running a block of statements for each element. Unlike the `for` expression (§4.5), it produces no value and is not wrapped in `[ ]`.
+`for` used as a **statement** iterates over one or more lists in lock-step, running a block of statements for each element. Unlike the `for` expression (§4.5), it produces no value.
 
 ```
 for(<subjects>) |<captures>| <stmt_block>
@@ -655,7 +744,7 @@ words   := ["one", "two", "three"]
 numbers := [1, 2, 3]
 
 for(words, numbers) |w, n| {
-    @print("{{n}} = {{w}}")
+    @print(`{n} = {w}`)
 }
 ```
 
@@ -663,7 +752,7 @@ for(words, numbers) |w, n| {
 
 ```
 for(words) |w, i| {
-    @print("{{i}}: {{w}}")
+    @print(`{i}: {w}`)
 }
 ```
 
@@ -672,7 +761,7 @@ for(words) |w, i| {
 ```
 // array1: 5 elements, array2: 10 elements, array3: 4 elements
 for(array1, array2, array3) |_, _, _, idx| {
-    @print("{{idx}}")
+    @print(`{idx}`)
 }
 // output: 0, 1, 2, 3  (4 iterations — bounded by the shortest subject, array3)
 ```
@@ -866,7 +955,14 @@ Or across multiple bracket pairs (equivalent):
 
 All attribute values use **meta types** — they are compile-time literals.
 
-Unless stated otherwise, an attribute may be applied **at most once** per element — once per argument, task, group, or setting. Applying the same attribute twice to the same element is a compile-time error. The current sole exception is `[env]` (§10.4), which may be repeated on the same task to set multiple environment variables.
+**Uniqueness:**
+
+Whether an attribute may be repeated is a **property of the attribute itself**. Every attribute is either:
+
+- **Unique** — it may be applied **at most once** per element (once per argument, task, group, or setting). Applying a unique attribute twice to the same element is a compile-time error.
+- **Repeatable** — it may be applied multiple times to the same element.
+
+Each attribute table in this section has a **Unique** column stating which of the two an attribute is.
 
 ---
 
@@ -874,11 +970,11 @@ Unless stated otherwise, an attribute may be applied **at most once** per elemen
 
 Platform attributes restrict the annotated element to a specific operating system. Elements with no platform attribute apply to **all platforms**.
 
-| Attribute | Platform |
-|-----------|----------|
-| `[windows]` | Windows |
-| `[linux]` | Linux |
-| `[macos]` | macOS |
+| Attribute | Platform | Unique |
+|-----------|----------|:------:|
+| `[windows]` | Windows | Yes |
+| `[linux]` | Linux | Yes |
+| `[macos]` | macOS | Yes |
 
 **Valid on:** `set` declarations, `group` definitions, `task` definitions.
 
@@ -887,17 +983,17 @@ Platform attributes restrict the annotated element to a specific operating syste
 ```
 [windows]
 task open {
-    `start https://example.com`
+    $`start https://example.com`
 }
 
 [linux]
 task open {
-    `xdg-open https://example.com`
+    $`xdg-open https://example.com`
 }
 
 [macos]
 task open {
-    `open https://example.com`
+    $`open https://example.com`
 }
 ```
 
@@ -905,10 +1001,10 @@ task open {
 
 ### 10.2 Documentation Attributes
 
-| Attribute | Meta Type | Description |
-|-----------|-----------|-------------|
-| `[desc: "text"]` | `string` | Human-readable description displayed in help output. |
-| `[private]` | *(none)* | Hides the task or group from CLI help/listing output. A private task can still be called normally — by name from another task, or directly from the command line — it is simply omitted from generated documentation. |
+| Attribute | Meta Type | Unique | Description |
+|-----------|-----------|:------:|-------------|
+| `[desc: "text"]` | `string` | Yes | Human-readable description displayed in help output. |
+| `[private]` | *(none)* | Yes | Hides the task or group from CLI help/listing output. A private task can still be called normally — by name from another task, or directly from the command line — it is simply omitted from generated documentation. |
 
 **Valid on:** `group` definitions, `task` definitions, task/group argument declarations. `[private]` is valid on `group` and `task` definitions only.
 
@@ -923,7 +1019,7 @@ task build(
     [desc: "Target platform triple"]
     target: string,
 ) {
-    `cargo build --release --jobs {{jobs}} --target {{target}}`
+    $`cargo build --release --jobs {jobs} --target {target}`
 }
 ```
 
@@ -933,12 +1029,12 @@ task build(
 // Internal helper task — callable, but hidden from `tasq --help`
 [private]
 task _prepare_workspace {
-    `mkdir -p .cache/build`
+    $`mkdir -p .cache/build`
 }
 
 task build {
     _prepare_workspace()
-    `cargo build --release`
+    $`cargo build --release`
 }
 ```
 
@@ -950,24 +1046,26 @@ Modifier attributes control CLI naming and value validation for argument declara
 
 #### Naming
 
-| Attribute | Meta Type | Description |
-|-----------|-----------|-------------|
-| `[long]` | *(none)* | Use the argument identifier as the long CLI name (`--identifier`) |
-| `[long: "name"]` | `string` | Use a custom string as the long CLI name |
-| `[long: null]` | `null` | Remove the long CLI name entirely |
-| `[short]` | *(none)* | Use the first letter of the identifier as the short CLI name (`-i`) |
-| `[short: 'c']` | `char` | Use a custom character as the short CLI name |
-| `[short: null]` | `null` | Remove the short CLI name entirely |
+| Attribute | Meta Type | Unique | Description |
+|-----------|-----------|:------:|-------------|
+| `[long]` | *(none)* | Yes | Use the argument identifier as the long CLI name (`--identifier`) |
+| `[long: "name"]` | `string` | Yes | Use a custom string as the long CLI name |
+| `[long: null]` | `null` | Yes | Remove the long CLI name entirely |
+| `[short]` | *(none)* | Yes | Use the first letter of the identifier as the short CLI name (`-i`) |
+| `[short: 'c']` | `char` | Yes | Use a custom character as the short CLI name |
+| `[short: null]` | `null` | Yes | Remove the short CLI name entirely |
+
+The rows above are different forms of two attributes, `long` and `short`; each of the two is unique.
 
 #### Validation
 
-| Attribute | Meta Type | Applicable Argument Types | Description |
-|-----------|-----------|--------------------------|-------------|
-| `[int]` | *(none)* | `number`, `number_list` | Require integer values only; reject floating-point input |
-| `[min: n]` | `number` | `number`, `number_list` | Minimum allowed value (inclusive) |
-| `[max: n]` | `number` | `number`, `number_list` | Maximum allowed value (inclusive) |
-| `[pattern: "regex"]` | `string` | `string`, `string_list` | Validate each value against a regular expression |
-| `[max_items: n]` | `number` | `string_list`, `number_list` | Maximum number of list items accepted |
+| Attribute | Meta Type | Unique | Applicable Argument Types | Description |
+|-----------|-----------|:------:|--------------------------|-------------|
+| `[int]` | *(none)* | Yes | `number`, `number_list` | Require integer values only; reject floating-point input |
+| `[min: n]` | `number` | Yes | `number`, `number_list` | Minimum allowed value (inclusive) |
+| `[max: n]` | `number` | Yes | `number`, `number_list` | Maximum allowed value (inclusive) |
+| `[pattern: "regex"]` | `string` | Yes | `string`, `string_list` | Validate each value against a regular expression |
+| `[max_items: n]` | `number` | Yes | `string_list`, `number_list` | Maximum number of list items accepted |
 
 > Additional validation attributes will be added in future versions.
 
@@ -994,7 +1092,7 @@ task create_user(
     [long, short: null]
     verbose: flag,
 ) {
-    `echo "Creating {{username}}, age {{age}}"`
+    $`echo "Creating {username}, age {age}"`
 }
 ```
 
@@ -1004,17 +1102,15 @@ task create_user(
 
 Environment attributes set environment variables in a task's scope.
 
-| Attribute | Meta Type | Description |
-|-----------|-----------|-------------|
-| `[env: (string, string)]` | `tuple[string, string]` | Sets an environment variable for this task: the first tuple element is the variable name, the second is its value. |
+| Attribute | Meta Type | Unique | Description |
+|-----------|-----------|:------:|-------------|
+| `[env: (string,string)]` | `(string,string)` | No (repeatable) | Sets an environment variable for this task: the first tuple element is the variable name, the second is its value. May be written multiple times on the same task, once per variable, to set several environment variables at once. |
 
 **Valid on:** `task` definitions only.
 
-**Unique:** **No** — this is the one exception to the general uniqueness rule in [§10](#10-attributes). `[env]` may be written multiple times on the same task, once per variable, to set several environment variables at once.
-
 **Scope:**
 
-- An `[env]` variable is visible to `@env(...)` calls and to spawned processes (backtick calls, §6.4) anywhere within the task it's declared on.
+- An `[env]` variable is visible to `@env(...)` calls and to spawned processes (process calls, §6.4) anywhere within the task it's declared on.
 - If that task calls another task, the variable is **inherited** into the callee. It reverts once control returns back to the caller — `[env]` is scoped dynamically to the call subtree rooted at the declaring task, not a permanent, run-wide mutation. If a called task declares its own `[env]` for the same name, that value takes precedence for the duration of that call, and the earlier one resumes when it returns, following ordinary nested-scope shadowing.
 
 **Precedence:**
@@ -1031,7 +1127,7 @@ When the same environment variable name could come from more than one source, ta
 [env: ("NODE_ENV", "production")]
 [env: ("LOG_LEVEL", "warn")]
 task deploy {
-    `echo "Running in {{@env("NODE_ENV") fallback "unknown"}}"`
+    $`echo "Running in {@env("NODE_ENV") fallback "unknown"}"`
     build() // NODE_ENV and LOG_LEVEL are inherited here too
 }
 ```
@@ -1044,13 +1140,24 @@ task deploy {
 
 | Operator | Category | Operands | Result |
 |----------|----------|----------|--------|
-| `+` `-` `*` `/` | Arithmetic | `number` | `number` |
+| `+` `-` `*` `/` `%` | Arithmetic | `number` | `number` |
 | `>` `<` `>=` `<=` | Comparison | `number` | `bool` |
 | `==` `!=` | Equality | any (matching) | `bool` |
 | `and` `or` | Boolean | `bool` | `bool` |
 | `!` | Negation | `bool` | `bool` |
 | `-x` | Unary minus | `number` | `number` |
-| `[...a, b]` | List spread | `list[T]` + `T` items | `list[T]` |
+| `[...a, b]` | List spread | `[]T` + `T` items | `[]T` |
+
+### Literal Summary
+
+| Literal | Type | Interpolation | Notes |
+|---------|------|:-------------:|-------|
+| `"text"` | `string` | No | Basic string |
+| `` `text {expr}` `` | `string` | Yes (`{ }`) | Interpolated string |
+| `'c'` | `char` | No | Single character |
+| `` $`command {expr}` `` | process call | Yes (`{ }`) | Statement: echoes, output to stdout. Expression: not echoed, yields trimmed stdout as `string` |
+
+Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` `` `\0` `\xNN` `\u{NNNN...}` `\{` `\}`
 
 ### Scope Resolution Summary
 
@@ -1062,14 +1169,14 @@ task deploy {
 
 ### Attribute Validity Summary
 
-| Attribute | `task` | `group` | argument | `set` |
-|-----------|:------:|:-------:|:--------:|:-----:|
-| `[windows]` `[linux]` `[macos]` | ✓ | ✓ | | ✓ |
-| `[desc]` | ✓ | ✓ | ✓ | |
-| `[private]` | ✓ | ✓ | | |
-| `[long]` `[short]` | | | ✓ | |
-| `[int]` `[min]` `[max]` `[pattern]` `[max_items]` | | | ✓ | |
-| `[env]` (repeatable — see §10) | ✓ | | | |
+| Attribute | `task` | `group` | argument | `set` | Unique |
+|-----------|:------:|:-------:|:--------:|:-----:|:------:|
+| `[windows]` `[linux]` `[macos]` | ✓ | ✓ | | ✓ | Yes |
+| `[desc]` | ✓ | ✓ | ✓ | | Yes |
+| `[private]` | ✓ | ✓ | | | Yes |
+| `[long]` `[short]` | | | ✓ | | Yes |
+| `[int]` `[min]` `[max]` `[pattern]` `[max_items]` | | | ✓ | | Yes |
+| `[env]` | ✓ | | | | No (repeatable) |
 
 ### Type System at a Glance
 
@@ -1091,3 +1198,4 @@ The following are reserved for future versions and not currently part of the lan
 - **Additional built-in functions** — type conversion utilities and other helpers
 - **Additional settings** — further interpreter configuration options
 - **Additional modifier attributes** — extended argument validation
+- **Process expression error handling** — defined behavior for a failing process expression, and its interaction with `fail_fast` and `@status_code()` (see [§4.9](#49-process-expressions))
