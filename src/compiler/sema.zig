@@ -1090,7 +1090,7 @@ pub const Sema = struct {
                 const parts = try self.arena.allocator().alloc(ir.StringPart, 1);
                 parts[0] = .{
                     .lit = if (string.lit) |token|
-                        token.lexeme
+                        try text.processString(self.arena.allocator(), token.lexeme)
                     else
                         "",
                 };
@@ -1743,7 +1743,10 @@ pub const Sema = struct {
                     try out.append(
                         self.arena.allocator(),
                         .{
-                            .lit = lit.lexeme,
+                            .lit = try text.processString(
+                                self.arena.allocator(),
+                                lit.lexeme,
+                            ),
                         },
                     );
                 },

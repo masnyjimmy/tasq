@@ -103,6 +103,10 @@ const LiteralParser = struct {
                 self.pos += 2;
                 return '\'';
             },
+            '{', '}' => |ch| {
+                self.pos += 2;
+                return ch;
+            },
             '0' => {
                 self.pos += 2;
                 return 0;
