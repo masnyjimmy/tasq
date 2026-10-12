@@ -906,14 +906,7 @@ pub const Parser = struct {
     fn unexpectedNode(self: *Parser, follow: FollowSet, comptime fmt: []const u8, args: anytype) Error!void {
         try self.err(fmt, args);
 
-        if (try self.atHardStop()) {
-            try self.missing();
-            return;
-        }
-
         try self.open();
-
-        // try self.skipOne(); FIX: not sure if I should do it but who knows lol
         while (!try self.atHardStop() and !follow.contains(try self.peek()))
             try self.skipOne();
 
