@@ -507,6 +507,24 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
             };
         },
         .lambda => |lambda| .{ .lambda = lambda },
+        .process => |process| {
+            const proc_str = try self.resolveString(scope, process);
+            var aw: std.Io.Writer.Allocating = .init(scope.arena.allocator());
+
+            try self.handleProcess(
+                proc_str,
+                false,
+                &aw.writer,
+            );
+
+            const result = std.mem.trim(
+                u8,
+                aw.written(),
+                &std.ascii.whitespace,
+            );
+
+            return .{ .string = result };
+        },
         .@"continue" => Error.Continue,
         .@"break" => Error.Break,
     };
