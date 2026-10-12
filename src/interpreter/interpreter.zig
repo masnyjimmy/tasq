@@ -471,7 +471,6 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
         },
         .unary => |unary| {
             const operand = try self.evaluateExpr(scope, &unary.operand);
-            std.debug.assert(operand.typeOf() == .bool);
 
             switch (unary.op) {
                 .not_op => {
