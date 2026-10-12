@@ -1292,6 +1292,21 @@ pub const Sema = struct {
                     .is_static = false,
                 };
             },
+            inline .@"continue", .@"break" => |token, tag| {
+                if (self.loop_depth == 0) {
+                    try self.diagnostics.err(
+                        token.span,
+                        "'{t}' outside loop",
+                        .{tag},
+                    );
+                }
+
+                return .{
+                    .expr = @unionInit(ir.Expr, @tagName(tag), {}),
+                    .type = .noreturn,
+                    .is_static = true,
+                };
+            },
         };
     }
 
