@@ -59,7 +59,8 @@ pub const NodeKind = enum {
     @"for",
     subjects,
     captures,
-
+    @"continue",
+    @"break",
     name,
     path,
 

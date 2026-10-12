@@ -19,10 +19,10 @@ const PARAM_TYPE_START: FollowSet = .set(&.{
     .lbracket, .string_type, .number_type, .flag_type,
 });
 const EXPR_START: FollowSet = .set(&.{
-    .true_kw,   .false_kw, .number,   .ident,
-    .lparen,    .quote,    .backtick, .lbracket,
-    .switch_kw, .if_kw,    .at,       .not_kw,
-    .minus,     .dollar,
+    .true_kw,   .false_kw, .number,      .ident,
+    .lparen,    .quote,    .backtick,    .lbracket,
+    .switch_kw, .if_kw,    .at,          .not_kw,
+    .minus,     .dollar,   .continue_kw, .break_kw,
 });
 const STMT_START: FollowSet = FollowSet.set(&.{
     .ident,  .if_kw,  .switch_kw,
@@ -712,6 +712,8 @@ pub const Parser = struct {
             .switch_kw => try self.parseSwitch(.expr, follow),
             .at => try self.parseBuiltin(follow),
             .if_kw => try self.parseIfExpr(follow),
+            .continue_kw => try self.advanceAs(.@"continue"),
+            .break_kw => try self.advanceAs(.@"break"),
             else => |tag| try self.unexpectedNode(
                 follow,
                 "expected an expression, found '{t}'",
