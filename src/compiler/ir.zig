@@ -119,12 +119,18 @@ pub const StatementBlock = struct {
 
 pub const Statement = union(enum) {
     decl: *Decl,
-    process: Process,
+    process: ProcessStmt,
     task_call: TaskCall,
     for_stmt: ForStmt,
     switch_stmt: SwitchStmt,
     if_stmt: IfStmt,
     expr: Expr, // else
+};
+
+pub const ProcessStmt = struct {
+    nofail: bool = false,
+    noecho: ?bool = null,
+    command: String,
 };
 
 pub const Capture = struct {
@@ -159,8 +165,6 @@ pub const Decl = struct {
     scope: *Scope,
     is_static: bool, // inferred by sema
 };
-
-pub const Process = String;
 
 pub const TaskCall = struct {
     pub const Arg = union(enum) {
@@ -198,9 +202,15 @@ pub const Expr = union(enum) {
     for_expr: *ForExpr,
     builtin_call: *BuiltinCall,
     lambda: *Lambda,
-    process: Process,
+    process: *ProcessExpr,
     @"continue",
     @"break",
+};
+
+pub const ProcessExpr = struct {
+    nofail: bool = false,
+    command: String,
+    fallback: ?Expr,
 };
 
 pub const Lambda = struct {

@@ -707,9 +707,27 @@ pub const Sema = struct {
                 .decl = try self.analyseBindingDecl(binding, scope),
             },
             .process => |proc| {
+                const attributes_result = try AttributesResolver.resolve(self, .process_stmt, proc.attributes);
+                std.debug.assert(attributes_result.platforms.count() == 0);
+
+                const nofail = attributes_result.attributes.contains(.nofail);
+                const noecho = if (attributes_result.attributes.getAssertOne(.noecho)) |noecho|
+                    if (noecho) |value|
+                        value.bool
+                    else
+                        true
+                else
+                    null;
+
                 const result = try self.analyseStringExpr(proc.string, scope);
 
-                return .{ .process = result.expr };
+                return .{
+                    .process = .{
+                        .nofail = nofail,
+                        .noecho = noecho,
+                        .command = result.expr,
+                    },
+                };
             },
             .task_call => |task_call| .{
                 .task_call = try self.analyseTaskCall(task_call, scope),
@@ -1284,10 +1302,49 @@ pub const Sema = struct {
                 };
             },
             .process => |process| {
+                const attributes = try AttributesResolver.resolveAssertNoPlatform(self, .process_expr, process.attributes);
+
                 const result = try self.analyseStringExpr(process.string, scope);
 
+                var result_type: Type = .string;
+
+                const nofail = attributes.contains(.nofail);
+
+                const fallback: ?ir.Expr = blk: {
+                    const fallback = process.fallback orelse break :blk null;
+
+                    if (nofail) {
+                        try self.diagnostics.err(
+                            process.fallback.?.node.span,
+                            "fallback with nofail not supported",
+                            .{},
+                        );
+                    }
+
+                    const fallback_expr = try self.analyseExpr(
+                        fallback.expr orelse return Error.Incomplete,
+                        scope,
+                    );
+                    result_type = Type.unify(result_type, fallback_expr.type) orelse rt: {
+                        try self.diagnostics.err(
+                            fallback.expr.?.node.span,
+                            "invalid fallback expression value type, expected 'string', got '{f}'",
+                            .{fallback_expr.type},
+                        );
+                        break :rt result_type;
+                    };
+
+                    break :blk fallback_expr.expr;
+                };
+
+                const ptr = try self.create(ir.ProcessExpr, .{
+                    .nofail = nofail,
+                    .command = result.expr,
+                    .fallback = fallback,
+                });
+
                 return .{
-                    .expr = .{ .process = result.expr },
+                    .expr = .{ .process = ptr },
                     .type = result.type,
                     .is_static = false,
                 };
