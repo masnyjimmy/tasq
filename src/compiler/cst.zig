@@ -20,7 +20,9 @@ pub const NodeKind = enum {
     attribute,
 
     stmt_block,
-    process,
+    //TODO: try to prevent this separation
+    process_stmt,
+    process_expr,
 
     binding,
     task_call,

@@ -390,7 +390,7 @@ pub const Parser = struct {
                     },
                 }
             },
-            .dollar => try self.parseProcess(follow),
+            .dollar => try self.parseProcess(follow, .stmt),
             .if_kw => try self.parseIfStmt(follow),
             .switch_kw => try self.parseSwitch(.stmt, follow),
             .for_kw => try self.parseFor(.stmt, follow),
@@ -414,13 +414,24 @@ pub const Parser = struct {
         }
     }
 
-    fn parseProcess(self: *Parser, follow: FollowSet) Error!void {
+    fn parseProcess(self: *Parser, follow: FollowSet, comptime target: enum { stmt, expr }) Error!void {
         try self.open();
 
         try self.expect(.dollar, follow.with(&.{.backtick}));
+        if (try self.at(.lbracket)) {
+            try self.parseAttributes(follow);
+        }
         try self.parseStringExpr(follow);
 
-        try self.close(.process);
+        switch (target) {
+            .expr => {
+                if (try self.at(.fallback_kw))
+                    try self.parseFallback(follow);
+
+                try self.close(.process_expr);
+            },
+            .stmt => try self.close(.process_stmt),
+        }
     }
 
     fn parseTaskCall(self: *Parser, follow: FollowSet) Error!void {
@@ -691,7 +702,7 @@ pub const Parser = struct {
 
                 try self.close(.paren_expr);
             },
-            .dollar => try self.parseProcess(follow),
+            .dollar => try self.parseProcess(follow, .expr),
             .backtick => try self.parseStringExpr(follow),
             .quote => try self.parseString(follow),
             .lbracket => {
