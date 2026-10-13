@@ -157,7 +157,26 @@ const attr_specs: []const Spec = &.{
     },
 };
 
-pub const definitions = Attributes(platform_specs ++ attr_specs);
+const process_specs: []const Spec = &.{
+    .{
+        .name = "nofail",
+        .value_types = &.{},
+        .allow_default = true,
+        .unique = true,
+        .kind = .modifier,
+        .valid_for = &.{ .process_stmt, .process_expr },
+    },
+    .{
+        .name = "noecho",
+        .value_types = &.{.bool},
+        .allow_default = true,
+        .unique = true,
+        .kind = .modifier,
+        .valid_for = &.{.process_stmt},
+    },
+};
+
+pub const definitions = Attributes(platform_specs ++ attr_specs ++ process_specs);
 
 fn Attributes(comptime specs: []const Spec) type {
     const AttributeType = blk: {
