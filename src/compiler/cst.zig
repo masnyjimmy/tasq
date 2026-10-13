@@ -52,7 +52,7 @@ pub const NodeKind = enum {
 
     builtin_call,
     builtin_call_args,
-    builtin_call_fallback,
+    fallback,
 
     @"switch",
     switch_body,

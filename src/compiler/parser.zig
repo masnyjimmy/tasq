@@ -733,6 +733,15 @@ pub const Parser = struct {
         }
     }
 
+    fn parseFallback(self: *Parser, follow: FollowSet) Error!void {
+        try self.open();
+
+        try self.expect(.fallback_kw, follow.withoutSet(EXPR_START));
+        try self.parseExpr(follow);
+
+        try self.close(.fallback);
+    }
+
     fn parseLambdaExpr(self: *Parser, follow: FollowSet) Error!void {
         try self.open();
         try self.parseCaptures(follow.withSet(EXPR_START));
@@ -766,13 +775,8 @@ pub const Parser = struct {
         try self.expect(.ident, follow.with(&.{.lparen}));
         try self.parseBuiltinArgs(follow.withSet(EXPR_START).with(&.{.fallback_kw}));
 
-        if (try self.eat(.fallback_kw)) {
-            try self.open();
-
-            try self.parseExpr(follow);
-
-            try self.close(.builtin_call_fallback);
-        }
+        if (try self.at(.fallback_kw))
+            try self.parseFallback(follow);
 
         try self.close(.builtin_call);
     }
