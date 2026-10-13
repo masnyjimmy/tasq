@@ -133,6 +133,8 @@ pub fn printTasksList(ctx: *const Context, source_filepath: []const u8) !void {
             }
         }
     }
+
+    try p.print(ctx.allocator, "\n", .{});
 }
 
 pub fn printTaskUsage(ctx: *const Context, source_filepath: []const u8, task_id: []const u8) !void {
@@ -334,6 +336,8 @@ pub fn printTaskUsage(ctx: *const Context, source_filepath: []const u8, task_id:
             }
         }
     }
+
+    try ctx.printer.print(ctx.allocator, "\n", .{});
 }
 
 const TaskArgumentParser = struct {
