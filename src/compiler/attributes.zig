@@ -227,6 +227,8 @@ fn Attributes(comptime specs: []const Spec) type {
             task,
             group,
             setting,
+            process_stmt,
+            process_expr,
             argument: ArgType,
 
             fn validate(self: *const Target, vf: *const ValidFor) bool {
@@ -277,12 +279,21 @@ const Spec = struct {
     valid_for: []const ValidFor,
 };
 
-const TargetType = enum { task, group, setting, argument };
+const TargetType = enum {
+    task,
+    group,
+    setting,
+    process_stmt,
+    process_expr,
+    argument,
+};
 
 pub const ValidFor = union(TargetType) {
     task,
     group,
     setting,
+    process_stmt,
+    process_expr,
     argument: std.EnumSet(ArgType),
 
     pub const any_argument: ValidFor = .{ .argument = .initEmpty() };
