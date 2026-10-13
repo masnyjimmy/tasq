@@ -1882,223 +1882,158 @@ pub const Sema = struct {
         };
     }
 
-    fn analyseTaskCall(self: *Sema, task_call: ast.TaskCall, scope: *Scope) Error!ir.TaskCall {
+    /// Resolves which task a call refers to. Flat early-returns instead of nested labeled blocks.
+    fn resolveCallee(self: *Sema, task_call: ast.TaskCall, scope: *Scope) Error!*ir.Task {
         const task_name = task_call.task.string() orelse return Error.Incomplete;
 
-        const task: *ir.Task = blk: {
-            switch (task_call.scope) {
-                .closest => {
-                    if (scope.resolve(task_name, .task)) |symbol| {
-                        std.debug.assert(symbol.origin == .task);
-                        break :blk symbol.origin.task;
-                    } else {
-                        try self.diagnostics.err(
-                            task_call.node.trimmedSpan(),
-                            "unknown task '{s}'",
-                            .{task_name},
-                        );
-                        return Error.Incomplete;
-                    }
-                },
-                .root => {
-                    if (scope.root().resolve(task_name, .task)) |symbol| {
-                        break :blk symbol.origin.task;
-                    } else {
-                        try self.diagnostics.err(
-                            task_call.node.trimmedSpan(),
-                            "unknown task '::{s}'",
-                            .{task_name},
-                        );
-                        return Error.Incomplete;
-                    }
-                },
-                .group => |group_name| {
-                    const group_name_str = group_name.string() orelse return Error.Incomplete;
+        switch (task_call.scope) {
+            .closest => {
+                const symbol = scope.resolve(task_name, .task) orelse {
+                    try self.diagnostics.err(
+                        task_call.node.trimmedSpan(),
+                        "unknown task '{s}'",
+                        .{task_name},
+                    );
+                    return Error.Incomplete;
+                };
+                return symbol.origin.task;
+            },
+            .root => {
+                const symbol = scope.root().resolve(task_name, .task) orelse {
+                    try self.diagnostics.err(
+                        task_call.node.trimmedSpan(),
+                        "unknown task '::{s}'",
+                        .{task_name},
+                    );
+                    return Error.Incomplete;
+                };
+                return symbol.origin.task;
+            },
+            .group => |group_name| {
+                const group_name_str = group_name.string() orelse return Error.Incomplete;
 
-                    const group = grp: {
-                        if (scope.root().resolve(group_name_str, .group)) |symbol| {
-                            std.debug.assert(symbol.origin == .group);
-                            break :grp symbol.origin.group;
-                        } else {
-                            try self.diagnostics.err(
-                                group_name.node.trimmedSpan(),
-                                "unknown group '{s}'",
-                                .{group_name_str},
-                            );
-                        }
-                        return Error.Incomplete;
-                    };
+                const group_symbol = scope.root().resolve(group_name_str, .group) orelse {
+                    try self.diagnostics.err(
+                        group_name.node.trimmedSpan(),
+                        "unknown group '{s}'",
+                        .{group_name_str},
+                    );
+                    return Error.Incomplete;
+                };
 
-                    const task = tsk: {
-                        if (group.scope.resolveLocal(task_name, .task)) |symbol| {
-                            break :tsk symbol.origin.task;
-                        } else {
-                            try self.diagnostics.err(
-                                task_call.task.node.trimmedSpan(),
-                                "unknown task '{s}::{s}'",
-                                .{ group_name_str, task_name },
-                            );
-                        }
-                        return Error.Incomplete;
-                    };
+                const symbol = group_symbol.origin.group.scope.resolveLocal(task_name, .task) orelse {
+                    try self.diagnostics.err(
+                        task_call.task.node.trimmedSpan(),
+                        "unknown task '{s}::{s}'",
+                        .{ group_name_str, task_name },
+                    );
+                    return Error.Incomplete;
+                };
+                return symbol.origin.task;
+            },
+        }
+    }
 
-                    break :blk task;
-                },
-            }
-        };
+    /// Finds a parameter by identifier: the task's own arguments first, then its group's shared ones.
+    fn findParam(task: *const ir.Task, name: []const u8) ?*ir.Argument {
+        for (task.args) |arg| if (std.mem.eql(u8, arg.name, name)) return arg;
+        if (task.group) |g| for (g.args) |arg| if (std.mem.eql(u8, arg.name, name)) return arg;
+        return null;
+    }
 
+    /// For a parameter the call did not supply: use its default, or report it as missing.
+    fn fillMissing(
+        self: *Sema,
+        args: *ir.TaskCall.ArgsMap,
+        arg: *ir.Argument,
+        task_call: ast.TaskCall,
+    ) Error!void {
+        if (args.contains(arg.name)) return;
+
+        if (arg.default) |def| {
+            try args.put(self.arena.allocator(), arg.name, .{ .default = def });
+        } else {
+            try self.diagnostics.err(
+                task_call.node.trimmedSpan(),
+                "missing argument: '{s}'",
+                .{arg.name},
+            );
+        }
+    }
+
+    fn analyseTaskCall(self: *Sema, task_call: ast.TaskCall, scope: *Scope) Error!ir.TaskCall {
+        const task = try self.resolveCallee(task_call, scope);
+        const alloc = self.arena.allocator();
+
+        // A call to a task of the same group from inside that group already has
+        // the group's shared arguments in scope, so they may be omitted.
         const is_same_group_call = task_call.scope == .closest and task.group != null;
 
         var args: ir.TaskCall.ArgsMap = .empty;
+        var next_positional: usize = 0;
+        var seen_named = false;
 
-        const in_args = try task_call.args.collect(self.arena.allocator());
+        // One pass over the call's arguments. Each one is mapped to a parameter,
+        // either by name or, if it has no name, by its position.
+        for (try task_call.args.collect(alloc)) |in_arg| {
+            const arg = in_arg.unwrap() orelse continue;
+            const span = arg.node.trimmedSpan();
+            const value_node = arg.value orelse return Error.Incomplete;
 
-        const pos_count = blk: {
-            for (in_args, 0..) |in_arg, idx| {
-                const arg = in_arg.unwrap() orelse continue;
-                if (arg.name == null) break :blk idx;
+            const param: *ir.Argument = if (arg.name) |name_node| blk: {
+                seen_named = true;
+                const name = name_node.string() orelse return Error.Incomplete;
+                break :blk findParam(task, name) orelse {
+                    try self.diagnostics.err(span, "unknown argument '{s}'", .{name});
+                    continue;
+                };
+            } else blk: {
+                if (seen_named) {
+                    try self.diagnostics.err(span, "positional argument cannot follow a named argument", .{});
+                    continue;
+                }
 
-                const result = try self.analyseExpr(
-                    arg.value orelse return Error.Incomplete,
-                    scope,
-                );
+                const idx = next_positional;
+                next_positional += 1;
 
                 if (idx >= task.args.len) {
                     try self.diagnostics.err(
-                        arg.node.trimmedSpan(),
-                        "invalid positional arguments count, got '{}', expected '{}'",
+                        span,
+                        "invalid positional arguments count, got '{}', expected at most '{}'",
                         .{ idx + 1, task.args.len },
                     );
-                    return Error.Incomplete;
+                    continue;
                 }
-
-                const t = task.args[idx];
-
-                if (!Type.eq(t.type.typeOf(), result.type)) {
-                    try self.diagnostics.err(
-                        arg.node.trimmedSpan(),
-                        "invalid argument type, got '{f}', expected '{f}'",
-                        .{ result.type, t.type.typeOf() },
-                    );
-                    return Error.Incomplete;
-                }
-
-                try args.put(
-                    self.arena.allocator(),
-                    t.name,
-                    .{ .value = result.expr },
-                );
-            }
-            break :blk in_args.len;
-        };
-
-        const NamedArgEntry = struct {
-            arg: *ir.Argument,
-            from_group: bool,
-        };
-
-        var named_args = blk: {
-            var out: std.array_hash_map.String(NamedArgEntry) = .empty;
-
-            try out.ensureTotalCapacity(
-                self.arena.allocator(),
-                (task.args.len - pos_count) + if (task.group) |g| g.args.len else 0,
-            );
-
-            for (task.args[pos_count..]) |arg|
-                out.putAssumeCapacity(
-                    arg.name,
-                    .{
-                        .arg = arg,
-                        .from_group = false,
-                    },
-                );
-
-            if (task.group) |g|
-                for (g.args) |arg|
-                    out.putAssumeCapacity(
-                        arg.name,
-                        .{
-                            .arg = arg,
-                            .from_group = true,
-                        },
-                    );
-
-            break :blk out;
-        };
-
-        for (in_args[pos_count..]) |in_arg| {
-            const arg = in_arg.unwrap() orelse continue;
-            const arg_name = if (arg.name) |name|
-                name.string() orelse return Error.Incomplete
-            else
-                return Error.Incomplete;
-
-            if (args.contains(arg_name)) {
-                try self.diagnostics.err(
-                    arg.node.trimmedSpan(),
-                    "duplicate argument '{s}'",
-                    .{arg_name},
-                );
-                continue;
-            }
-
-            const target_arg = if (named_args.fetchSwapRemove(arg_name)) |kv|
-                kv.value.arg
-            else {
-                try self.diagnostics.err(
-                    arg.node.trimmedSpan(),
-                    "unknown argument '{s}'",
-                    .{arg_name},
-                );
-                continue;
+                break :blk task.args[idx];
             };
 
-            const value = try self.analyseExpr(
-                arg.value orelse return Error.Incomplete,
-                scope,
-            );
+            if (args.contains(param.name)) {
+                try self.diagnostics.err(span, "duplicate argument '{s}'", .{param.name});
+                continue;
+            }
 
-            if (value.type.eq(target_arg.type.typeOf()) == false) {
+            const value = try self.analyseExpr(value_node, scope);
+            const expected = param.type.typeOf();
+
+            // Report the mismatch but still record the argument, so it is not
+            // additionally reported as "missing".
+            if (!value.type.eq(expected)) {
                 try self.diagnostics.err(
-                    arg.value.?.node.trimmedSpan(),
-                    "invalid argument value type, got '{f}', expected '{f}'",
-                    .{
-                        value.type,
-                        target_arg.type.typeOf(),
-                    },
+                    value_node.node.trimmedSpan(),
+                    "invalid argument type for '{s}', got '{f}', expected '{f}'",
+                    .{ param.name, value.type, expected },
                 );
             }
 
-            try args.put(
-                self.arena.allocator(),
-                arg_name,
-                .{
-                    .value = value.expr,
-                },
-            );
+            try args.put(alloc, param.name, .{ .value = value.expr });
         }
 
-        var it = named_args.iterator();
+        // Whatever the call did not supply: default or "missing".
+        for (task.args) |param| try self.fillMissing(&args, param, task_call);
 
-        while (it.next()) |kv| {
-            const arg_name, const entry = .{
-                kv.key_ptr.*,
-                kv.value_ptr.*,
-            };
-
-            // if its same group task call, then value is already provided in scope, it can be omited
-            if (entry.from_group and is_same_group_call)
-                continue;
-
-            if (entry.arg.default) |def| {
-                try args.put(self.arena.allocator(), arg_name, .{ .default = def });
-            } else {
-                try self.diagnostics.err(
-                    task_call.node.trimmedSpan(),
-                    "missing argument: '{s}'",
-                    .{arg_name},
-                );
+        if (!is_same_group_call) {
+            if (task.group) |g| {
+                for (g.args) |param| try self.fillMissing(&args, param, task_call);
             }
         }
 
