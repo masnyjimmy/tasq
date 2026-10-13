@@ -2120,6 +2120,13 @@ const AttributesResolver = struct {
             self.attributes.deinit(allocator);
         }
     };
+
+    fn resolveAssertNoPlatform(sema: *Sema, target: attrib.definitions.Target, attributes: ?ast.Attributes) !ResolvedAttributes {
+        const result = try resolve(sema, target, attributes);
+        std.debug.assert(result.platforms.count() == 0);
+        return result.attributes;
+    }
+
     fn resolve(sema: *Sema, target: attrib.definitions.Target, attributes: ?ast.Attributes) !Result {
         var resolver: AttributesResolver = .{
             .sema = sema,
