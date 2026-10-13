@@ -245,11 +245,11 @@ pub const MetaIterated = AnyKindIterable(
 
 pub const Expr = struct {
     const KINDS: []const cst.NodeKind = &.{
-        .literal,     .list,       .name_ref,
-        .paren_expr,  .string,     .string_expr,
-        .binary_expr, .unary_expr, .builtin_call,
-        .@"if",       .@"for",     .@"switch",
-        .lambda,      .process,    .@"continue",
+        .literal,     .list,         .name_ref,
+        .paren_expr,  .string,       .string_expr,
+        .binary_expr, .unary_expr,   .builtin_call,
+        .@"if",       .@"for",       .@"switch",
+        .lambda,      .process_expr, .@"continue",
         .@"break",
     };
 
@@ -268,7 +268,7 @@ pub const Expr = struct {
         @"if": IfExpr,
         @"switch": SwitchExpr,
         @"for": ForExpr,
-        process: Process,
+        process: ProcessExpr,
         lambda: Lambda,
         @"continue": cst.Token,
         @"break": cst.Token,
@@ -293,10 +293,49 @@ pub const Expr = struct {
             .@"switch" => .{ .@"switch" = .from(self.node) },
             .@"for" => .{ .@"for" = .from(self.node) },
             .lambda => .{ .lambda = .from(self.node) },
-            .process => .{ .process = .from(self.node) },
+            .process_expr => .{ .process = .from(self.node) },
             .@"continue" => .{ .@"continue" = self.node.childToken(.continue_kw) orelse unreachable },
             .@"break" => .{ .@"break" = self.node.childToken(.break_kw) orelse unreachable },
             else => unreachable,
+        };
+    }
+};
+
+pub const Fallback = struct {
+    node: *const cst.Node,
+    expr: ?Expr,
+
+    pub fn from(node: *const cst.Node) Fallback {
+        const expr = if (node.childNodeOf(Expr.KINDS)) |expr|
+            Expr.from(expr)
+        else
+            null;
+
+        return .{
+            .node = node,
+            .expr = expr,
+        };
+    }
+};
+
+pub const ProcessExpr = struct {
+    node: *const cst.Node,
+    attributes: ?Attributes,
+    string: StringExpr,
+    fallback: ?Fallback,
+
+    pub fn from(node: *const cst.Node) ProcessExpr {
+        var it = node.iter();
+
+        const attributes = eatNode(&it, Attributes, .attributes);
+        const string = expectNode(&it, StringExpr, .string_expr) orelse unreachable;
+        const fallback = eatNode(&it, Fallback, .fallback);
+
+        return .{
+            .node = node,
+            .attributes = attributes,
+            .string = string,
+            .fallback = fallback,
         };
     }
 };
@@ -345,21 +384,6 @@ pub const ListExpr = AnyKindIterable(
 );
 
 pub const BuiltinCall = struct {
-    pub const Fallback = struct {
-        node: *const cst.Node,
-        expr: ?Expr,
-
-        pub fn from(node: *const cst.Node) Fallback {
-            var it = node.iter();
-            const expr = expectAnyNode(&it, Expr, Expr.KINDS);
-
-            return .{
-                .node = node,
-                .expr = expr,
-            };
-        }
-    };
-
     node: *const cst.Node,
     name: ?cst.Token,
     args: BuiltinCallArgs,
@@ -372,7 +396,7 @@ pub const BuiltinCall = struct {
 
         const name = it.expectToken(.ident);
         const args = expectNode(&it, BuiltinCallArgs, .builtin_call_args) orelse unreachable;
-        const fallback = eatNode(&it, Fallback, .builtin_call_fallback);
+        const fallback = eatNode(&it, Fallback, .fallback);
 
         return .{
             .node = node,
@@ -837,15 +861,15 @@ pub const Statements = AnyKindIterable(.loose, Statement, Statement.KINDS);
 
 pub const Statement = struct {
     const KINDS: []const cst.NodeKind = &.{
-        .binding,   .process, .task_call,
-        .@"for",    .@"if",   .@"switch",
+        .binding,   .process_stmt, .task_call,
+        .@"for",    .@"if",        .@"switch",
         .expr_stmt,
     };
     node: *const cst.Node,
 
     pub const Kind = union(enum) {
         binding: BindingDecl,
-        process: Process,
+        process: ProcessStmt,
         task_call: TaskCall,
         @"for": ForStmt,
         @"if": IfStmt,
@@ -860,7 +884,7 @@ pub const Statement = struct {
     pub fn classify(self: *const Statement) Kind {
         return switch (self.node.kind) {
             .binding => .{ .binding = .from(self.node) },
-            .process => .{ .process = .from(self.node) },
+            .process_stmt => .{ .process = .from(self.node) },
             .task_call => .{ .task_call = .from(self.node) },
             .@"for" => .{ .@"for" = .from(self.node) },
             .@"if" => .{ .@"if" = .from(self.node) },
@@ -957,12 +981,21 @@ pub const ForStmt = struct {
     }
 };
 
-pub const Process = struct {
+pub const ProcessStmt = struct {
     node: *const cst.Node,
+    attributes: ?Attributes,
     string: StringExpr,
 
-    pub fn from(node: *const cst.Node) Process {
-        const string = node.childNode(.string_expr) orelse unreachable;
-        return .{ .node = node, .string = .from(string) };
+    pub fn from(node: *const cst.Node) ProcessStmt {
+        var it = node.iter();
+
+        const attributes = eatNode(&it, Attributes, .attributes);
+        const string = expectNode(&it, StringExpr, .string_expr) orelse unreachable;
+
+        return .{
+            .node = node,
+            .attributes = attributes,
+            .string = string,
+        };
     }
 };
