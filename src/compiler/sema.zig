@@ -2248,7 +2248,6 @@ const OptionsResolver = struct {
         shell: []const []const u8,
         dotenv: ?[]const u8,
         working_dir: []const u8,
-        fail_fast: bool,
     };
 
     const ResolvedOptions = std.EnumMap(options.Type, OptionValue);
@@ -2269,7 +2268,6 @@ const OptionsResolver = struct {
             .shell => |shell| out.shell = shell,
             .dotenv => |dotenv| out.dotenv = dotenv,
             .working_dir => |wd| out.working_dir = wd,
-            .fail_fast => |ff| out.fail_fast = ff,
         };
 
         return out;
@@ -2377,7 +2375,6 @@ const OptionsResolver = struct {
                 else => unreachable,
             },
             .working_dir => .{ .working_dir = value.string },
-            .fail_fast => .{ .fail_fast = value.bool },
         };
     }
 };

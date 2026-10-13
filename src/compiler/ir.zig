@@ -56,7 +56,6 @@ pub const Options = struct {
     shell: []const []const u8,
     dotenv: ?[]const u8 = null,
     working_dir: ?[]const u8 = null,
-    fail_fast: bool = false,
 };
 
 pub const Group = struct {

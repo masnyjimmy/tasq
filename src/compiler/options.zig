@@ -18,10 +18,6 @@ pub const options = OptionsGroup(&.{
         .name = "working_dir",
         .value_types = &.{.string},
     },
-    .{
-        .name = "fail_fast",
-        .value_types = &.{.bool},
-    },
 });
 
 fn OptionsGroup(comptime specs: []const Spec) type {
