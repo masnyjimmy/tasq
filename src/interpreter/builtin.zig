@@ -222,20 +222,25 @@ fn handleSplit(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value 
     const str = args[0].string;
     const sep = args[1].string;
 
-    const list_size = std.mem.count(u8, str, sep);
+    const list_size = std.mem.count(u8, str, sep) + 1;
 
-    const items = try scope.arena.allocator().alloc(Value, list_size);
+    var items: std.ArrayList(Value) = try .initCapacity(
+        scope.arena.allocator(),
+        list_size,
+    );
 
     var it = std.mem.splitSequence(u8, str, sep);
 
-    for (items) |*item| {
-        item.* = .{ .string = it.next().? };
+    while (it.next()) |item| {
+        items.appendAssumeCapacity(.{
+            .string = item,
+        });
     }
 
     return .{
         .list = .{
             .items_type = &.string,
-            .items = items,
+            .items = items.toOwnedSliceAssert(),
         },
     };
 }
