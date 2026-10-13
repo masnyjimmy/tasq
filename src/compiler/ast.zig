@@ -847,7 +847,7 @@ pub const TaskCallArg = struct {
 
     pub fn from(node: *const cst.Node) TaskCallArg {
         var it = node.iter();
-        const name = expectNode(&it, Name, .name);
+        const name = eatNode(&it, Name, .name);
         const value = expectAnyNode(&it, Expr, Expr.KINDS);
         return .{ .node = node, .name = name, .value = value };
     }
