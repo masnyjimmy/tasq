@@ -25,7 +25,10 @@ pub const TaskError = error{
     CompilationFailed,
 };
 
+/// All colors / text styles used by the list and usage output live here,
+/// so the look can be changed in one place.
 const style = struct {
+    // generic
     const err: Style = .{ .fg = .bright_red };
     const head: Style = .{
         .fg = .bright_yellow,
@@ -36,9 +39,31 @@ const style = struct {
     const desc: Style = .{
         .fg = .bright_blue,
     };
+    const notice: Style = .{ .fg = .bright_yellow };
+
+    // tasks list
+    const list_title: Style = .{ .fg = .white, .bold = true };
+    const task_name: Style = .{ .fg = .green };
+    const task_positional: Style = .{ .fg = .bright_cyan };
+    const task_desc: Style = .{ .fg = .white };
+    const group_name: Style = .{ .fg = .yellow, .bold = true };
+    const group_desc: Style = .{ .fg = .white };
+
+    // requirements (list + usage)
+    const requires_label: Style = .{ .fg = .bright_yellow };
+    const requires: Style = .{ .fg = .yellow };
+
+    // usage
+    const positional_name: Style = .{ .fg = .bright_cyan };
+    const type_name: Style = .{ .fg = .bright_cyan };
+    const meta: Style = .{ .fg = .yellow };
 };
 
-const DESCRIPTION_TEXT_OFFSET = 10;
+/// spaces between the longest "name positional.." signature and its description in `list`
+const LIST_DESC_GAP = 4;
+
+/// spaces between columns (name | type | description) in `usage`
+const PARAM_COL_GAP = 2;
 
 pub fn compileRunfile(ctx: *const Context, source_filepath: []const u8) !*const compiler.ir.File {
     const cwd = std.Io.Dir.cwd();
@@ -84,6 +109,100 @@ pub fn compileRunfile(ctx: *const Context, source_filepath: []const u8) !*const 
     return &ctx.workspace.getFileState(result.id).ir.?;
 }
 
+// ---------------------------------------------------------------------------
+// shared helpers
+// ---------------------------------------------------------------------------
+
+/// Leading positional arguments of a task (positionals always come first).
+fn positionalArgs(task: *const ir.Task) []const *ir.Argument {
+    var count: usize = 0;
+
+    for (task.args) |arg| {
+        if (arg.is_positional == false)
+            break;
+
+        count += 1;
+    }
+
+    return task.args[0..count];
+}
+
+/// Printed width of "name pos1 pos2 ..." (without any styling).
+fn signatureWidth(task: *const ir.Task) usize {
+    var w: usize = task.name.len;
+
+    for (positionalArgs(task)) |arg| {
+        w += 1 + arg.name.len;
+    }
+
+    return w;
+}
+
+fn maxSignatureWidth(tasks: anytype) usize {
+    var max: usize = 0;
+
+    for (tasks) |task| {
+        max = @max(max, signatureWidth(task));
+    }
+
+    return max;
+}
+
+/// Prints one indented line: "\n" + formatted text.
+fn printLine(ctx: *const Context, st: Style, comptime fmt: []const u8, args: anytype) !void {
+    ctx.printer.indent();
+    defer ctx.printer.detend();
+
+    try ctx.printer.printStyled(ctx.allocator, st, "\n" ++ fmt, args);
+}
+
+fn printSpaces(ctx: *const Context, count: usize) !void {
+    try ctx.printer.print(ctx.allocator, "{[pad]s: <[width]}", .{
+        .pad = "",
+        .width = count,
+    });
+}
+
+// ---------------------------------------------------------------------------
+// list
+// ---------------------------------------------------------------------------
+
+/// Prints:
+///   name pos1 pos2    description
+///                     requires: prog1, prog2
+fn printListedTask(ctx: *const Context, task: *const ir.Task, signature_col_width: usize) !void {
+    const p = ctx.printer;
+
+    p.indent();
+    defer p.detend();
+
+    const desc_col = signature_col_width + LIST_DESC_GAP;
+
+    // signature
+    try p.printStyled(ctx.allocator, style.task_name, "\n{s}", .{task.name});
+
+    for (positionalArgs(task)) |arg| {
+        try p.printStyled(ctx.allocator, style.task_positional, " {s}", .{arg.name});
+    }
+
+    // description (aligned)
+    if (task.desc) |desc| {
+        try printSpaces(ctx, desc_col - signatureWidth(task));
+        try p.printStyled(ctx.allocator, style.task_desc, "{s}", .{desc});
+    }
+
+    // required programs (aligned with description)
+    if (task.requires.len != 0) {
+        const joined = try std.mem.join(ctx.allocator, ", ", task.requires);
+        defer ctx.allocator.free(joined);
+
+        try p.print(ctx.allocator, "\n", .{});
+        try printSpaces(ctx, desc_col);
+        try p.printStyled(ctx.allocator, style.requires_label, "requires: ", .{});
+        try p.printStyled(ctx.allocator, style.requires, "{s}", .{joined});
+    }
+}
+
 pub fn printTasksList(ctx: *const Context, source_filepath: []const u8) !void {
     const file = try compileRunfile(ctx, source_filepath);
 
@@ -97,21 +216,16 @@ pub fn printTasksList(ctx: *const Context, source_filepath: []const u8) !void {
     defer ctx.allocator.free(groups);
 
     if (tasks.len == 0 and groups.len == 0) {
-        try p.printStyled(ctx.allocator, .{ .fg = .bright_yellow }, "no tasks available\n", .{});
+        try p.printStyled(ctx.allocator, style.notice, "no tasks available\n", .{});
         return;
     }
 
-    try p.printStyled(ctx.allocator, .{ .fg = .white, .bold = true }, "Tasks:", .{});
+    try p.printStyled(ctx.allocator, style.list_title, "Tasks:", .{});
+
+    const root_width = maxSignatureWidth(file.tasks);
 
     for (file.tasks) |task| {
-        p.indent();
-        defer p.detend();
-
-        try p.printStyled(ctx.allocator, .{ .fg = .green }, "\n{s}", .{task.name});
-
-        if (task.desc) |desc| {
-            try p.printStyled(ctx.allocator, .{ .fg = .white }, " " ** 4 ++ "{s}", .{desc});
-        }
+        try printListedTask(ctx, task, root_width);
     }
 
     for (file.groups) |group| {
@@ -121,224 +235,295 @@ pub fn printTasksList(ctx: *const Context, source_filepath: []const u8) !void {
         //TODO: handle properly anonymous groups
         try p.printStyled(
             ctx.allocator,
-            .{ .fg = .yellow, .bold = true },
+            style.group_name,
             "\n[{s}]",
-            .{group.name.?},
+            .{group.name orelse "<anonymous>"},
         );
 
+        if (group.desc) |desc| {
+            try p.printStyled(ctx.allocator, style.group_desc, "  {s}", .{desc});
+        }
+
+        // each group is aligned on its own
+        const group_width = maxSignatureWidth(group.tasks);
+
         for (group.tasks) |task| {
-            try p.printStyled(ctx.allocator, .{ .fg = .green }, "\n{s}", .{task.name});
-            if (task.desc) |desc| {
-                try p.printStyled(ctx.allocator, .{ .fg = .white }, " " ** 4 ++ "{s}", .{desc});
-            }
+            try printListedTask(ctx, task, group_width);
         }
     }
 
     try p.print(ctx.allocator, "\n", .{});
 }
 
+// ---------------------------------------------------------------------------
+// usage
+// ---------------------------------------------------------------------------
+
+/// Argument type as printed to the user (adds "(integer)" for integer numbers).
+const PrintableArgType = struct {
+    type: ArgType,
+    int: bool,
+
+    pub fn format(self: PrintableArgType, w: *std.Io.Writer) !void {
+        const with_integer = switch (self.type) {
+            .list_number, .number => self.int,
+            else => false,
+        };
+
+        try self.type.format(w);
+
+        if (with_integer)
+            try w.writeAll(" (integer)");
+    }
+
+    fn make(arg: *ir.Argument) PrintableArgType {
+        return .{
+            .type = arg.type,
+            .int = arg.int,
+        };
+    }
+};
+
+/// One line of the "Arguments:" / "Options:" tables, fully pre-rendered.
+const ParamRow = struct {
+    name: []const u8, // "target" or "-s, --long"
+    type_name: []const u8, // "<string>" or "" for flags
+    desc: ?[]const u8,
+    meta: []const u8, // "(required)", "(default: 5, pattern: ..)" or ""
+};
+
+const ParamColumns = struct {
+    name: usize = 0,
+    type_name: usize = 0,
+
+    fn grow(self: *ParamColumns, rows: []const ParamRow) void {
+        for (rows) |row| {
+            self.name = @max(self.name, row.name.len);
+            self.type_name = @max(self.type_name, row.type_name.len);
+        }
+    }
+};
+
+fn optionLabel(a: std.mem.Allocator, arg: *ir.Argument) ![]const u8 {
+    if (arg.short) |short| {
+        if (arg.long) |long|
+            return std.fmt.allocPrint(a, "-{c}, --{s}", .{ short, long });
+
+        return std.fmt.allocPrint(a, "-{c}", .{short});
+    }
+
+    if (arg.long) |long| {
+        // 4 spaces == width of "-s, " so long names line up
+        return std.fmt.allocPrint(a, "    --{s}", .{long});
+    }
+
+    return a.dupe(u8, arg.name);
+}
+
+fn defaultText(a: std.mem.Allocator, arg: *ir.Argument) !?[]const u8 {
+    const def = arg.default orelse return null;
+
+    if (def == .number) {
+        if (arg.int)
+            return try std.fmt.allocPrint(a, "{d}", .{@as(i64, @intFromFloat(def.number))});
+
+        return try std.fmt.allocPrint(a, "{d}", .{def.number});
+    }
+
+    if (def == .string)
+        return try std.fmt.allocPrint(a, "\"{s}\"", .{def.string});
+
+    // `false` is the implicit default of a flag, not worth showing
+    if (def == .bool)
+        return if (def.bool) "true" else null;
+
+    return null;
+}
+
+fn paramMeta(a: std.mem.Allocator, arg: *ir.Argument) ![]const u8 {
+    var parts: std.ArrayList([]const u8) = .empty;
+
+    if (arg.default == null) {
+        try parts.append(a, "required");
+    } else if (try defaultText(a, arg)) |text| {
+        try parts.append(a, try std.fmt.allocPrint(a, "default: {s}", .{text}));
+    }
+
+    if (arg.pattern) |pattern| {
+        try parts.append(a, try std.fmt.allocPrint(a, "pattern: {s}", .{pattern}));
+    }
+
+    if (parts.items.len == 0)
+        return "";
+
+    const joined = try std.mem.join(a, ", ", parts.items);
+
+    return std.fmt.allocPrint(a, "({s})", .{joined});
+}
+
+fn buildParamRows(
+    a: std.mem.Allocator,
+    args: []const *ir.Argument,
+    named: bool,
+) ![]ParamRow {
+    const rows = try a.alloc(ParamRow, args.len);
+
+    for (args, rows) |arg, *row| {
+        row.* = .{
+            .name = if (named) try optionLabel(a, arg) else arg.name,
+            .type_name = if (arg.type == .flag)
+                ""
+            else
+                try std.fmt.allocPrint(a, "<{f}>", .{PrintableArgType.make(arg)}),
+            .desc = arg.desc,
+            .meta = try paramMeta(a, arg),
+        };
+    }
+
+    return rows;
+}
+
+fn printParamRows(
+    ctx: *const Context,
+    rows: []const ParamRow,
+    name_style: Style,
+    cols: ParamColumns,
+) !void {
+    const p = ctx.printer;
+
+    for (rows) |row| {
+        p.indent();
+        defer p.detend();
+
+        // name
+        try p.printStyled(ctx.allocator, name_style, "\n{[v]s: <[w]}", .{
+            .v = row.name,
+            .w = cols.name,
+        });
+        try printSpaces(ctx, PARAM_COL_GAP);
+
+        // type (column exists only if at least one param has a type)
+        if (cols.type_name != 0) {
+            try p.printStyled(ctx.allocator, style.type_name, "{[v]s: <[w]}", .{
+                .v = row.type_name,
+                .w = cols.type_name,
+            });
+            try printSpaces(ctx, PARAM_COL_GAP);
+        }
+
+        // description + meta
+        if (row.desc) |desc| {
+            try p.printStyled(ctx.allocator, style.desc, "{s}", .{desc});
+        }
+
+        if (row.meta.len != 0) {
+            if (row.desc != null)
+                try printSpaces(ctx, 1);
+
+            try p.printStyled(ctx.allocator, style.meta, "{s}", .{row.meta});
+        }
+    }
+}
+
 pub fn printTaskUsage(ctx: *const Context, source_filepath: []const u8, task_id: []const u8) !void {
     const file = try compileRunfile(ctx, source_filepath);
 
-    const task = file.findTask(.parse(task_id)) orelse return TaskError.TaskNotFound;
-
-    // Usage: tasq {task name} [{positional argument names..}] "[OPTIONS]"
-
-    // collect positionals
-    const positional = blk: {
-        var count: usize = 0;
-
-        for (task.args) |arg| {
-            if (arg.is_positional == false)
-                break;
-
-            count += 1;
-        }
-
-        break :blk task.args[0..count];
+    const task = file.findTask(.parse(task_id)) orelse {
+        try ctx.printer.printStyled(ctx.allocator, style.err, "Task '{s}' not found\n", .{task_id});
+        return TaskError.TaskNotFound;
     };
 
-    try ctx.printer.printStyled(ctx.allocator, style.head, "Usage: ", .{});
+    const p = ctx.printer;
 
-    try ctx.printer.printStyled(ctx.allocator, style.body, "tasq {s} ", .{task.name});
+    var arena: std.heap.ArenaAllocator = .init(ctx.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
 
-    for (positional) |arg|
-        try ctx.printer.printStyled(ctx.allocator, style.body, "{s} ", .{arg.name});
+    const positional = positionalArgs(task);
 
-    try ctx.printer.printStyled(ctx.allocator, style.body, "[OPTIONS]\n", .{});
+    // non positional task args + group args
+    var options: std.ArrayList(*ir.Argument) = .empty;
+    try options.appendSlice(a, task.args[positional.len..]);
+    if (task.group) |group| {
+        try options.appendSlice(a, group.args);
+    }
 
-    //Arguments:
-    //  {argument name} [<{argument value type}>]   [{description}]
+    // Usage: tasq {task name} {positional names..} [OPTIONS]
 
-    if (positional.len != 0) {
-        const names_col_width = blk: {
-            var max: usize = 0;
+    try p.printStyled(ctx.allocator, style.head, "Usage: ", .{});
+    try p.printStyled(ctx.allocator, style.body, "tasq {s}", .{task.name});
 
-            for (positional) |arg| {
-                max = @max(max, arg.name.len);
-            }
+    for (positional) |arg| {
+        try p.printStyled(ctx.allocator, style.positional_name, " {s}", .{arg.name});
+    }
 
-            break :blk @max(10, max);
-        };
+    if (options.items.len != 0) {
+        try p.printStyled(ctx.allocator, style.body, " [OPTIONS]", .{});
+    }
 
-        try ctx.printer.printStyled(ctx.allocator, style.head, "\nArguments:", .{});
+    // Description:
 
-        for (positional) |arg| {
-            ctx.printer.indent();
-            defer ctx.printer.detend();
+    if (task.desc) |desc| {
+        try p.printStyled(ctx.allocator, style.head, "\n\nDescription:", .{});
+        try printLine(ctx, style.desc, "{s}", .{desc});
+    }
 
-            try ctx.printer.printStyled(ctx.allocator, style.body, "\n{[name]s: <[width]}", .{
-                .name = arg.name,
-                .width = names_col_width,
-            });
+    // Group:
 
-            if (arg.desc) |desc| {
-                try ctx.printer.printStyled(ctx.allocator, style.desc, "{s}", .{desc});
-            }
+    if (task.group) |group| {
+        try p.printStyled(ctx.allocator, style.head, "\n\nGroup:", .{});
+
+        p.indent();
+        defer p.detend();
+
+        try p.printStyled(ctx.allocator, style.group_name, "\n{s}", .{group.name orelse "<anonymous>"});
+
+        if (group.desc) |desc| {
+            try p.printStyled(ctx.allocator, style.group_desc, "  {s}", .{desc});
         }
+    }
+
+    // Requires:
+
+    if (task.requires.len != 0) {
+        const joined = try std.mem.join(a, ", ", task.requires);
+
+        try p.printStyled(ctx.allocator, style.head, "\n\nRequires:", .{});
+        try printLine(ctx, style.requires, "{s}", .{joined});
+    }
+
+    // Arguments / Options share column widths, so both tables line up
+
+    const positional_rows = try buildParamRows(a, positional, false);
+    const option_rows = try buildParamRows(a, options.items, true);
+
+    var cols: ParamColumns = .{};
+    cols.grow(positional_rows);
+    cols.grow(option_rows);
+
+    // Arguments:
+    //   {name}  <{type}>  {description} ({meta})
+
+    if (positional_rows.len != 0) {
+        try p.printStyled(ctx.allocator, style.head, "\n\nArguments:", .{});
+        try printParamRows(ctx, positional_rows, style.positional_name, cols);
     }
 
     // Options:
-    //   -s, -long name  desc
-    //       -long name  desc
+    //   -s, --long  <{type}>  {description} ({meta})
+    //       --long  <{type}>  {description} ({meta})
 
-    const OptionNameBuilder = struct {
-        fn build(allocator: std.mem.Allocator, opt: *ir.Argument) ![]const u8 {
-            var aw = std.Io.Writer.Allocating.init(allocator);
-
-            var writer = &aw.writer;
-
-            if (opt.short) |short| {
-                try writer.writeAll(&.{ '-', short });
-            }
-
-            if (opt.long) |long| {
-                if (opt.short) |_|
-                    try writer.writeAll(", ");
-
-                try writer.writeAll("--");
-                try writer.writeAll(long);
-            }
-
-            return try aw.toOwnedSlice();
-        }
-    };
-
-    const options = blk: {
-        var options = try std.ArrayList(*ir.Argument).initCapacity(ctx.allocator, task.args.len - positional.len);
-        // append non positional task args
-        try options.appendSlice(ctx.allocator, task.args[positional.len..]);
-
-        // append group args
-        if (task.group) |group| {
-            try options.appendSlice(ctx.allocator, group.args);
-        }
-
-        break :blk try options.toOwnedSlice(ctx.allocator);
-    };
-    defer ctx.allocator.free(options);
-
-    if (options.len != 0) {
-
-        // build and compute max length of names (i.e "-s, --long")
-        const precomputed_names = try ctx.allocator.alloc([]const u8, options.len);
-        defer {
-            for (precomputed_names) |pn| {
-                ctx.allocator.free(pn);
-            }
-            ctx.allocator.free(precomputed_names);
-        }
-
-        const name_col_width = blk: {
-            var max: usize = 0;
-
-            for (options, precomputed_names) |opt, *out| {
-                const names = try OptionNameBuilder.build(ctx.allocator, opt);
-                max = @max(max, names.len);
-                out.* = names;
-            }
-
-            break :blk @max(10, max);
-        };
-
-        // build and compute max length of type names (excluding flag) (i.e "<string>")
-        const precomputed_type_names = try ctx.allocator.alloc(?[]const u8, options.len);
-        defer {
-            for (precomputed_type_names) |precomputed_types_name| {
-                if (precomputed_types_name) |ptn| {
-                    ctx.allocator.free(ptn);
-                }
-            }
-            ctx.allocator.free(precomputed_type_names);
-        }
-
-        const type_col_width = blk: {
-            var max: usize = 0;
-
-            for (options, 0..) |opt, idx| {
-                if (opt.type == .flag) {
-                    precomputed_type_names[idx] = null;
-                    continue;
-                }
-
-                const type_name = try std.fmt.allocPrint(ctx.allocator, "<{f}>", .{opt.type});
-                const w = type_name.len;
-
-                precomputed_type_names[idx] = type_name;
-                max = @max(max, w);
-            }
-
-            break :blk max;
-        };
-
-        // left col (names + type i.e "-s, --long <string>")
-        const left_col_width = blk: {
-            var max: usize = 0;
-
-            for (precomputed_type_names) |type_name| {
-                var w: usize = name_col_width;
-
-                if (type_name) |_| {
-                    w += 1 + type_col_width;
-                }
-
-                max = @max(max, w);
-            }
-            break :blk @max(10, max + DESCRIPTION_TEXT_OFFSET);
-        };
-
-        try ctx.printer.printStyled(ctx.allocator, style.head, "\nOptions:", .{});
-
-        // left = name + type + offset
-        // type + offset = left - name
-        const type_with_offset_width = left_col_width - name_col_width;
-
-        for (options, precomputed_names, precomputed_type_names) |opt, name, type_name| {
-            ctx.printer.indent();
-            defer ctx.printer.detend();
-
-            // print name
-            try ctx.printer.printStyled(ctx.allocator, style.option_name, "\n{[name]s: >[width]}", .{
-                .name = name,
-                .width = name_col_width,
-            });
-
-            // print type optionally
-            try ctx.printer.printStyled(ctx.allocator, style.body, "{[type]s: <[width]}", .{
-                .type = type_name orelse "",
-                .width = type_with_offset_width,
-            });
-
-            //print desc
-
-            if (opt.desc) |desc| {
-                try ctx.printer.printStyled(ctx.allocator, style.desc, "{s}", .{desc});
-            }
-        }
+    if (option_rows.len != 0) {
+        try p.printStyled(ctx.allocator, style.head, "\n\nOptions:", .{});
+        try printParamRows(ctx, option_rows, style.option_name, cols);
     }
 
-    try ctx.printer.print(ctx.allocator, "\n", .{});
+    try p.print(ctx.allocator, "\n", .{});
 }
+
+// ---------------------------------------------------------------------------
+// run
+// ---------------------------------------------------------------------------
 
 const TaskArgumentParser = struct {
     task: *ir.Task,
@@ -395,30 +580,6 @@ const TaskArgumentParser = struct {
         self.short_alias.deinit(gpa);
         self.args.deinit(gpa);
     }
-
-    const PrintableArgType = struct {
-        type: ArgType,
-        int: bool,
-
-        pub fn format(self: PrintableArgType, w: *std.Io.Writer) !void {
-            const with_integer = switch (self.type) {
-                .list_number, .number => self.int,
-                else => false,
-            };
-
-            try self.type.format(w);
-
-            if (with_integer)
-                try w.writeAll(" (integer)");
-        }
-
-        fn make(arg: *ir.Argument) PrintableArgType {
-            return .{
-                .type = arg.type,
-                .int = arg.int,
-            };
-        }
-    };
 
     pub fn parseArguments(
         self: *TaskArgumentParser,
