@@ -79,4 +79,38 @@ pub const Value = union(TypeTag) {
             else => return true,
         }
     }
+
+    pub fn format(self: *const Value, w: *std.Io.Writer) !void {
+        switch (self.*) {
+            .null => try w.writeAll("null"),
+            .bool => |v| try w.print("{}", .{v}),
+            .number => |v| try w.print("{}", .{v}),
+            .char => |v| try w.print("{c}", .{v}),
+            .string => |v| try w.print("{s}", .{v}),
+            .list => |v| {
+                try w.writeAll("[");
+
+                for (v, 0..) |item, idx| {
+                    try w.print("{f}", .{item});
+
+                    if (idx != v.len - 1)
+                        try w.writeAll(",");
+                }
+
+                try w.writeAll("]");
+            },
+            .tuple => |v| {
+                try w.writeAll("(");
+
+                for (v, 0..) |item, idx| {
+                    try w.print("{f}", .{item});
+
+                    if (idx != v.len - 1)
+                        try w.writeAll(",");
+                }
+
+                try w.writeAll(")");
+            },
+        }
+    }
 };
