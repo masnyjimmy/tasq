@@ -166,6 +166,18 @@ pub const Sema = struct {
             break :blk try envs.toOwnedSlice(self.arena.allocator());
         };
 
+        const requires: [][]const u8 = blk: {
+            var requires: std.ArrayList([]const u8) = .empty;
+
+            if (attributes_result.attributes.get(.requires)) |attrs| {
+                for (attrs) |attr| {
+                    try requires.append(self.arena.allocator(), attr.?.string);
+                }
+            }
+
+            break :blk try requires.toOwnedSlice(self.arena.allocator());
+        };
+
         const ptr = try self.create(ir.Task, .{
             .st_ref = task,
             .name = name,
@@ -173,6 +185,7 @@ pub const Sema = struct {
             .private = is_private,
             .desc = desc,
             .envs = envs,
+            .requires = requires,
             .scope = task_scope,
             // rest needs to be filled up after all symbols are recognized
             .dependecies = undefined,
