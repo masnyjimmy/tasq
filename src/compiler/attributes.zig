@@ -9,8 +9,7 @@ const meta = @import("meta.zig");
 const lib = @import("lib");
 const enums = lib.enums;
 const ct = lib.@"comptime";
-
-const platform = @import("platform.zig");
+const platform = lib.platform;
 
 pub const Kind = enum {
     platform,

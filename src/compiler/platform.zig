@@ -1,22 +1,12 @@
-const std = @import("std");
-
-const builtin = @import("builtin");
-
-const ir = @import("ir.zig");
-
 const lib = @import("lib");
 const enums = lib.enums;
+const platform = lib.platform;
+const ir = @import("ir.zig");
 
-pub const Tag = enum {
-    windows,
-    linux,
-    ios,
-    other,
-};
+pub const Tag = platform.Tag;
+pub const tag = platform.tag;
 
-pub const tag = enums.castEnum(builtin.os.tag, Tag) orelse @compileError("unsupported platform");
-
-pub const default_options: ir.Options = switch (tag) {
+pub const default_options: ir.Options = switch (platform.tag) {
     .windows => .{
         .shell = &.{ "cmd", "/C" },
     },
