@@ -177,7 +177,7 @@ fn buildCursorContext(
         /// nodes (and scopes) passed on the way. Returns the token hit.
         fn descend(self: *Self, items: []const cst.Element) !?*const cst.Token {
             for (items) |*item| {
-                if (!item.span().contains(self.pos)) continue;
+                if (!item.trimmedSpan().contains(self.pos)) continue;
 
                 switch (item.*) {
                     .node => |node| {
