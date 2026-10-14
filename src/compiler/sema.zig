@@ -409,16 +409,11 @@ pub const Sema = struct {
                 continue;
             };
 
-            var attributes = blk: {
-                const attributes_result = try AttributesResolver.resolve(
-                    self,
-                    .{ .argument = param_type },
-                    param.attributes,
-                );
-
-                std.debug.assert(attributes_result.platforms.count() == 0);
-                break :blk attributes_result.attributes;
-            };
+            var attributes = try AttributesResolver.resolveAssertNoPlatform(
+                self,
+                .{ .argument = param_type },
+                param.attributes,
+            );
             defer attributes.deinit(self.arena.allocator());
 
             const name_required = group or param_type.isNamedOnly();
