@@ -43,7 +43,7 @@ fn tryOne(
         try allocator.dupe(u8, file_name);
     errdefer allocator.free(full);
 
-    if (isExecutableFile(dir, io, full)) return full;
+    if (try isExecutableFile(dir, io, full)) return full;
     allocator.free(full);
     return null;
 }
@@ -80,7 +80,7 @@ pub fn which(
 
     const PATH = environ.get(PlatformDesc.current.path_var_name) orelse return null;
 
-    const it = std.mem.splitSequence(
+    var it = std.mem.splitSequence(
         u8,
         PATH,
         PlatformDesc.current.separator,

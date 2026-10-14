@@ -318,6 +318,16 @@ const misc_functions: []const Spec = &.{
         .args = &.{},
         .return_type = .{ .concrete = Type.number },
     },
+    .{
+        .name = "which",
+        .args = &.{
+            .{
+                .name = "name",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .result = &.{ .concrete = Type.string } },
+    },
 };
 
 pub const definitions = Functions(
@@ -393,6 +403,7 @@ fn Functions(comptime specs: []const Spec) type {
 
         for (specs, 0..) |spec, idx| {
             defs[idx] = def: {
+                @setEvalBranchQuota(2_000);
                 var out = ct.copyFields(Definition, spec);
                 out.id = @enumFromInt(idx);
                 out.ident = spec_to_id[idx];

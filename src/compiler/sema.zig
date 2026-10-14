@@ -1652,7 +1652,11 @@ pub const Sema = struct {
                     },
                 });
             },
-            else => continue,
+            .missing => |span| {
+                //TODO: improve diagnostics
+                try self.diagnostics.err(span, "broken argument", .{});
+                return Error.Incomplete;
+            },
         };
 
         const result = functions.definitions.resolve(

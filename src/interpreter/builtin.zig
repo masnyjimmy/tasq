@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const lib = @import("lib");
+const program = lib.program;
 
 const compiler = @import("compiler");
 const platform = compiler.platform;
@@ -39,6 +40,7 @@ const handlers: [functions_count]FunctionType = .{
     handleEnv,
     handleOs,
     handleStatusCode,
+    handleWhich,
 };
 
 pub fn callFunction(
@@ -108,6 +110,35 @@ fn handleOs(_: *Interpreter, _: *Scope, _: []const Value) Error!Value {
 
 fn handleStatusCode(self: *Interpreter, _: *Scope, _: []const Value) Error!Value {
     return .{ .number = @floatFromInt(self.status_code) };
+}
+
+fn handleWhich(self: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+    const name = args[0].string;
+
+    const result = try program.which(
+        self.allocator,
+        self.cwd,
+        self.io,
+        &scope.environ,
+        name,
+    );
+
+    // move path to scope memory,
+    const value: ?Value = blk: {
+        if (result) |path| {
+            defer self.allocator.free(path);
+            break :blk .{
+                .string = try scope.arena.allocator().dupe(u8, path),
+            };
+        }
+        break :blk null;
+    };
+
+    return makeResult(
+        scope,
+        &.string,
+        value,
+    );
 }
 
 fn handleError(self: *Interpreter, _: *Scope, args: []const Value) Error!Value {
