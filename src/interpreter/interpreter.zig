@@ -34,7 +34,6 @@ io: std.Io,
 printer: *Printer,
 options: *const ir.Options,
 status_code: u8 = 0,
-environ: std.process.Environ.Map,
 cwd: std.Io.Dir,
 
 pub fn init(
@@ -42,20 +41,12 @@ pub fn init(
     io: std.Io,
     printer: *Printer,
     options: *const ir.Options,
-    environ: *const std.process.Environ.Map,
 ) !Interpreter {
 
     // TODO: read dotenv,
 
-    var new_environ = try environ.clone(allocator);
-    errdefer new_environ.deinit();
-
     const cwd = blk: {
         const cwd = std.Io.Dir.cwd();
-
-        if (options.dotenv) |env_file| {
-            try lib.dotenv.parse(io, env_file, &new_environ);
-        }
 
         break :blk try cwd.openDir(io, options.working_dir orelse ".", .{});
     };
@@ -65,19 +56,39 @@ pub fn init(
         .io = io,
         .printer = printer,
         .options = options,
-        .environ = new_environ,
         .cwd = cwd,
     };
 }
 
 pub fn deinit(self: *Interpreter) void {
-    self.environ.deinit();
     self.cwd.close(self.io);
 }
 
-pub fn run(self: *Interpreter, initial_task: *const ir.Task, values: std.array_hash_map.String(Value)) !void {
+pub fn run(
+    self: *Interpreter,
+    initial_task: *const ir.Task,
+    environ: *const std.process.Environ.Map,
+    values: std.array_hash_map.String(Value),
+) !void {
     const root_scope = try Scope.create(null, self.allocator, initial_task.body.scope.root());
     defer root_scope.destroy();
+
+    var it = environ.iterator();
+
+    while (it.next()) |kv| {
+        try root_scope.environ.put(
+            kv.key_ptr.*,
+            kv.value_ptr.*,
+        );
+    }
+
+    if (self.options.dotenv) |dotenv| {
+        try lib.dotenv.parse(
+            self.io,
+            dotenv,
+            &root_scope.environ,
+        );
+    }
 
     try self.runTask(
         root_scope,
@@ -154,23 +165,19 @@ pub fn runTask(self: *Interpreter, scope: *Scope, task: *const ir.Task, values: 
         }, false);
     }
 
+    for (task.envs) |env| {
+        try task_scope.environ.put(
+            env.key,
+            env.value,
+        );
+    }
+
     for (task.dependecies) |*dep| {
         try self.handleTaskCall(task_scope, dep);
     }
 
     const task_body_scope = try Scope.create(task_scope, self.allocator, task.body.scope);
     defer task_body_scope.destroy();
-
-    const prev_environ = self.environ;
-    self.environ = try prev_environ.clone(self.allocator);
-    defer {
-        self.environ.deinit();
-        self.environ = prev_environ;
-    }
-
-    for (task.envs) |env| {
-        try self.environ.put(env.key, env.value);
-    }
 
     try self.runBlock(task_body_scope, task.body.statements);
 }
@@ -194,7 +201,7 @@ fn main(self: *Interpreter, scope: *Scope, stmt: *const ir.Statement) Error!void
             else
                 false;
 
-            self.status_code = try self.handleProcess(.{
+            self.status_code = try self.handleProcess(scope, .{
                 .process = process,
                 .echo = !noecho,
                 .allow_input = true,
@@ -332,7 +339,7 @@ const ProcessOptions = struct {
     out: ?*std.Io.Writer = null,
 };
 
-fn handleProcess(self: *Interpreter, options: ProcessOptions) Error!u8 {
+fn handleProcess(self: *Interpreter, scope: *Scope, options: ProcessOptions) Error!u8 {
     const shell_len = self.options.shell.len;
 
     var argv = try self.allocator.alloc([]const u8, shell_len + 1);
@@ -355,7 +362,7 @@ fn handleProcess(self: *Interpreter, options: ProcessOptions) Error!u8 {
         .{
             .argv = argv,
             .cwd = .{ .dir = self.cwd },
-            .environ_map = &self.environ,
+            .environ_map = &scope.environ,
             .stdout = if (options.out == null)
                 .inherit
             else
@@ -551,7 +558,7 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
             const process = try self.resolveString(scope, process_expr.command);
             var aw: std.Io.Writer.Allocating = .init(scope.arena.allocator());
 
-            self.status_code = try self.handleProcess(.{
+            self.status_code = try self.handleProcess(scope, .{
                 .process = process,
                 .echo = false,
                 .allow_input = false,

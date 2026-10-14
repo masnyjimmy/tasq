@@ -16,6 +16,7 @@ parent: ?*Scope,
 static: *static_scope.Scope,
 symbols: std.StringHashMapUnmanaged(Symbol) = .empty,
 arena: std.heap.ArenaAllocator,
+environ: std.process.Environ.Map,
 
 pub fn create(parent: ?*Scope, allocator: std.mem.Allocator, ss: *static_scope.Scope) !*Scope {
     const ptr = try allocator.create(Scope);
@@ -23,6 +24,10 @@ pub fn create(parent: ?*Scope, allocator: std.mem.Allocator, ss: *static_scope.S
         .parent = parent,
         .arena = .init(allocator),
         .static = ss,
+        .environ = if (parent) |p|
+            try p.environ.clone(allocator)
+        else
+            .init(allocator),
     };
     return ptr;
 }
@@ -30,6 +35,7 @@ pub fn create(parent: ?*Scope, allocator: std.mem.Allocator, ss: *static_scope.S
 pub fn destroy(self: *Scope) void {
     var allocator = self.arena.child_allocator;
     self.arena.deinit();
+    self.environ.deinit();
     allocator.destroy(self);
 }
 

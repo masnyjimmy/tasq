@@ -75,10 +75,10 @@ pub fn makeResult(scope: *Scope, result_type: *const Type, value: ?Value) Error!
     };
 }
 
-fn handleEnv(self: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+fn handleEnv(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
     const key = args[0].string;
 
-    return if (self.environ.get(key)) |value| makeResult(
+    return if (scope.environ.get(key)) |value| makeResult(
         scope,
         &.string,
         .{ .string = value },

@@ -705,7 +705,6 @@ pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []cons
         ctx.io,
         ctx.printer,
         &file.options,
-        ctx.environ,
     );
     defer interpreter.deinit();
 
@@ -721,5 +720,9 @@ pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []cons
 
     const values = try parser.parseArguments(&arena, args);
 
-    try interpreter.run(task, values);
+    try interpreter.run(
+        task,
+        ctx.environ,
+        values,
+    );
 }
