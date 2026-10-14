@@ -88,7 +88,6 @@ pub const Task = struct {
     dependecies: []const TaskCall,
     private: bool,
     envs: []const Env,
-    requires: []const []const u8,
     desc: ?[]const u8,
     scope: *Scope,
     body: StatementBlock,

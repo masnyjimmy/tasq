@@ -190,17 +190,6 @@ fn printListedTask(ctx: *const Context, task: *const ir.Task, signature_col_widt
         try printSpaces(ctx, desc_col - signatureWidth(task));
         try p.printStyled(ctx.allocator, style.task_desc, "{s}", .{desc});
     }
-
-    // required programs (aligned with description)
-    if (task.requires.len != 0) {
-        const joined = try std.mem.join(ctx.allocator, ", ", task.requires);
-        defer ctx.allocator.free(joined);
-
-        try p.print(ctx.allocator, "\n", .{});
-        try printSpaces(ctx, desc_col);
-        try p.printStyled(ctx.allocator, style.requires_label, "requires: ", .{});
-        try p.printStyled(ctx.allocator, style.requires, "{s}", .{joined});
-    }
 }
 
 pub fn printTasksList(ctx: *const Context, source_filepath: []const u8) !void {
@@ -481,15 +470,6 @@ pub fn printTaskUsage(ctx: *const Context, source_filepath: []const u8, task_id:
         if (group.desc) |desc| {
             try p.printStyled(ctx.allocator, style.group_desc, "  {s}", .{desc});
         }
-    }
-
-    // Requires:
-
-    if (task.requires.len != 0) {
-        const joined = try std.mem.join(a, ", ", task.requires);
-
-        try p.printStyled(ctx.allocator, style.head, "\n\nRequires:", .{});
-        try printLine(ctx, style.requires, "{s}", .{joined});
     }
 
     // Arguments / Options share column widths, so both tables line up

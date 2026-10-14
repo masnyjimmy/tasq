@@ -154,15 +154,6 @@ const attr_specs: []const Spec = &.{
         .kind = .validation,
         .valid_for = &.{.task},
     },
-
-    .{
-        .name = "requires",
-        .value_types = &.{.string},
-        .default = .none,
-        .unique = false,
-        .kind = .validation,
-        .valid_for = &.{.task},
-    },
 };
 
 const process_specs: []const Spec = &.{

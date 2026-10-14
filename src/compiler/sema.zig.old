@@ -2153,6 +2153,7 @@ const CycleChecker = struct {
     };
 
     const StateMap = std.AutoHashMap(*ir.Task, State);
+    
     fn checkCycles(self: *Sema, file: *ir.File) !void {
         var states: StateMap = .init(self.arena.allocator());
         defer states.deinit();
