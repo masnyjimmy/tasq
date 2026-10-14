@@ -332,7 +332,6 @@ fn analyse(arena: std.mem.Allocator, source: []const u8, range: Range) !Want {
 
             if (task_call.task.node.span.contains(patched.patch_pos) == false)
                 return .nothing;
-            std.log.debug("task_call", .{});
             return .{
                 .group_task = .{
                     .group = switch (task_call.scope) {
@@ -656,9 +655,9 @@ fn getSettingCompletions() []const Completion {
     @setEvalBranchQuota(100_000);
 
     const result = comptime blk: {
-        var out: [options.options.raw.len]Completion = undefined;
+        var out: [options.definitions.raw.len]Completion = undefined;
 
-        for (options.options.raw, &out) |def, *completion| {
+        for (options.definitions.raw, &out) |def, *completion| {
             completion.* = .{
                 .label = @tagName(def.id),
                 .new_text = @tagName(def.id),
