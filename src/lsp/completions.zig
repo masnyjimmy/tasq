@@ -53,6 +53,9 @@ const Want = union(enum) {
         task,
         group,
         setting,
+        process_stmt,
+        process_expr,
+
         parameter: ?ts.ArgType,
     };
     nothing,
@@ -286,10 +289,24 @@ fn analyse(arena: std.mem.Allocator, source: []const u8, range: Range) !Want {
         .group,
         .parameter,
         .task_call,
+        .process_stmt,
+        .process_expr,
     }, null) orelse return .nothing;
 
     return switch (owner.kind) {
         .set_decl => .setting,
+        inline .process_stmt, .process_expr => |tag| {
+            if (pcc.exact == null or pcc.atNode(.name) == false) return .nothing;
+            return attributeWant(
+                &pcc,
+                tag,
+                @unionInit(
+                    Want.Attribute,
+                    @tagName(tag),
+                    {},
+                ),
+            );
+        },
         .set => {
             if (pcc.exact == null or pcc.atNode(.name) == false) return .nothing;
             return attributeWant(&pcc, .set, .setting);
@@ -642,9 +659,12 @@ pub fn getAttributeCompletions(allocator: std.mem.Allocator, want: Want.Attribut
                     (arg.count() == 0 or arg.contains(t))
                 else
                     false,
-                .group => want == .group,
-                .setting => want == .setting,
-                .task => want == .task,
+                inline .group,
+                .setting,
+                .task,
+                .process_expr,
+                .process_stmt,
+                => |_, tag| want == std.meta.activeTag(@unionInit(Want.Attribute, @tagName(tag), {})),
             };
             if (valid)
                 break;
