@@ -361,7 +361,7 @@ pub const Lexer = struct {
             return if (self.lexer.peek() == '\\') // if escape char
                 switch (self.lexer.peekAt(1)) {
                     // basic escape characters
-                    'n', 't', 'r', '\\', '\"', '\'', '0', '{', '}' => try self.lexer.consumeN(.char, 2),
+                    'n', 't', 'r', '\\', '\"', '\'', '`', '0', '{', '}' => try self.lexer.consumeN(.char, 2),
                     // hex escape (\xNN)
                     'x' => try self.lexHexEscape(),
                     // unicode codepoint escape \u{NNNN...}
