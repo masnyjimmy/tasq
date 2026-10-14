@@ -187,9 +187,31 @@ fn main(self: *Interpreter, scope: *Scope, stmt: *const ir.Statement) Error!void
             _ = try self.handleDecl(scope, decl);
         },
         .process => |proc_expr| {
-            const process = try self.resolveString(scope, proc_expr);
+            const process = try self.resolveString(scope, proc_expr.command);
 
-            try self.handleProcess(process, true, null);
+            const noecho = if (proc_expr.noecho) |value|
+                value
+            else
+                false;
+
+            self.status_code = try self.handleProcess(.{
+                .process = process,
+                .echo = !noecho,
+                .allow_input = true,
+            });
+
+            if (self.status_code != 0 and proc_expr.nofail == false) {
+                try self.printer.printStyled(
+                    self.allocator,
+                    style.@"error",
+                    \\tasq: error: command failed with exit code {}
+                    \\  on '{s}'
+                    \\
+                ,
+                    .{ self.status_code, process },
+                );
+                return Error.Abort;
+            }
         },
         .if_stmt => |*if_stmt| {
             const cond = try self.evaluateExpr(scope, &if_stmt.cond);
@@ -525,21 +547,45 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
             };
         },
         .lambda => |lambda| .{ .lambda = lambda },
-        .process => |process| {
-            const proc_str = try self.resolveString(scope, process);
+        .process => |process_expr| {
+            const process = try self.resolveString(scope, process_expr.command);
             var aw: std.Io.Writer.Allocating = .init(scope.arena.allocator());
 
-            try self.handleProcess(
-                proc_str,
-                false,
-                &aw.writer,
-            );
+            self.status_code = try self.handleProcess(.{
+                .process = process,
+                .echo = false,
+                .allow_input = false,
+                .out = &aw.writer,
+            });
 
-            const result = std.mem.trim(
-                u8,
-                aw.written(),
-                &std.ascii.whitespace,
-            );
+            if (self.status_code != 0) {
+                if (process_expr.fallback) |*value| {
+                    return try self.evaluateExpr(scope, value);
+                }
+
+                if (process_expr.nofail == false) {
+                    try self.printer.printStyled(
+                        self.allocator,
+                        style.@"error",
+                        \\tasq: error: command failed with exit code {}
+                        \\  on binding evaluation '{s}'
+                    ,
+                        .{ self.status_code, process },
+                    );
+                    return Error.Abort;
+                }
+            }
+
+            const result = blk: {
+                //TODO: consider future 'raw' attribute
+                const result = try aw.toOwnedSlice();
+                var end = result.len;
+                while (end > 0 and result[end - 1] == '\n') {
+                    end -= 1;
+                    if (end > 0 and result[end - 1] == '\r') end -= 1;
+                }
+                break :blk result[0..end];
+            };
 
             return .{ .string = result };
         },
