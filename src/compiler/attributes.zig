@@ -28,7 +28,7 @@ const platform_specs = blk: {
         specs[idx] = .{
             .name = f.name,
             .value_types = &.{},
-            .allow_default = true,
+            .default = .auto,
             .unique = true,
             .kind = .platform,
             .valid_for = &.{ .setting, .group, .task },
@@ -43,7 +43,7 @@ const attr_specs: []const Spec = &.{
     .{
         .name = "desc",
         .value_types = &.{.string},
-        .allow_default = false,
+        .default = .none,
         .unique = true,
         .kind = .doc,
         .valid_for = &.{
@@ -55,7 +55,7 @@ const attr_specs: []const Spec = &.{
     .{
         .name = "private",
         .value_types = &.{},
-        .allow_default = true,
+        .default = .auto,
         .unique = true,
         .kind = .doc,
         .valid_for = &.{ .group, .task },
@@ -64,7 +64,7 @@ const attr_specs: []const Spec = &.{
     .{
         .name = "long",
         .value_types = &.{ .null, .string },
-        .allow_default = true,
+        .default = .auto,
         .unique = true,
         .kind = .modifier,
         .valid_for = &.{.any_argument},
@@ -72,7 +72,7 @@ const attr_specs: []const Spec = &.{
     .{
         .name = "short",
         .value_types = &.{ .null, .char },
-        .allow_default = true,
+        .default = .auto,
         .unique = true,
         .kind = .modifier,
         .valid_for = &.{.any_argument},
@@ -81,7 +81,7 @@ const attr_specs: []const Spec = &.{
     .{
         .name = "int",
         .value_types = &.{},
-        .allow_default = true,
+        .default = .auto,
         .unique = true,
         .kind = .validation,
         .valid_for = &.{.arguments(&.{ .number, .list_number })},
@@ -89,7 +89,7 @@ const attr_specs: []const Spec = &.{
     .{
         .name = "min",
         .value_types = &.{.number},
-        .allow_default = false,
+        .default = .none,
         .unique = true,
         .kind = .validation,
         .valid_for = &.{.arguments(&.{ .number, .list_number })},
@@ -97,7 +97,7 @@ const attr_specs: []const Spec = &.{
     .{
         .name = "max",
         .value_types = &.{.number},
-        .allow_default = false,
+        .default = .none,
         .unique = true,
         .kind = .validation,
         .valid_for = &.{.arguments(&.{ .number, .list_number })},
@@ -105,7 +105,7 @@ const attr_specs: []const Spec = &.{
     .{
         .name = "min_length",
         .value_types = &.{.number},
-        .allow_default = false,
+        .default = .none,
         .unique = true,
         .kind = .validation,
         .valid_for = &.{.arguments(&.{ .string, .list_string })},
@@ -113,7 +113,7 @@ const attr_specs: []const Spec = &.{
     .{
         .name = "max_length",
         .value_types = &.{.number},
-        .allow_default = false,
+        .default = .none,
         .unique = true,
         .kind = .validation,
         .valid_for = &.{.arguments(&.{ .string, .list_string })},
@@ -121,7 +121,7 @@ const attr_specs: []const Spec = &.{
     .{
         .name = "pattern",
         .value_types = &.{.string},
-        .allow_default = false,
+        .default = .none,
         .unique = true,
         .kind = .validation,
         .valid_for = &.{.arguments(&.{ .string, .list_string })},
@@ -129,7 +129,7 @@ const attr_specs: []const Spec = &.{
     .{
         .name = "min_items",
         .value_types = &.{.number},
-        .allow_default = false,
+        .default = .none,
         .unique = true,
         .kind = .validation,
         .valid_for = &.{.arguments(&.{ .list_string, .list_number })},
@@ -137,7 +137,7 @@ const attr_specs: []const Spec = &.{
     .{
         .name = "max_items",
         .value_types = &.{.number},
-        .allow_default = false,
+        .default = .none,
         .unique = true,
         .kind = .validation,
         .valid_for = &.{.arguments(&.{ .list_string, .list_number })},
@@ -150,7 +150,7 @@ const attr_specs: []const Spec = &.{
                 .tuple = &.{ .string, .string },
             },
         },
-        .allow_default = false,
+        .default = .none,
         .unique = false,
         .kind = .validation,
         .valid_for = &.{.task},
@@ -161,7 +161,7 @@ const process_specs: []const Spec = &.{
     .{
         .name = "nofail",
         .value_types = &.{},
-        .allow_default = true,
+        .default = .auto,
         .unique = true,
         .kind = .modifier,
         .valid_for = &.{ .process_stmt, .process_expr },
@@ -169,7 +169,9 @@ const process_specs: []const Spec = &.{
     .{
         .name = "noecho",
         .value_types = &.{.bool},
-        .allow_default = true,
+        .default = .{
+            .value = .{ .bool = true },
+        },
         .unique = true,
         .kind = .modifier,
         .valid_for = &.{.process_stmt},
@@ -196,7 +198,7 @@ fn Attributes(comptime specs: []const Spec) type {
     const Definition = struct {
         type: AttributeType,
         value_types: []const meta.Type,
-        allow_default: bool,
+        default: Spec.Default,
         unique: bool,
         kind: Kind,
         valid_for: []const ValidFor,
@@ -219,6 +221,7 @@ fn Attributes(comptime specs: []const Spec) type {
     const name_map = enums.generateEnumNameMap(AttributeType);
 
     return struct {
+        const DefinitionT = Definition;
         pub const Type = AttributeType;
 
         pub const raw = defs;
@@ -271,9 +274,15 @@ fn Attributes(comptime specs: []const Spec) type {
 }
 
 const Spec = struct {
+    const Default = union(enum) {
+        none,
+        value: ?meta.Value,
+        const auto: Default = .{ .value = null };
+    };
+
     name: []const u8,
     value_types: []const meta.Type,
-    allow_default: bool,
+    default: Default,
     unique: bool,
     kind: Kind,
     valid_for: []const ValidFor,
@@ -303,15 +312,22 @@ pub const ValidFor = union(TargetType) {
     }
 };
 
-pub fn typesListToString(allocator: std.mem.Allocator, ts: []const meta.Type, default: bool) ![]const u8 {
+pub fn formatValueTypes(allocator: std.mem.Allocator, def: *const definitions.DefinitionT) ![]const u8 {
     const out = blk: {
-        var out = try std.ArrayList([]const u8).initCapacity(allocator, ts.len);
+        var out = try std.ArrayList([]const u8).initCapacity(allocator, def.value_types.len);
 
-        if (default) {
-            try out.append(allocator, "default");
+        switch (def.default) {
+            .value => |value| try out.append(
+                allocator,
+                if (value) |v|
+                    try std.fmt.allocPrint(allocator, "<default({f})>", .{v})
+                else
+                    "<default>",
+            ),
+            else => {},
         }
 
-        for (ts) |t| {
+        for (def.value_types) |t| {
             const str = try std.fmt.allocPrint(allocator, "{f}", .{t});
             try out.append(allocator, str);
         }

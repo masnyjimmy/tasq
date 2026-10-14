@@ -2162,11 +2162,6 @@ const AttributesResolver = struct {
     ) !void {
         const name = attribute.name.string() orelse return;
 
-        const value = if (attribute.value) |value|
-            try self.sema.lowerMetaValue(value)
-        else
-            null;
-
         const def = attrib.definitions.get(name, target) orelse {
             try self.sema.diagnostics.err(
                 attribute.node.trimmedSpan(),
@@ -2181,7 +2176,7 @@ const AttributesResolver = struct {
                 const pt = lib.enums.castEnum(def.type, platform.Tag) orelse unreachable;
                 std.debug.assert(def.unique);
 
-                if (value != null) {
+                if (attribute.value != null) {
                     try self.sema.diagnostics.err(
                         attribute.node.trimmedSpan(),
                         "platform attributes does not take value",
@@ -2211,27 +2206,38 @@ const AttributesResolver = struct {
                     return;
                 }
 
-                if (value) |v| {
-                    for (def.value_types) |vt| {
-                        if (v.validateType(vt)) break;
-                    } else {
-                        const expected = try attrib.typesListToString(self.sema.arena.allocator(), def.value_types, def.allow_default);
-                        try self.sema.diagnostics.err(
-                            attribute.node.trimmedSpan(),
-                            "invalid '{s}' attribute value, expected '{s}'",
-                            .{ name, expected },
-                        );
-                        return;
+                const value: ?meta.Value = blk: {
+                    if (attribute.value) |v| {
+                        const value = try self.sema.lowerMetaValue(v);
+
+                        // validate type
+                        for (def.value_types) |vt| {
+                            if (value.validateType(vt)) break;
+                        } else {
+                            const expected = try attrib.formatValueTypes(self.sema.arena.allocator(), &def);
+                            try self.sema.diagnostics.err(
+                                attribute.node.trimmedSpan(),
+                                "invalid '{s}' attribute value, expected '{s}'",
+                                .{ name, expected },
+                            );
+                            return;
+                        }
+
+                        break :blk value;
+                    } else switch (def.default) {
+                        .value => |value| break :blk value,
+                        .none => {
+                            const expected = try attrib.formatValueTypes(self.sema.arena.allocator(), &def);
+                            try self.sema.diagnostics.err(
+                                attribute.node.trimmedSpan(),
+                                "'{s}' attribute doesn't support default value, expected '{s}'",
+                                .{ name, expected },
+                            );
+                            return;
+                        },
                     }
-                } else if (def.allow_default == false) {
-                    const expected = try attrib.typesListToString(self.sema.arena.allocator(), def.value_types, def.allow_default);
-                    try self.sema.diagnostics.err(
-                        attribute.node.trimmedSpan(),
-                        "'{s}' attribute doesn't support default value, expected '{s}'",
-                        .{ name, expected },
-                    );
-                    return;
-                }
+                };
+
                 try self.attributes.add(
                     self.sema.arena.allocator(),
                     def.type,
