@@ -647,12 +647,12 @@ pub const Sema = struct {
                     },
                 };
             },
-            .string => |str| if (str.lit) |token|
-                .{
-                    .string = token.lexeme,
-                }
-            else
-                Error.Incomplete,
+            .string => |string| .{
+                .string = if (string.lit) |token|
+                    token.lexeme
+                else
+                    "",
+            },
             else => unreachable,
         };
     }
