@@ -11,6 +11,7 @@ const binary_mod = @import("binary.zig");
 const Scope = @import("Scope.zig");
 
 const conzole = @import("conzole");
+const Style = conzole.terminal.Style;
 const Printer = conzole.terminal.Printer;
 
 const builtin = @import("builtin.zig");
@@ -21,6 +22,11 @@ pub const Error = std.Io.Writer.Error || std.Io.Reader.Error || binary_mod.Error
     Abort,
     Break,
     Continue,
+};
+
+const style = struct {
+    const echo: Style = .{ .bold = true, .fg = .bright_white };
+    const @"error": Style = .{ .bold = true, .fg = .red };
 };
 
 allocator: std.mem.Allocator,
@@ -297,21 +303,28 @@ fn handleDecl(self: *Interpreter, scope: *Scope, decl: *const ir.Decl) Error!Val
     return value;
 }
 
-fn handleProcess(self: *Interpreter, process: []const u8, comptime echo: bool, out: ?*std.Io.Writer) Error!void {
+const ProcessOptions = struct {
+    process: []const u8,
+    echo: bool,
+    allow_input: bool,
+    out: ?*std.Io.Writer = null,
+};
+
+fn handleProcess(self: *Interpreter, options: ProcessOptions) Error!u8 {
     const shell_len = self.options.shell.len;
 
     var argv = try self.allocator.alloc([]const u8, shell_len + 1);
     defer self.allocator.free(argv);
 
     @memcpy(argv[0..shell_len], self.options.shell);
-    argv[shell_len] = process;
+    argv[shell_len] = options.process;
 
-    if (comptime echo) {
+    if (options.echo) {
         try self.printer.printStyled(
             self.allocator,
-            .{ .bold = true, .fg = .bright_white },
+            style.echo,
             "{s}\n",
-            .{process},
+            .{options.process},
         );
     }
 
@@ -321,14 +334,18 @@ fn handleProcess(self: *Interpreter, process: []const u8, comptime echo: bool, o
             .argv = argv,
             .cwd = .{ .dir = self.cwd },
             .environ_map = &self.environ,
-            .stdout = if (out == null)
+            .stdout = if (options.out == null)
                 .inherit
             else
                 .pipe,
+            .stdin = if (options.allow_input)
+                .inherit
+            else
+                .ignore,
         },
     );
 
-    if (out) |output| {
+    if (options.out) |output| {
         var buffer: [4096]u8 = undefined;
         var file_reader: std.Io.File.Reader = .initStreaming(
             child.stdout.?,
@@ -339,7 +356,9 @@ fn handleProcess(self: *Interpreter, process: []const u8, comptime echo: bool, o
         _ = try file_reader.interface.streamRemaining(output);
     }
 
-    _ = try child.wait(self.io);
+    const result = try child.wait(self.io);
+
+    return result.exited;
 }
 
 pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Error!Value {
