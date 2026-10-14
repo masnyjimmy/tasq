@@ -124,6 +124,8 @@ pub const Sema = struct {
 
         try self.secondPhase(&result);
 
+        try CycleChecker.checkCycles(self, &result);
+
         return result;
     }
 
@@ -2091,6 +2093,69 @@ pub const Sema = struct {
         const ptr = try self.arena.allocator().create(T);
         ptr.* = value;
         return ptr;
+    }
+};
+
+const CycleChecker = struct {
+    const State = enum {
+        unvisited,
+        in_progress,
+        done,
+    };
+
+    const StateMap = std.AutoHashMap(*ir.Task, State);
+
+    fn checkCycles(self: *Sema, file: *ir.File) !void {
+        var states: StateMap = .init(self.arena.allocator());
+        defer states.deinit();
+
+        var stack: std.ArrayList(*ir.Task) = .empty;
+        defer stack.deinit(self.arena.allocator());
+
+        for (file.tasks) |task| {
+            const state = states.get(task) orelse .unvisited;
+            if (state == .unvisited) {
+                try visit(self, task, &states, &stack);
+            }
+        }
+
+        for (file.groups) |group| {
+            for (group.tasks) |task| {
+                const state = states.get(task) orelse .unvisited;
+                if (state == .unvisited) {
+                    try visit(self, task, &states, &stack);
+                }
+            }
+        }
+    }
+
+    fn visit(
+        self: *Sema,
+        task: *ir.Task,
+        states: *StateMap,
+        stack: *std.ArrayList(*ir.Task),
+    ) !void {
+        try states.put(task, .in_progress);
+        try stack.append(self.arena.allocator(), task);
+
+        for (task.dependecies) |dep| {
+            const s = states.get(dep.task) orelse .unvisited;
+            switch (s) {
+                .in_progress => try self.diagnostics.err(
+                    dep.task.st_ref.dependencies.?.node.span,
+                    "dependency loop, '{s}::{s}' depend on itself, its not allowed",
+                    .{
+                        if (task.group) |g| g.name orelse "<anonymous>" else "",
+                        task.name,
+                    },
+                ),
+                .done => {},
+                .unvisited => try visit(self, dep.task, states, stack),
+            }
+        }
+
+        _ = stack.pop();
+        try states.put(task, .done);
     }
 };
 
