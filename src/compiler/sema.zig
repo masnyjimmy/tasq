@@ -22,7 +22,7 @@ const Scope = @import("scope.zig").Scope;
 const attrib = @import("attributes.zig");
 const functions = @import("functions.zig");
 
-const options = @import("options.zig").options;
+const options = @import("options.zig");
 const platform = @import("platform.zig");
 
 const Diagnostics = @import("Diagnostics.zig");
@@ -2249,13 +2249,13 @@ const AttributesResolver = struct {
 };
 
 const OptionsResolver = struct {
-    const OptionValue = union(options.Type) {
+    const OptionValue = union(options.definitions.Type) {
         shell: []const []const u8,
         dotenv: ?[]const u8,
         working_dir: []const u8,
     };
 
-    const ResolvedOptions = std.EnumMap(options.Type, OptionValue);
+    const ResolvedOptions = std.EnumMap(options.definitions.Type, OptionValue);
 
     sema: *Sema,
     resolved: ResolvedOptions = .init(.{}),
@@ -2306,7 +2306,7 @@ const OptionsResolver = struct {
 
     fn resolveDecl(self: *OptionsResolver, decl: ast.SetDecl) Error!void {
         const decl_name = decl.name.string() orelse return Error.Incomplete;
-        const def = options.get(decl_name) orelse {
+        const def = options.definitions.get(decl_name) orelse {
             try self.sema.diagnostics.err(
                 decl.name.node.trimmedSpan(),
                 "unknown option '{s}'",
@@ -2332,10 +2332,10 @@ const OptionsResolver = struct {
         for (def.value_types) |vt| {
             if (value.validateType(vt)) break;
         } else {
-            const expected = try attrib.typesListToString(self.sema.arena.allocator(), def.value_types, false);
+            const expected = try options.formatValueTypes(self.sema.arena.allocator(), def);
             try self.sema.diagnostics.err(
                 decl.node.trimmedSpan(),
-                "invalid '{s}' option value type, expected '{s}'",
+                "invalid '{s}' option value type, expected {{{s}}}",
                 .{ decl_name, expected },
             );
             return Error.Incomplete;
@@ -2350,7 +2350,7 @@ const OptionsResolver = struct {
         );
     }
 
-    fn getOptionValue(self: *OptionsResolver, id: options.Type, value: meta.Value) !OptionValue {
+    fn getOptionValue(self: *OptionsResolver, id: options.definitions.Type, value: meta.Value) !OptionValue {
         return switch (id) {
             .shell => {
                 var out: std.ArrayList([]const u8) = try .initCapacity(

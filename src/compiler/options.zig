@@ -1,3 +1,4 @@
+const std = @import("std");
 const meta = @import("meta.zig");
 const MetaType = meta.Type;
 
@@ -5,7 +6,22 @@ const lib = @import("lib");
 const enums = lib.enums;
 const ct = lib.@"comptime";
 
-pub const options = OptionsGroup(&.{
+pub fn formatValueTypes(allocator: std.mem.Allocator, def: definitions.DefinitionT) ![]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    const last = def.value_types.len - 1;
+
+    for (def.value_types, 0..) |vt, idx| {
+        try aw.writer.print("{f}", .{vt});
+
+        if (idx != last) {
+            try aw.writer.writeAll(",");
+        }
+    }
+
+    return try aw.toOwnedSlice();
+}
+
+pub const definitions = OptionsGroup(&.{
     .{
         .name = "shell",
         .value_types = &.{.{ .list = &.string }},
@@ -56,6 +72,7 @@ fn OptionsGroup(comptime specs: []const Spec) type {
     const name_map = enums.generateEnumNameMap(Id);
 
     return struct {
+        pub const DefinitionT = Definition;
         pub const raw = defs;
         pub const Type = Id;
 
