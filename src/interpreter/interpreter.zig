@@ -381,13 +381,21 @@ fn handleProcess(self: *Interpreter, scope: *Scope, options: ProcessOptions) Err
             self.io,
             &buffer,
         );
-
         _ = try file_reader.interface.streamRemaining(output);
     }
 
     const result = try child.wait(self.io);
 
-    return result.exited;
+    return switch (result) {
+        .exited => |code| code,
+        .signal => |signal| std.debug.panic(
+            \\Process killed by signal '{t}',
+            \\  Not sure what to do yet :p
+        ,
+            .{signal},
+        ),
+        else => unreachable,
+    };
 }
 
 pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Error!Value {
