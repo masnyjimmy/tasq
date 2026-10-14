@@ -89,7 +89,9 @@ pub fn getCompletions(arena: std.mem.Allocator, file: *const FileState, pos: u32
         .group_task => |group_task| try getTasksCompletions(arena, cc.scope, group_task.group),
         .attribute => |attr| try getAttributeCompletions(arena, attr),
         else => try std.mem.concat(arena, Completion, &.{
-            getKeywordCompletions(),
+            switch (cc.isNode(.@"for")) {
+                inline else => |is_in_loop| getKeywordCompletions(is_in_loop),
+            },
             getBuiltinCompletions(),
             try getSymbolsCompletions(arena, cc.scope, pos),
         }),
@@ -381,6 +383,16 @@ const KeywordSpec = struct {
     new_text: []const u8,
     filter_text: ?[]const u8 = null,
     snippet: ?[]const u8 = null,
+
+    pub fn asCompletion(comptime self: KeywordSpec) Completion {
+        return .{
+            .label = self.label,
+            .new_text = self.new_text,
+            .filter_text = self.filter_text,
+            .snippet = self.snippet,
+            .kind = .Keyword,
+        };
+    }
 };
 
 const keyword_specs: []const KeywordSpec = &.{
@@ -432,20 +444,34 @@ const keyword_specs: []const KeywordSpec = &.{
         .new_text = "set",
     },
 };
+const loop_keyword_spec: []const KeywordSpec = &.{
+    .{
+        .label = "continue",
+        .new_text = "continue",
+    },
+    .{
+        .label = "break",
+        .new_text = "break",
+    },
+};
 
-pub fn getKeywordCompletions() []const Completion {
+pub fn getKeywordCompletions(comptime loop: bool) []const Completion {
     const result = comptime blk: {
         var out: [keyword_specs.len]Completion = undefined;
 
         for (keyword_specs, &out) |spec, *completion| {
-            completion.* = .{
-                .label = spec.label,
-                .new_text = spec.new_text,
-                .filter_text = spec.filter_text, // was being dropped before
-                .snippet = spec.snippet,
-                .kind = .Keyword,
-            };
+            completion.* = spec.asCompletion();
         }
+
+        if (loop) {
+            var loop_out: [loop_keyword_spec.len]Completion = undefined;
+            for (loop_keyword_spec, &loop_out) |spec, *completion| {
+                completion.* = spec.asCompletion();
+            }
+
+            break :blk out ++ loop_out;
+        }
+
         break :blk out;
     };
 
