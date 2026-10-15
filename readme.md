@@ -31,6 +31,7 @@
    - [6.5 Conditional Statements](#65-conditional-statements)
    - [6.6 Switch Statement](#66-switch-statement)
    - [6.7 For Statement](#67-for-statement)
+   - [6.8 Task Dependencies](#68-task-dependencies)
 7. [Task Calls](#7-task-calls)
 8. [Groups](#8-groups)
    - [8.1 Named Groups](#81-named-groups)
@@ -41,6 +42,7 @@
     - [10.2 Documentation Attributes](#102-documentation-attributes)
     - [10.3 Modifier Attributes](#103-modifier-attributes)
     - [10.4 Environment Attributes](#104-environment-attributes)
+    - [10.5 Process Attributes](#105-process-attributes)
 11. [Quick Reference](#11-quick-reference)
 12. [Planned Features](#12-planned-features)
 
@@ -90,7 +92,7 @@ Runtime types are used for bindings and expressions evaluated at runtime.
 - A `lambda` literal has the form `|<captures>| <expr>` (see [§4.7](#47-built-in-functions) for the notation used to describe a lambda's parameter and return types, e.g. `|T| -> bool`). A lambda's parameter types and return type are **inferred entirely from the context that expects it** — a lambda literal has no meaning on its own. Currently the only such context is a built-in function parameter declared to accept a lambda (e.g. `@any`). A lambda literal cannot be assigned to a binding, stored in a list, or used anywhere its expected type isn't already known.
 - `void` has no literal and cannot be produced directly — it only ever appears as the return type of certain built-in functions (e.g. `@print`). Unlike `noreturn`, `void` **is** a real value and behaves as an ordinary concrete type: it can be assigned to a binding, and two `void`-typed branches unify with each other in `if`/`switch`/`for` — but a `void` branch does **not** unify with a differently-typed branch. Pairing a `void` branch with, say, a `string` branch is a type error.
 - `noreturn` can never be assigned to a binding directly and has no literal form. It only ever appears as the return type of certain built-in functions ([§4.7](#47-built-in-functions)) or the `break`/`continue` expressions ([§4.6](#46-break-and-continue-expressions)). When a `noreturn`-typed branch appears alongside other branches — in an `if` expression ([§4.3](#43-if-expression)), `switch` expression ([§4.4](#44-switch-expression)), or `for` expression ([§4.5](#45-for-expression)) — it unifies with whatever type the other branches produce, since a diverging branch never actually yields a value to compare. If **every** branch is `noreturn`, the expression as a whole is `noreturn`.
-- `!T` has no literal and is produced only by certain built-in functions ([§4.7](#47-built-in-functions)) that can fail. It cannot be assigned to a binding, passed to a process call or task call, stored in a list, or used in **any** other expression context — a `!T` value has exactly one valid use: applying `fallback` (§4.8) directly to the built-in call that produced it. `fallback` unwraps a `!T` into a plain `T`, which can then be used anywhere a `T` is expected.
+- `!T` has no literal and is produced only by certain built-in functions ([§4.7](#47-built-in-functions)) that can fail. It cannot be assigned to a binding, passed to a process call or task call, stored in a list, or used in **any** other expression context — a `!T` value has exactly one valid use: applying `fallback` ([§4.8](#48-fallback)) directly to the built-in call that produced it. `fallback` unwraps a `!T` into a plain `T`, which can then be used anywhere a `T` is expected.
 
 ### 2.2 Meta Types
 
@@ -149,10 +151,17 @@ name := <expression>
 
 **Evaluation order:**
 
-- Bindings declared in a **static context** (file root scope or group body) are evaluated **lazily** — only when first referenced, not necessarily in the order they're written.
+- Bindings declared in a **static context** (file root scope or group body) are evaluated **lazily** — only when first referenced, not necessarily in the order they're written. The result is then **cached**: a static binding is evaluated at most once per run, however many times it is referenced.
 - Bindings declared inside a **task body** are evaluated **eagerly, in statement order**, like any other statement in the task.
 
-One practical consequence: a static binding whose expression would diverge (e.g. it calls `@error(...)`, see [§4.7](#47-built-in-functions)) only does so if something actually ends up referencing it. An unused static binding's expression is never evaluated.
+Two practical consequences:
+
+- A static binding whose expression would diverge (e.g. it calls `@error(...)`, see [§4.7](#47-built-in-functions)) only does so if something actually ends up referencing it. An unused static binding's expression is never evaluated.
+- A static binding that contains a process expression ([§4.9](#49-process-expressions)) runs its command only on first reference, and only once. This makes it a convenient place to store a value such as a tool version that several tasks need.
+
+**Environment of static bindings:**
+
+A static binding is evaluated in the environment of the scope it is **declared in**, never in the environment of whichever task happens to reference it first, so its value cannot depend on who triggers it. See [§10.4](#104-environment-attributes).
 
 **Examples:**
 
@@ -163,6 +172,9 @@ host      := "localhost"
 debug     := false
 tags      := ["release", "stable"]
 matrix    := [[1, 2], [3, 4]]
+
+// Evaluated lazily, once, on first use
+zig_version := $`zig --version` fallback "unknown"
 
 task example {
     // Task scope bindings
@@ -279,6 +291,8 @@ The following escape sequences are supported, and are valid in **every** literal
 | `\u{NNNN...}` | Unicode code point given as hexadecimal digits |
 | `\{` | Literal `{` (prevents interpolation) |
 | `\}` | Literal `}` |
+
+Escapes are processed by tasq **before** a process call's command reaches the shell. To give the shell a literal backslash sequence such as `\n` (for example as an argument to `printf`), write the backslash twice: `` $`printf 'a\\nb'` ``.
 
 ### 4.3 If Expression
 
@@ -399,10 +413,11 @@ Built-in functions are called with an `@` prefix and may appear inside any expre
 
 | Signature | Return Type | Description |
 |-----------|-------------|-------------|
-| `@env(key: string)` | `!string` | Returns the value of environment variable `key`, or an error if it is not set. There is no overload with a default value — use `fallback` (§4.8) instead, e.g. `@env("PORT") fallback "8080"`. |
+| `@env(key: string)` | `!string` | Returns the value of environment variable `key` as visible in the current scope (see [§10.4](#104-environment-attributes)), or an error if it is not set. There is no overload with a default value — use `fallback` ([§4.8](#48-fallback)) instead, e.g. `@env("PORT") fallback "8080"`. |
+| `@which(name: string)` | `!string` | Looks up the program `name` in the `PATH` of the current scope's environment (see [§10.4](#104-environment-attributes)) — so a `PATH` set with `[env]` is honored — and returns its path, or an error if it is not found. Like `@env`, it needs `fallback` ([§4.8](#48-fallback)). |
 | `@exists(path: string)` | `bool` | Returns `true` if a file or directory exists at `path`. |
 | `@os()` | `string` | Returns the current platform: `"windows"`, `"linux"`, or `"macos"`. |
-| `@status_code()` | `number` | Returns the exit status of the most recently executed process. Errors if no process has been run yet in the current task. |
+| `@status_code()` | `number` | Returns the exit status of the most recently executed process. Every process call — statement or expression — updates it, including a process expression evaluated as part of a lazily evaluated static binding ([§3](#3-bindings)). After a process that failed but did not abort (`nofail`, or a taken `fallback`), it holds that process's non-zero exit status. Errors if no process has been run yet in the current task. |
 | `@error(message: string)` | `noreturn` | Immediately aborts execution and reports `message`. Never produces a value; see [§2.1](#21-runtime-types) for how a `noreturn` branch unifies with other branches in `if`/`switch`/`for` expressions. |
 | `@print(message: string)` | `void` | Prints `message`. Because its return type is `void`, `@print(...)` can be used directly as a statement without binding its result (see [§6.3](#63-task-body)). |
 | `@parse_number(str: string)` | `!number` | Parses `str` as a `number`, or returns an error if `str` isn't a valid numeric literal. |
@@ -423,24 +438,38 @@ Built-in functions are called with an `@` prefix and may appear inside any expre
 
 Several entries above share a name with different parameter types (`@len`, `@replace`) — the overload used is determined at compile time from the runtime type of the argument, the same way `[]T` itself is generic over `T`.
 
-Functions whose return type is `!T` (`@env`, `@parse_number`) can fail; see [§4.8 Fallback](#48-fallback) for the only way to obtain a usable value from them.
+Functions whose return type is `!T` (`@env`, `@parse_number`, `@which`) can fail; see [§4.8 Fallback](#48-fallback) for the only way to obtain a usable value from them.
 
 > Additional built-in functions will be added in future versions.
 
 ### 4.8 Fallback
 
-Some built-in functions can fail; instead of raising an unhandled runtime error, they return a **result type**, written `!T` (§2.1) — either a successful `T` or an error. A `!T` value cannot be stored, passed around, or used in any expression context. The only way to turn it into a usable `T` is the `fallback` keyword, attached directly to the built-in call that produced it.
+Some calls can fail. `fallback` supplies a replacement value for when they do. It is an optional suffix that is attached **directly to the call** and is valid after two kinds of call:
 
 ```
-<builtin_call> fallback <expression>
+<builtin_call>       fallback <expression>
+<process_expression> fallback <expression>
 ```
 
-**Rules:**
+**After a built-in call:**
 
-- `fallback` is only valid directly after a built-in call whose return type is `!T`. It isn't a general-purpose operator usable anywhere else.
-- Evaluation is **short-circuiting**: if the call succeeds, its unwrapped `T` value is used and the `fallback` expression is never evaluated. The `fallback` expression only runs if the call actually failed.
-- On failure, the `fallback` expression is evaluated and used instead. It must produce type `T` — **or** `noreturn` (e.g. `@error(...)`), in which case it unifies with `T` exactly as `noreturn` branches do elsewhere (see [§2.1](#21-runtime-types)).
-- The overall expression `<builtin_call> fallback <expression>` has type `T` (never `!T`), so — once resolved — it can be used anywhere an ordinary `T` value can: assigned to a binding, interpolated, passed as an argument, and so on.
+- Built-in functions that can fail return a **result type**, written `!T` ([§2.1](#21-runtime-types)) — either a successful `T` or an error. A `!T` cannot be stored, passed around, or used in any expression context. The only way to turn it into a usable `T` is `fallback`, so for these built-ins (`@env`, `@parse_number`, `@which`) it is **mandatory**.
+- `fallback` after a built-in whose return type is not `!T` (for example `@len`) is a compile-time error: such a call cannot fail, so the fallback could never run.
+
+**After a process expression:**
+
+- A process expression is an ordinary `string` that aborts execution when its command fails ([§4.9](#49-process-expressions)), so `fallback` is **optional** here. When the command exits with a non-zero status, the fallback value replaces the process's output entirely.
+- `fallback` cannot be combined with the `nofail` attribute ([§10.5](#105-process-attributes)): a `nofail` process never fails, so the fallback could never run. This is a compile-time error.
+
+`fallback` exists only on built-in calls and process expressions. A process **statement** (a process call standing on its own) has no `fallback` form.
+
+**Rules (both cases):**
+
+- Evaluation is **short-circuiting**: if the call succeeds, its value is used and the `fallback` expression is never evaluated. The `fallback` expression only runs if the call actually failed.
+- The `fallback` expression must produce type `T` (for a process expression: `string`) — **or** `noreturn` (e.g. `@error(...)`), in which case it unifies with `T` exactly as `noreturn` branches do elsewhere (see [§2.1](#21-runtime-types)).
+- The overall expression has type `T` (never `!T`), so it can be used anywhere an ordinary `T` value can: assigned to a binding, interpolated, passed as an argument, and so on.
+- The `fallback` expression extends **as far to the right as possible**. `@env("A") fallback "b" + "c"` means `@env("A") fallback ("b" + "c")`. Use parentheses to limit it: `(@env("A") fallback "b") + "c"`.
+- `fallback` chains nest to the right: `@env("A") fallback @env("B") fallback "x"` tries `A`, then `B`, then `"x"`.
 
 **Examples:**
 
@@ -450,6 +479,15 @@ path := @env("PATH") fallback ""
 
 // Falls back to aborting the program (noreturn unifies with number)
 port := @parse_number(@env("PORT") fallback "8080") fallback @error("PORT must be numeric")
+
+// Require a tool to be installed
+zig := @which("zig") fallback @error("zig is not installed")
+
+// Process expression with a default
+version := $`git describe --tags` fallback "dev"
+
+// Process expression that aborts with a custom message; @status_code() holds the failed exit status
+sha := $`git rev-parse HEAD` fallback @error(`not a git repository (status {@status_code()})`)
 ```
 
 ### 4.9 Process Expressions
@@ -457,25 +495,61 @@ port := @parse_number(@env("PORT") fallback "8080") fallback @error("PORT must b
 A process call written as `` $`command` `` can be used as an **expression**. The command is run, and the expression evaluates to what the process wrote to stdout, as a `string`.
 
 ```
-<binding> := $`<command>`
+$`<command>`
+$[<attributes>]`<command>`
+$`<command>` fallback <expression>
 ```
 
 **Rules:**
 
 - Only `$` followed by a backtick literal is a process call. There is no `$"..."` form.
 - Process calls support the same `{<expr>}` interpolation and escape sequences as interpolated strings (see [§4.2](#42-string-literals-and-interpolation)).
-- A process call is a **process expression** whenever it appears where an expression is expected (a binding's right-hand side, an argument, inside an interpolation, and so on). A process call standing on its own as a task statement is a **process statement** instead ([§6.4](#64-process-calls)).
-- Unlike the statement form, a process expression is **not echoed**, and its stdout is **not** forwarded to the terminal — it is captured as the expression's value.
-- Whitespace is trimmed from the result: leading and trailing whitespace, including the final newline, is not part of the produced `string`.
+- A process call is a **process expression** whenever it appears where an expression is expected (a binding's right-hand side, an argument, inside an interpolation, and so on) — including in **static** bindings at file root or in a group body. A process call standing on its own as a task statement is a **process statement** instead ([§6.4](#64-process-calls)).
+- A process expression has type `string`.
+
+**Defaults:**
+
+| Aspect | Behavior |
+|--------|----------|
+| Echo | None — the command is not echoed |
+| stdout | **Captured** — becomes the value of the expression |
+| stderr | Inherited — shown on the terminal as the command runs |
+| stdin | Empty — the command reads end-of-file immediately and never waits for input |
+| Non-zero exit status | Aborts execution with an error |
+| `@status_code()` | Updated with the command's exit status |
+
+**Trailing newlines:** every newline (`\n`, or `\r\n`) at the **end** of the captured output is removed. Nothing else is trimmed: leading whitespace, trailing spaces and tabs, and newlines inside the output are all preserved.
+
+**Failure handling:**
+
+A command fails when it exits with a non-zero status. There are three ways to deal with it:
+
+| Form | On failure |
+|------|------------|
+| `` $`cmd` `` | Aborts execution with an error (default) |
+| `` $`cmd` fallback <expr> `` | Evaluates to `<expr>` instead ([§4.8](#48-fallback)) |
+| `` $[nofail]`cmd` `` | Does not abort; evaluates to whatever the command wrote to stdout (possibly nothing), and the exit status is available through `@status_code()` |
+
+`fallback` and `nofail` cannot be combined (compile-time error).
+
+**Attributes:** only `nofail` is valid on a process expression. `noecho` is a compile-time error, since there is nothing to echo. See [§10.5](#105-process-attributes).
+
+**Static bindings:** in a static binding (file root or group body) the command runs lazily on first reference, once, and the result is cached ([§3](#3-bindings)). It runs in the environment of the declaring scope ([§10.4](#104-environment-attributes)). Because every process updates `@status_code()`, that first reference can change the value `@status_code()` reports in the task that triggered it.
 
 **Examples:**
 
 ```
-greeting := $`echo "Hello"`            // "Hello"
+greeting := $`echo "Hello"`                       // "Hello"
 branch   := $`git rev-parse --abbrev-ref HEAD`
-```
+version  := $`zig --version` fallback "unknown"
 
-> **Work in progress:** the behavior of a process expression whose command fails (for example, exiting with a non-zero status), including how it interacts with `fail_fast` ([§5](#5-settings)) and `@status_code()` ([§4.7](#47-built-in-functions)), is not yet defined.
+task probe {
+    // Keep going on failure and inspect the outcome yourself
+    out  := $[nofail]`zig --version 2>&1`
+    tool := if (@status_code() == 0) out else "not installed"
+    @print(tool)
+}
+```
 
 ---
 
@@ -530,7 +604,8 @@ set script = ["zsh", "-c"]
 | `script` | `[]string` | Command and arguments used to invoke each process call. Example: `["sh", "-c"]`. |
 | `dotenv` | `bool \| string` | Whether to read a `.env` file into the environment. The boolean shorthand, `set dotenv`, enables reading the default `.env` file from `working_dir`. `set dotenv = "path/to/file"` also enables it, using `path/to/file` instead of the default. Default: `false` (not read). See [§10.4](#104-environment-attributes) for how loaded values interact with the `[env]` attribute and the pre-existing OS environment. |
 | `working_dir` | `string` | Sets the working directory tasq's spawned processes run in. Also used to resolve the default `.env` path for `dotenv`. Defaults to the directory `tasq` was invoked from if not set. |
-| `fail_fast` | `bool` | When `true`, a task aborts immediately if a process call exits with a non-zero status. Default: `false`. |
+
+> There is no global setting to ignore process failures. A process that exits with a non-zero status aborts execution unless that particular call opts out with `nofail` ([§10.5](#105-process-attributes)) or, for a process expression, supplies a `fallback` ([§4.8](#48-fallback)).
 
 > Additional settings will be added in future versions.
 
@@ -546,6 +621,13 @@ Tasks are the primary executable units in tasq. Each task is a named, optionally
 task name {
     // task body
 }
+```
+
+A task body is a *statement block* ([§6.3](#63-task-body)), so a body that consists of a single statement may omit its braces:
+
+```
+task name
+    $`echo hello`
 ```
 
 ### Task with Arguments
@@ -594,7 +676,7 @@ Arguments in a task or group declaration must appear in the following order. Vio
 | 2nd | **Named required** | Has a CLI name (explicit or implicit); no default value |
 | 3rd | **Named optional** | Has a CLI name (explicit or implicit); has a default value (`= <value>`) |
 
-**Implicit naming** — an argument becomes named automatically in two cases:
+**Implicit naming** — an argument becomes named automatically in three cases:
 - It has a default value (`= <value>`), making it named optional
 - Its type is `flag`, `string_list`, or `number_list` — these types are inherently non-positional and are always named required unless a default is also provided
 - It is a `group` argument — all group arguments are implicitly named required
@@ -623,13 +705,23 @@ A task body may contain any combination of the following:
 | Element | Syntax |
 |---------|--------|
 | Binding declaration | `name := <expr>` |
-| Process call | `` $`shell command` `` |
+| Process call | `` $`shell command` `` / `` $[attributes]`shell command` `` |
 | Conditional statement | `if / else if / else` |
 | Switch statement | `switch(...) { ... }` |
 | For statement | `for(...) \|...\| { ... }` |
 | Task call | `name(...)` / `::name(...)` / `group::name(...)` |
 
 Internally, if a line in a task body doesn't match any of the statement forms above, the parser falls back to parsing it as a plain **expression statement** — an expression whose value is simply discarded. This is mainly what allows a built-in call like `@print(msg)` to be written on its own line without binding its result: `@print(...)` is an expression, but since its type is `void`, discarding the result is harmless.
+
+**Statement blocks:**
+
+Everywhere statements are expected — a task body, the branches of `if` / `else if` / `else`, the body of a `for`, and the body of a `switch` branch — the grammar accepts a **statement block**:
+
+```
+STMT_BLOCK := '{' STATEMENTS '}' | STATEMENT
+```
+
+A block that contains exactly one statement may therefore omit its braces. This is one general rule, not a special form of any construct: a brace-less task such as `task build $`cc main.c`` is simply a consequence of it.
 
 ### 6.4 Process Calls
 
@@ -641,13 +733,37 @@ $`cargo build --release`
 $`mkdir -p {output_dir}/bin`
 ```
 
-Each `` $`...` `` literal is **one process invocation**. The command is run using the interpreter configured in the `script` setting, in the directory configured by the `working_dir` setting (§5), and aborts the task immediately on a non-zero exit status if `fail_fast` (§5) is enabled.
+Each `` $`...` `` literal is **one process invocation**. The command is run using the interpreter configured in the `script` setting, in the directory configured by the `working_dir` setting (§5), in the environment described in [§10.4](#104-environment-attributes).
 
 **Process statement vs. process expression:**
 
-A process call standing on its own as a statement in a task body is a **process statement**. It **echoes the command itself** (after interpolation) and then sends the process's output to stdout.
+A process call standing on its own as a statement in a task body is a **process statement**. A process call used inside an expression — for example `out := $`echo "Hello"`` — is a **process expression** ([§4.9](#49-process-expressions)). The two differ in their defaults:
 
-A process call used inside an expression — for example `out := $`echo "Hello"`` — is a **process expression**: it does not echo anything, and evaluates to the process's stdout as a `string`. See [§4.9](#49-process-expressions).
+| Aspect | Process statement | Process expression |
+|--------|-------------------|--------------------|
+| Echo | The command (after interpolation) is echoed before it runs; `noecho` disables this | None |
+| stdout | Inherited | Captured as the value (`string`) |
+| stderr | Inherited | Inherited |
+| stdin | Inherited | Empty (end-of-file) |
+| Non-zero exit status | Aborts execution with an error; `nofail` continues | Aborts execution with an error; `nofail` continues, `fallback` supplies a value |
+| `@status_code()` | Updated | Updated |
+| Fallback | None — a process statement has no `fallback` form | Optional (`fallback <expr>`, [§4.8](#48-fallback)) |
+| Valid attributes | `nofail`, `noecho` | `nofail` |
+
+**Failure:**
+
+A process that exits with a non-zero status **aborts execution** and reports an error. This is the default for every process call; there is no global switch to change it. To continue past a failing command, mark that call with `nofail`; the exit status is then available through `@status_code()`.
+
+**Example:**
+
+```
+task example {
+    $`make build`                        // aborts execution if make fails
+    $[nofail]`rm -f stale.lock`          // continues whatever happens
+    @print(`rm exited with {@status_code()}`)
+    $[noecho]`echo "this command is not echoed"`
+}
+```
 
 ### 6.5 Conditional Statements
 
@@ -666,7 +782,7 @@ if (<condition>) {
 - The condition must evaluate to a `bool`.
 - `else if` and `else` branches are optional.
 - Multiple `else if` branches are allowed.
-- The `{ }` around a branch's body may be **omitted** when the branch contains exactly one statement. This shorthand applies wherever a statement block is expected — including `for` statement bodies (§6.7) — not just `if`. For example:
+- The `{ }` around a branch's body may be **omitted** when the branch contains exactly one statement. This is the general *statement block* rule ([§6.3](#63-task-body)), not something specific to `if` — it applies to `for` bodies (§6.7) and `switch` branches too. For example:
 
   ```
   if (something) {
@@ -734,7 +850,7 @@ for(<subjects>) |<captures>| <stmt_block>
 
 - `<subjects>` is one or more comma-separated list-valued expressions, iterated in lock-step. If the subjects don't all have the same length, iteration runs only for the length of the **shortest** one — there is no out-of-bounds access and no error; the extra elements of longer subjects are simply never visited.
 - `<captures>` binds an identifier to the current element of each corresponding subject, in order — use `_` to ignore a given subject's element. The number of captures must equal the number of subjects, **or** the number of subjects **+ 1**, in which case the extra, final capture is bound to the current 0-based iteration index as a `number`.
-- `<stmt_block>` is either a block of statements in `{ }`, or (per the shorthand in §6.5) a single statement.
+- `<stmt_block>` is either a block of statements in `{ }`, or (per the statement block rule in [§6.3](#63-task-body)) a single statement.
 - `break` and `continue` (§4.6) can be used inside `<stmt_block>` — including from within a nested `if` or `switch` — to control iteration.
 
 **Example:**
@@ -764,6 +880,61 @@ for(array1, array2, array3) |_, _, _, idx| {
     @print(`{idx}`)
 }
 // output: 0, 1, 2, 3  (4 iterations — bounded by the shortest subject, array3)
+```
+
+### 6.8 Task Dependencies
+
+A task can list other tasks that must run before its body. Dependencies are written as a bracketed list of **task calls**, placed between the task's argument list (if it has one) and its body:
+
+```
+task name(arg: string) [dep_a(), dep_b("x")] {
+    // body
+}
+
+task other [dep_a()] {
+    // body
+}
+```
+
+**Rules:**
+
+- Each entry is an ordinary task call ([§7](#7-task-calls)): the same scope resolution (`name(...)`, `::name(...)`, `group::name(...)`), the same argument passing and the same compile-time call errors apply.
+- Dependencies run before the task's body, in the order they are listed.
+- A dependency's arguments are ordinary expressions and may use the task's **own arguments**, e.g. `[compile(target)]` for a task that declares `target`.
+- The task's `[env]` attributes ([§10.4](#104-environment-attributes)) **apply to its dependencies**: they run in the task's effective environment, exactly as if the task had called them itself.
+- The list sits after the signature, so it is never confused with an attribute list ([§10](#10-attributes)), which is written before the `task` keyword.
+- Since a task body is a statement block ([§6.3](#63-task-body)), a task with dependencies may also have a brace-less body.
+
+**Example** (arguments and environment passed to a dependency):
+
+```
+task compile(target: string) {
+    $`cc main.c $CFLAGS -o {target}`
+}
+
+[env: ("CFLAGS", "-O2")]
+task package(target: string) [compile(target)]
+    $`tar czf {target}.tgz {target}`
+```
+
+Here `compile` receives `package`'s `target` and runs with `CFLAGS=-O2`.
+
+**Example** (a Justfile-style project):
+
+```
+host := $`uname -a`
+
+[desc: "build main"]
+task build
+    $`cc *.c -o main`
+
+[desc: "test everything"]
+task test-all [build()]
+    $`./test --all`
+
+[desc: "run a specific test"]
+task test(name: string) [build()]
+    $`./test --test {name}`
 ```
 
 ---
@@ -800,7 +971,22 @@ compile("main.rs", jobs: 4)
 
 **Important:** Names in task calls are the **argument identifier names** as declared in the task signature — not the `[long]` or `[short]` CLI names.
 
-When calling a task that belongs to a group, the group's shared arguments must also be passed by their identifier name.
+When calling a task that belongs to a group from outside that group, the group's shared arguments must also be passed by their identifier name. A task called from inside its own group may omit them — see [§8.1](#81-named-groups).
+
+### Call Errors
+
+The following are compile-time errors:
+
+| Mistake | Example |
+|---------|---------|
+| Unknown task, group or argument name | `compil("main.rs")` |
+| A positional argument after a named one | `compile(jobs: 4, "main.rs")` |
+| More positional arguments than the task declares | `compile("main.rs", 4, true, "extra")` |
+| The same argument supplied twice (by position and by name, or twice by name) | `compile("main.rs", target: "other.rs")` |
+| An argument whose value has the wrong type | `compile(42)` for a `string` argument |
+| A required argument that is not supplied (except a group's shared arguments in a call from inside the same group, [§8.1](#81-named-groups)) | `compile()` |
+
+An argument that declares a default value (including `flag`, whose implicit default is `false`) may be omitted.
 
 ---
 
@@ -836,12 +1022,18 @@ group group_name(
 **Calling tasks within a named group:**
 
 ```
-// From outside the group
+// From outside the group: the group's shared arguments must be passed
 some_group::some_task("positional_arg", shared_val: true)
 
-// From inside the same group
-some_task("positional_arg", shared_val: true)
+// From inside the same group, by plain name: the shared arguments are
+// already provided by the caller, so they may be omitted...
+some_task("positional_arg")
+
+// ...or passed explicitly, which overrides them for this call only
+some_task("positional_arg", shared_val: false)
 ```
+
+When a task calls another task of its own group, the callee receives the same values for the group's shared arguments as the caller has. Passing one by name replaces that value for the duration of that call.
 
 ### 8.2 Anonymous Groups
 
@@ -932,7 +1124,7 @@ When a task has both positional and named arguments, positional arguments are co
 
 ## 10. Attributes
 
-Attributes annotate language elements to affect compilation, documentation, CLI naming, or runtime validation. They are placed **directly before** the element they apply to:
+Attributes annotate language elements to affect compilation, documentation, CLI naming, runtime validation, or process behavior. They are placed **directly before** the element they apply to:
 
 ```
 [attribute_name]
@@ -953,13 +1145,15 @@ Or across multiple bracket pairs (equivalent):
 [desc: "A percentage value"]
 ```
 
+**Process calls** are the one exception to the placement rule: because a process call is an expression, its attributes are written inline between the `$` and the backtick literal, in a single bracket pair, comma-separated: `` $[nofail, noecho]`cmd` ``. See [§10.5](#105-process-attributes).
+
 All attribute values use **meta types** — they are compile-time literals.
 
 **Uniqueness:**
 
 Whether an attribute may be repeated is a **property of the attribute itself**. Every attribute is either:
 
-- **Unique** — it may be applied **at most once** per element (once per argument, task, group, or setting). Applying a unique attribute twice to the same element is a compile-time error.
+- **Unique** — it may be applied **at most once** per element (once per argument, task, group, setting, or process call). Applying a unique attribute twice to the same element is a compile-time error.
 - **Repeatable** — it may be applied multiple times to the same element.
 
 Each attribute table in this section has a **Unique** column stating which of the two an attribute is.
@@ -1110,8 +1304,10 @@ Environment attributes set environment variables in a task's scope.
 
 **Scope:**
 
-- An `[env]` variable is visible to `@env(...)` calls and to spawned processes (process calls, §6.4) anywhere within the task it's declared on.
-- If that task calls another task, the variable is **inherited** into the callee. It reverts once control returns back to the caller — `[env]` is scoped dynamically to the call subtree rooted at the declaring task, not a permanent, run-wide mutation. If a called task declares its own `[env]` for the same name, that value takes precedence for the duration of that call, and the earlier one resumes when it returns, following ordinary nested-scope shadowing.
+- An `[env]` variable is visible to `@env(...)` calls and to spawned processes (process calls, §6.4) anywhere within the task it's declared on, including task-local bindings and process expressions. `@env(...)`, `@which(...)` (which searches the `PATH` of that environment) and spawned processes always see the same environment.
+- If that task calls another task — including one listed as a dependency ([§6.8](#68-task-dependencies)) — the variable is **inherited** into the callee. It reverts once control returns back to the caller — `[env]` is scoped dynamically to the call subtree rooted at the declaring task, not a permanent, run-wide mutation. If a called task declares its own `[env]` for the same name, that value takes precedence for the duration of that call, and the earlier one resumes when it returns, following ordinary nested-scope shadowing.
+- **Static bindings** (file root or group body, [§3](#3-bindings)) are evaluated once, lazily, and cached, so they never see the `[env]` of the task that happens to trigger them. They are evaluated in the environment of the scope they are declared in: the `.env` file (if enabled) and the OS environment.
+- **Task-local bindings** are evaluated while the task runs and see that task's effective environment: its own `[env]` plus whatever it inherited.
 
 **Precedence:**
 
@@ -1121,6 +1317,8 @@ When the same environment variable name could come from more than one source, ta
 2. Values loaded from a `.env` file, if the `dotenv` setting (§5) is enabled
 3. The pre-existing OS environment
 
+Static bindings start at step 2, since no `[env]` is in effect for them.
+
 **Example:**
 
 ```
@@ -1129,6 +1327,54 @@ When the same environment variable name could come from more than one source, ta
 task deploy {
     $`echo "Running in {@env("NODE_ENV") fallback "unknown"}"`
     build() // NODE_ENV and LOG_LEVEL are inherited here too
+}
+```
+
+**Static vs. task-local bindings:**
+
+```
+// Static: always sees the root environment (shell braces are escaped)
+layer := $`echo "$\{LAYER:-unset\}"`
+
+[env: ("LAYER", "task")]
+task show {
+    @print(layer)                              // "unset" (if LAYER isn't set in the OS environment)
+    local := $`echo "$\{LAYER:-unset\}"`
+    @print(local)                              // "task"
+}
+```
+
+---
+
+### 10.5 Process Attributes
+
+Process attributes change how a single process call behaves. They are written inline, between the `$` and the backtick literal, in one bracket pair:
+
+```
+$[nofail]`rm -f stale.lock`
+$[nofail, noecho]`probe --quiet`
+```
+
+| Attribute | Meta Type | Unique | Valid on | Description |
+|-----------|-----------|:------:|----------|-------------|
+| `[nofail]` | *(none)* | Yes | process statement, process expression | A non-zero exit status does not abort execution. For a statement, execution simply continues. For an expression, the value is whatever the command wrote to stdout (possibly nothing). In both cases the exit status is available through `@status_code()`. |
+| `[noecho]` | *(none)* | Yes | process statement | Do not echo the command before running it. The command's own output is unaffected. |
+
+**Rules:**
+
+- Both are presence flags and take no value.
+- Using an attribute on a process call it is not valid on (for example `noecho` on a process expression) is a compile-time error.
+- `nofail` cannot be combined with `fallback` ([§4.8](#48-fallback)) on the same process expression, since a `nofail` process never fails.
+- Applying the same attribute twice to one process call is a compile-time error (both attributes are unique, see [§10](#10-attributes)).
+
+**Example:**
+
+```
+task cleanup {
+    $[nofail]`rm -f build.lock`
+    @print(`exit status: {@status_code()}`)
+
+    $[noecho]`echo "not echoed"`
 }
 ```
 
@@ -1155,9 +1401,22 @@ task deploy {
 | `"text"` | `string` | No | Basic string |
 | `` `text {expr}` `` | `string` | Yes (`{ }`) | Interpolated string |
 | `'c'` | `char` | No | Single character |
-| `` $`command {expr}` `` | process call | Yes (`{ }`) | Statement: echoes, output to stdout. Expression: not echoed, yields trimmed stdout as `string` |
+| `` $`command {expr}` `` | process call | Yes (`{ }`) | Statement: echoed, stdout and stderr inherited. Expression: not echoed, yields stdout as `string` with trailing newlines removed |
 
 Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` `` `\0` `\xNN` `\u{NNNN...}` `\{` `\}`
+
+### Process Call Summary
+
+| | Statement | Expression |
+|---|-----------|------------|
+| Echo | yes (`noecho` disables) | no |
+| stdout | inherited | captured (`string`) |
+| stderr | inherited | inherited |
+| stdin | inherited | empty |
+| On non-zero exit | abort (`nofail` continues) | abort (`nofail` continues; `fallback` supplies a value) |
+| `@status_code()` | updated | updated |
+| `fallback` | none | optional |
+| Attributes | `nofail`, `noecho` | `nofail` |
 
 ### Scope Resolution Summary
 
@@ -1169,14 +1428,16 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 
 ### Attribute Validity Summary
 
-| Attribute | `task` | `group` | argument | `set` | Unique |
-|-----------|:------:|:-------:|:--------:|:-----:|:------:|
-| `[windows]` `[linux]` `[macos]` | ✓ | ✓ | | ✓ | Yes |
-| `[desc]` | ✓ | ✓ | ✓ | | Yes |
-| `[private]` | ✓ | ✓ | | | Yes |
-| `[long]` `[short]` | | | ✓ | | Yes |
-| `[int]` `[min]` `[max]` `[pattern]` `[max_items]` | | | ✓ | | Yes |
-| `[env]` | ✓ | | | | No (repeatable) |
+| Attribute | `task` | `group` | argument | `set` | process stmt | process expr | Unique |
+|-----------|:------:|:-------:|:--------:|:-----:|:------------:|:------------:|:------:|
+| `[windows]` `[linux]` `[macos]` | ✓ | ✓ | | ✓ | | | Yes |
+| `[desc]` | ✓ | ✓ | ✓ | | | | Yes |
+| `[private]` | ✓ | ✓ | | | | | Yes |
+| `[long]` `[short]` | | | ✓ | | | | Yes |
+| `[int]` `[min]` `[max]` `[pattern]` `[max_items]` | | | ✓ | | | | Yes |
+| `[env]` | ✓ | | | | | | No (repeatable) |
+| `[nofail]` | | | | | ✓ | ✓ | Yes |
+| `[noecho]` | | | | | ✓ | | Yes |
 
 ### Type System at a Glance
 
@@ -1198,4 +1459,6 @@ The following are reserved for future versions and not currently part of the lan
 - **Additional built-in functions** — type conversion utilities and other helpers
 - **Additional settings** — further interpreter configuration options
 - **Additional modifier attributes** — extended argument validation
-- **Process expression error handling** — defined behavior for a failing process expression, and its interaction with `fail_fast` and `@status_code()` (see [§4.9](#49-process-expressions))
+- **Isolated `@status_code()` for static bindings** — today a lazily evaluated static binding that runs a process updates `@status_code()` like any other process; this may be changed so that evaluating a static binding leaves it untouched
+- **Eager evaluation of selected static bindings** — a way to force chosen static bindings to be evaluated at startup instead of on first reference
+- **Configurable stdin for process expressions** — process expressions currently read an empty stdin
