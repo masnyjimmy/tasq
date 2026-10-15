@@ -268,6 +268,16 @@ pub const Sema = struct {
         else
             &.{};
 
+        const ptr = try self.create(ir.Group, .{
+            .name = name,
+            .args = args,
+            .decls = undefined,
+            .tasks = undefined,
+            .scope = group_scope,
+            .desc = desc,
+            .cwd = cwd,
+        });
+
         var decls: std.ArrayList(*ir.Decl) = .empty;
         var tasks: std.ArrayList(*ir.Task) = .empty;
 
@@ -276,17 +286,23 @@ pub const Sema = struct {
         var it = group.body.iter();
         while (it.next()) |elem| {
             switch (elem) {
-                .task => |task| try tasks.append(
-                    self.arena.allocator(),
-                    self.analyseTask(
+                .task => |task| {
+                    const task_ptr = self.analyseTask(
                         task,
                         group_scope,
                         tasks_scope,
                     ) catch |err| switch (err) {
                         Error.Incomplete => continue,
                         else => return err,
-                    },
-                ),
+                    };
+
+                    task_ptr.group = ptr;
+
+                    try tasks.append(
+                        self.arena.allocator(),
+                        task_ptr,
+                    );
+                },
                 .binding => |binding| try decls.append(
                     self.arena.allocator(),
                     self.analyseBindingDecl(
@@ -300,14 +316,8 @@ pub const Sema = struct {
             }
         }
 
-        const ptr = try self.create(ir.Group, .{
-            .name = name,
-            .args = args,
-            .decls = try decls.toOwnedSlice(self.arena.allocator()),
-            .tasks = try tasks.toOwnedSlice(self.arena.allocator()),
-            .scope = group_scope,
-            .desc = desc,
-        });
+        ptr.decls = try decls.toOwnedSlice(self.arena.allocator());
+        ptr.tasks = try tasks.toOwnedSlice(self.arena.allocator());
 
         if (attributes_result.matchesPlatform()) {
             if (name) |n| {
