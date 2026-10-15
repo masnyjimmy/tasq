@@ -65,6 +65,7 @@ pub const Group = struct {
     tasks: []*Task,
     scope: *Scope,
     desc: ?[]const u8,
+    cwd: ?[]const u8,
 
     pub fn getTask(self: *const Group, name: []const u8) ?*Task {
         for (self.tasks) |task| {
@@ -88,6 +89,7 @@ pub const Task = struct {
     dependecies: []const TaskCall,
     private: bool,
     envs: []const Env,
+    cwd: ?[]const u8,
     desc: ?[]const u8,
     scope: *Scope,
     body: StatementBlock,

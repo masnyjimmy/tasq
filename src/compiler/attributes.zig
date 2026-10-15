@@ -151,8 +151,16 @@ const attr_specs: []const Spec = &.{
         },
         .default = .none,
         .unique = false,
-        .kind = .validation,
+        .kind = .modifier,
         .valid_for = &.{.task},
+    },
+    .{
+        .name = "cwd",
+        .value_types = &.{.string},
+        .default = .none,
+        .unique = true,
+        .kind = .modifier,
+        .valid_for = &.{ .task, .group },
     },
 };
 

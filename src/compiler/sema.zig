@@ -168,6 +168,11 @@ pub const Sema = struct {
             break :blk try envs.toOwnedSlice(self.arena.allocator());
         };
 
+        const cwd = if (attributes_result.attributes.getAssertOne(.cwd)) |attr|
+            attr.?.string
+        else
+            null;
+
         const ptr = try self.create(ir.Task, .{
             .st_ref = task,
             .name = name,
@@ -175,6 +180,7 @@ pub const Sema = struct {
             .private = is_private,
             .desc = desc,
             .envs = envs,
+            .cwd = cwd,
             .scope = task_scope,
             // rest needs to be filled up after all symbols are recognized
             .dependecies = undefined,
@@ -241,6 +247,11 @@ pub const Sema = struct {
         defer attributes_result.deinit(self.arena.allocator());
 
         const desc = if (attributes_result.attributes.getAssertOne(.desc)) |value|
+            value.?.string
+        else
+            null;
+
+        const cwd = if (attributes_result.attributes.getAssertOne(.cwd)) |value|
             value.?.string
         else
             null;

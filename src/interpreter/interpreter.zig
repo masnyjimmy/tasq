@@ -172,36 +172,65 @@ pub fn runTask(self: *Interpreter, scope: *Scope, task: *const ir.Task, values: 
         );
     }
 
+    const target_working_dir, const new = blk: {
+        const group_working_dir = if (task.group) |group|
+            if (group.cwd) |cwd|
+                cwd
+            else
+                null
+        else
+            null;
+
+        if (group_working_dir == null and task.cwd == null)
+            break :blk .{ self.cwd, false };
+
+        const path = try std.fs.path.join(
+            self.allocator,
+            &.{
+                group_working_dir orelse "",
+                task.cwd orelse "",
+            },
+        );
+        defer self.allocator.free(path);
+        break :blk .{
+            try self.cwd.openDir(self.io, path, .{}),
+            true,
+        };
+    };
+    defer if (new) target_working_dir.close(self.io);
+
     for (task.dependecies) |*dep| {
-        try self.handleTaskCall(task_scope, dep);
+        try self.handleTaskCall(target_working_dir, task_scope, dep);
     }
 
     const task_body_scope = try Scope.create(task_scope, self.allocator, task.body.scope);
     defer task_body_scope.destroy();
 
-    try self.runBlock(task_body_scope, task.body.statements);
+    // cd into cwd
+
+    try self.runBlock(target_working_dir, task_body_scope, task.body.statements);
 }
 
-pub fn runBlock(self: *Interpreter, scope: *Scope, statements: []const ir.Statement) Error!void {
+pub fn runBlock(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, statements: []const ir.Statement) Error!void {
     for (statements) |*stmt| {
-        try self.main(scope, stmt);
+        try self.main(cwd, scope, stmt);
     }
 }
 
-fn main(self: *Interpreter, scope: *Scope, stmt: *const ir.Statement) Error!void {
+fn main(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statement) Error!void {
     switch (stmt.*) {
         .decl => |decl| {
-            _ = try self.handleDecl(scope, decl);
+            _ = try self.handleDecl(cwd, scope, decl);
         },
         .process => |proc_expr| {
-            const process = try self.resolveString(scope, proc_expr.command);
+            const process = try self.resolveString(cwd, scope, proc_expr.command);
 
             const noecho = if (proc_expr.noecho) |value|
                 value
             else
                 false;
 
-            self.status_code = try self.handleProcess(scope, .{
+            self.status_code = try self.handleProcess(cwd, scope, .{
                 .process = process,
                 .echo = !noecho,
                 .allow_input = true,
@@ -221,22 +250,22 @@ fn main(self: *Interpreter, scope: *Scope, stmt: *const ir.Statement) Error!void
             }
         },
         .if_stmt => |*if_stmt| {
-            const cond = try self.evaluateExpr(scope, &if_stmt.cond);
+            const cond = try self.evaluateExpr(cwd, scope, &if_stmt.cond);
 
             if (cond.bool) {
                 const then_scope = try Scope.create(scope, self.allocator, if_stmt.then.scope);
                 defer then_scope.destroy();
 
-                try self.runBlock(then_scope, if_stmt.then.statements);
+                try self.runBlock(cwd, then_scope, if_stmt.then.statements);
             } else if (if_stmt.else_) |*else_| {
                 const else_scope = try Scope.create(scope, self.allocator, else_.scope);
                 defer else_scope.destroy();
 
-                try self.runBlock(else_scope, else_.statements);
+                try self.runBlock(cwd, else_scope, else_.statements);
             }
         },
         .switch_stmt => |*switch_stmt| {
-            const target = try self.evaluateExpr(scope, &switch_stmt.subject);
+            const target = try self.evaluateExpr(cwd, scope, &switch_stmt.subject);
 
             const block: ?*const ir.StatementBlock = switch_stmt.cases.getPtr(target) orelse if (switch_stmt.else_case) |*e| e else null;
 
@@ -244,7 +273,7 @@ fn main(self: *Interpreter, scope: *Scope, stmt: *const ir.Statement) Error!void
                 const case_scope = try Scope.create(scope, self.allocator, b.scope);
                 defer case_scope.destroy();
 
-                try self.runBlock(case_scope, b.statements);
+                try self.runBlock(cwd, case_scope, b.statements);
             }
         },
         .for_stmt => |*for_stmt| {
@@ -252,7 +281,7 @@ fn main(self: *Interpreter, scope: *Scope, stmt: *const ir.Statement) Error!void
             defer self.allocator.free(values);
 
             for (values, for_stmt.subjects) |*out, in| {
-                out.* = try self.evaluateExpr(scope, &in);
+                out.* = try self.evaluateExpr(cwd, scope, &in);
             }
 
             const max_length = blk: {
@@ -286,7 +315,7 @@ fn main(self: *Interpreter, scope: *Scope, stmt: *const ir.Statement) Error!void
                     }
                 }
 
-                self.runBlock(for_scope, for_stmt.body.statements) catch |err| switch (err) {
+                self.runBlock(cwd, for_scope, for_stmt.body.statements) catch |err| switch (err) {
                     Error.Continue => continue,
                     Error.Break => break,
                     else => return err,
@@ -294,15 +323,15 @@ fn main(self: *Interpreter, scope: *Scope, stmt: *const ir.Statement) Error!void
             }
         },
         .task_call => |*task_call| {
-            try self.handleTaskCall(scope, task_call);
+            try self.handleTaskCall(cwd, scope, task_call);
         },
         .expr => |*expr| {
-            _ = try self.evaluateExpr(scope, expr);
+            _ = try self.evaluateExpr(cwd, scope, expr);
         },
     }
 }
 
-fn handleTaskCall(self: *Interpreter, scope: *Scope, task_call: *const ir.TaskCall) Error!void {
+fn handleTaskCall(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, task_call: *const ir.TaskCall) Error!void {
     const task = task_call.task;
 
     var values: std.array_hash_map.String(Value) = .empty;
@@ -312,17 +341,17 @@ fn handleTaskCall(self: *Interpreter, scope: *Scope, task_call: *const ir.TaskCa
     while (it.next()) |kv| {
         switch (kv.value_ptr.*) {
             .default => |def| try values.put(self.allocator, kv.key_ptr.*, def),
-            .value => |expr| try values.put(self.allocator, kv.key_ptr.*, try self.evaluateExpr(scope, &expr)),
+            .value => |expr| try values.put(self.allocator, kv.key_ptr.*, try self.evaluateExpr(cwd, scope, &expr)),
         }
     }
 
     try self.runTask(scope, task, values, task_call.same_group);
 }
 
-fn handleDecl(self: *Interpreter, scope: *Scope, decl: *const ir.Decl) Error!Value {
+fn handleDecl(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, decl: *const ir.Decl) Error!Value {
     const decl_scope = scope.findByStatic(decl.scope) orelse unreachable;
 
-    const value = try self.evaluateExpr(decl_scope, &decl.value);
+    const value = try self.evaluateExpr(cwd, decl_scope, &decl.value);
 
     try decl_scope.define(.{
         .name = decl.name,
@@ -339,7 +368,7 @@ const ProcessOptions = struct {
     out: ?*std.Io.Writer = null,
 };
 
-fn handleProcess(self: *Interpreter, scope: *Scope, options: ProcessOptions) Error!u8 {
+fn handleProcess(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, options: ProcessOptions) Error!u8 {
     const shell_len = self.options.shell.len;
 
     var argv = try self.allocator.alloc([]const u8, shell_len + 1);
@@ -361,7 +390,7 @@ fn handleProcess(self: *Interpreter, scope: *Scope, options: ProcessOptions) Err
         self.io,
         .{
             .argv = argv,
-            .cwd = .{ .dir = self.cwd },
+            .cwd = .{ .dir = cwd },
             .environ_map = &scope.environ,
             .stdout = if (options.out == null)
                 .inherit
@@ -398,21 +427,21 @@ fn handleProcess(self: *Interpreter, scope: *Scope, options: ProcessOptions) Err
     };
 }
 
-pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Error!Value {
+pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *const ir.Expr) Error!Value {
     return switch (expr.*) {
         .bool_lit => |lit| .{ .bool = lit },
         .number_lit => |lit| .{ .number = lit },
-        .string => |str| .{ .string = try self.resolveString(scope, str) },
+        .string => |str| .{ .string = try self.resolveString(cwd, scope, str) },
         .list => |list| {
             var result: std.ArrayList(Value) = try .initCapacity(scope.arena.allocator(), list.items.len);
             errdefer result.deinit(scope.arena.allocator());
 
             for (list.items) |item| {
                 if (item.is_spread) {
-                    const spread = try self.evaluateExpr(scope, item.expr);
+                    const spread = try self.evaluateExpr(cwd, scope, item.expr);
                     try result.appendSlice(scope.arena.allocator(), spread.list.items);
                 } else {
-                    try result.append(scope.arena.allocator(), try self.evaluateExpr(scope, item.expr));
+                    try result.append(scope.arena.allocator(), try self.evaluateExpr(cwd, scope, item.expr));
                 }
             }
 
@@ -431,33 +460,33 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
             }
             // resolve if not already (lazy resolution)
             return switch (id.symbol.origin) {
-                .binding => |decl| try self.handleDecl(scope, decl),
+                .binding => |decl| try self.handleDecl(cwd, scope, decl),
                 .argument => unreachable, // should be already resolved by runtime builder,
                 else => unreachable, // group and task cannot be used in expression
             };
         },
         .if_expr => |if_expr| {
-            const cond = try self.evaluateExpr(scope, &if_expr.cond);
+            const cond = try self.evaluateExpr(cwd, scope, &if_expr.cond);
             std.debug.assert(cond == .bool);
 
             return if (cond.bool)
-                try self.evaluateExpr(scope, &if_expr.then)
+                try self.evaluateExpr(cwd, scope, &if_expr.then)
             else
-                try self.evaluateExpr(scope, &if_expr.@"else");
+                try self.evaluateExpr(cwd, scope, &if_expr.@"else");
         },
         .switch_expr => |switch_expr| {
-            const target = try self.evaluateExpr(scope, &switch_expr.subject);
+            const target = try self.evaluateExpr(cwd, scope, &switch_expr.subject);
 
             const value = switch_expr.cases.get(target) orelse switch_expr.else_case;
 
-            return try self.evaluateExpr(scope, &value);
+            return try self.evaluateExpr(cwd, scope, &value);
         },
         .for_expr => |for_expr| {
             const values = try self.allocator.alloc(Value, for_expr.subjects.len);
             defer self.allocator.free(values);
 
             for (values, for_expr.subjects) |*out, in| {
-                out.* = try self.evaluateExpr(scope, &in);
+                out.* = try self.evaluateExpr(cwd, scope, &in);
             }
 
             const max_length = blk: {
@@ -493,7 +522,7 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
                     }
                 }
 
-                const item = self.evaluateExpr(for_scope, &for_expr.body) catch |err| switch (err) {
+                const item = self.evaluateExpr(cwd, for_scope, &for_expr.body) catch |err| switch (err) {
                     Error.Continue => continue,
                     Error.Break => break,
                     else => return err,
@@ -513,8 +542,8 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
             };
         },
         .binary => |binary| {
-            const left = try self.evaluateExpr(scope, &binary.left);
-            const right = try self.evaluateExpr(scope, &binary.right);
+            const left = try self.evaluateExpr(cwd, scope, &binary.left);
+            const right = try self.evaluateExpr(cwd, scope, &binary.right);
 
             // add,sub,div,mul => [string,float,int,list,bool] op [string,float,int]
 
@@ -526,7 +555,7 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
             );
         },
         .unary => |unary| {
-            const operand = try self.evaluateExpr(scope, &unary.operand);
+            const operand = try self.evaluateExpr(cwd, scope, &unary.operand);
 
             switch (unary.op) {
                 .not_op => {
@@ -548,25 +577,25 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
             const args = try scope.arena.allocator().alloc(Value, call.args.len);
 
             for (call.args, args) |in, *out| {
-                out.* = try self.evaluateExpr(scope, &in);
+                out.* = try self.evaluateExpr(cwd, scope, &in);
             }
 
-            const value = try builtin.callFunction(self, scope, call.function.id, args);
+            const value = try builtin.callFunction(self, cwd, scope, call.function.id, args);
 
             return switch (value) {
                 .result => |r| if (r.value) |v|
                     v.*
                 else
-                    try self.evaluateExpr(scope, &call.fallback.?),
+                    try self.evaluateExpr(cwd, scope, &call.fallback.?),
                 else => value,
             };
         },
         .lambda => |lambda| .{ .lambda = lambda },
         .process => |process_expr| {
-            const process = try self.resolveString(scope, process_expr.command);
+            const process = try self.resolveString(cwd, scope, process_expr.command);
             var aw: std.Io.Writer.Allocating = .init(scope.arena.allocator());
 
-            self.status_code = try self.handleProcess(scope, .{
+            self.status_code = try self.handleProcess(cwd, scope, .{
                 .process = process,
                 .echo = false,
                 .allow_input = false,
@@ -575,7 +604,7 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
 
             if (self.status_code != 0) {
                 if (process_expr.fallback) |*value| {
-                    return try self.evaluateExpr(scope, value);
+                    return try self.evaluateExpr(cwd, scope, value);
                 }
 
                 if (process_expr.nofail == false) {
@@ -609,7 +638,7 @@ pub fn evaluateExpr(self: *Interpreter, scope: *Scope, expr: *const ir.Expr) Err
     };
 }
 
-fn resolveString(self: *Interpreter, scope: *Scope, string: ir.String) Error![]const u8 {
+fn resolveString(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, string: ir.String) Error![]const u8 {
     var aw = std.Io.Writer.Allocating.init(scope.arena.allocator());
     const writer = &aw.writer;
     errdefer aw.deinit();
@@ -620,7 +649,7 @@ fn resolveString(self: *Interpreter, scope: *Scope, string: ir.String) Error![]c
                 try writer.writeAll(lit);
             },
             .expr => |expr| {
-                const value = try self.evaluateExpr(scope, &expr);
+                const value = try self.evaluateExpr(cwd, scope, &expr);
                 try writer.print("{f}", .{value});
             },
         }

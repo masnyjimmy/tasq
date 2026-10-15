@@ -16,7 +16,7 @@ const functions_count = functions.definitions.items.len;
 
 pub const Error = Interpreter.Error;
 
-const FunctionType = *const fn (*Interpreter, scope: *Scope, []const Value) Error!Value;
+const FunctionType = *const fn (*Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value;
 
 const handlers: [functions_count]FunctionType = .{
     handleError,
@@ -45,6 +45,7 @@ const handlers: [functions_count]FunctionType = .{
 
 pub fn callFunction(
     interpreter: *Interpreter,
+    cwd: std.Io.Dir,
     scope: *Scope,
     id: functions.definitions.Id,
     args: []const Value,
@@ -53,7 +54,7 @@ pub fn callFunction(
 
     const handler = handlers[index];
 
-    return try handler(interpreter, scope, args);
+    return try handler(interpreter, cwd, scope, args);
 }
 
 pub fn makeResult(scope: *Scope, result_type: *const Type, value: ?Value) Error!Value {
@@ -77,7 +78,7 @@ pub fn makeResult(scope: *Scope, result_type: *const Type, value: ?Value) Error!
     };
 }
 
-fn handleEnv(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+fn handleEnv(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const key = args[0].string;
 
     return if (scope.environ.get(key)) |value| makeResult(
@@ -87,10 +88,8 @@ fn handleEnv(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
     ) else makeResult(scope, &.string, null);
 }
 
-fn handleExists(self: *Interpreter, _: *Scope, args: []const Value) Error!Value {
+fn handleExists(self: *Interpreter, cwd: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
     const path = args[0].string;
-
-    const cwd = std.Io.Dir.cwd();
 
     const access_result = cwd.access(self.io, path, .{ .read = true });
 
@@ -102,22 +101,22 @@ fn handleExists(self: *Interpreter, _: *Scope, args: []const Value) Error!Value 
     return .{ .bool = result };
 }
 
-fn handleOs(_: *Interpreter, _: *Scope, _: []const Value) Error!Value {
+fn handleOs(_: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
     return .{
         .string = @tagName(platform.tag),
     };
 }
 
-fn handleStatusCode(self: *Interpreter, _: *Scope, _: []const Value) Error!Value {
+fn handleStatusCode(self: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
     return .{ .number = @floatFromInt(self.status_code) };
 }
 
-fn handleWhich(self: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+fn handleWhich(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const name = args[0].string;
 
     const result = try program.which(
         self.allocator,
-        self.cwd,
+        cwd,
         self.io,
         &scope.environ,
         name,
@@ -141,7 +140,7 @@ fn handleWhich(self: *Interpreter, scope: *Scope, args: []const Value) Error!Val
     );
 }
 
-fn handleError(self: *Interpreter, _: *Scope, args: []const Value) Error!Value {
+fn handleError(self: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
     const message = args[0].string;
 
     try self.printer.printStyled(
@@ -154,7 +153,7 @@ fn handleError(self: *Interpreter, _: *Scope, args: []const Value) Error!Value {
     return Error.Abort;
 }
 
-fn handlePrint(self: *Interpreter, _: *Scope, args: []const Value) Error!Value {
+fn handlePrint(self: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
     const message = args[0].string;
 
     try self.printer.print(
@@ -166,7 +165,7 @@ fn handlePrint(self: *Interpreter, _: *Scope, args: []const Value) Error!Value {
     return .void;
 }
 
-fn handleAny(self: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+fn handleAny(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const list = args[0].list;
 
     const test_fn = args[1].lambda;
@@ -180,7 +179,7 @@ fn handleAny(self: *Interpreter, scope: *Scope, args: []const Value) Error!Value
             .value = item,
         }, false);
 
-        const result = try self.evaluateExpr(lambda_scope, &test_fn.body);
+        const result = try self.evaluateExpr(cwd, lambda_scope, &test_fn.body);
 
         if (result.eql(.{ .bool = true }))
             return .{ .bool = true };
@@ -189,7 +188,7 @@ fn handleAny(self: *Interpreter, scope: *Scope, args: []const Value) Error!Value
     return .{ .bool = false };
 }
 
-fn handleAll(self: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+fn handleAll(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const list = args[0].list;
 
     const test_fn = args[1].lambda;
@@ -203,7 +202,7 @@ fn handleAll(self: *Interpreter, scope: *Scope, args: []const Value) Error!Value
             .value = item,
         }, false);
 
-        const result = try self.evaluateExpr(lambda_scope, &test_fn.body);
+        const result = try self.evaluateExpr(cwd, lambda_scope, &test_fn.body);
 
         if (result.eql(.{ .bool = false }))
             return .{ .bool = false };
@@ -212,7 +211,7 @@ fn handleAll(self: *Interpreter, scope: *Scope, args: []const Value) Error!Value
     return .{ .bool = true };
 }
 
-fn handleReduce(self: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+fn handleReduce(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const list = args[0].list;
     var value = args[1];
     const func = args[2].lambda;
@@ -231,13 +230,13 @@ fn handleReduce(self: *Interpreter, scope: *Scope, args: []const Value) Error!Va
             .value = item,
         }, false);
 
-        value = try self.evaluateExpr(lambda_scope, &func.body);
+        value = try self.evaluateExpr(cwd, lambda_scope, &func.body);
     }
 
     return value;
 }
 
-fn handleLen(_: *Interpreter, _: *Scope, args: []const Value) Error!Value {
+fn handleLen(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
     const length = switch (args[0]) {
         .string => |str| str.len,
         .list => |list| list.items.len,
@@ -249,7 +248,7 @@ fn handleLen(_: *Interpreter, _: *Scope, args: []const Value) Error!Value {
     };
 }
 
-fn handleSplit(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+fn handleSplit(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const str = args[0].string;
     const sep = args[1].string;
 
@@ -276,7 +275,7 @@ fn handleSplit(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value 
     };
 }
 
-fn handleJoin(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+fn handleJoin(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const strings = args[0].list;
     const sep = args[1].string;
 
@@ -309,7 +308,7 @@ fn handleJoin(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
     };
 }
 
-fn handleLower(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+fn handleLower(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const str = args[0].string;
 
     const out = try std.ascii.allocLowerString(scope.arena.allocator(), str);
@@ -319,7 +318,7 @@ fn handleLower(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value 
     };
 }
 
-fn handleUpper(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+fn handleUpper(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const str = args[0].string;
 
     const out = try std.ascii.allocUpperString(scope.arena.allocator(), str);
@@ -329,7 +328,7 @@ fn handleUpper(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value 
     };
 }
 
-fn handleContains(_: *Interpreter, _: *Scope, args: []const Value) Error!Value {
+fn handleContains(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
     const str = args[0].string;
     const sub = args[1].string;
 
@@ -340,7 +339,7 @@ fn handleContains(_: *Interpreter, _: *Scope, args: []const Value) Error!Value {
     };
 }
 
-fn handleStartsWith(_: *Interpreter, _: *Scope, args: []const Value) Error!Value {
+fn handleStartsWith(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
     const str = args[0].string;
     const sub = args[1].string;
 
@@ -351,7 +350,7 @@ fn handleStartsWith(_: *Interpreter, _: *Scope, args: []const Value) Error!Value
     };
 }
 
-fn handleEndsWith(_: *Interpreter, _: *Scope, args: []const Value) Error!Value {
+fn handleEndsWith(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
     const str = args[0].string;
     const sub = args[1].string;
 
@@ -361,7 +360,7 @@ fn handleEndsWith(_: *Interpreter, _: *Scope, args: []const Value) Error!Value {
         .bool = ends_with,
     };
 }
-fn handleReplaceString(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+fn handleReplaceString(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const str = args[0].string;
     const old = args[1].string;
     const new = args[2].string;
@@ -379,7 +378,7 @@ fn handleReplaceString(_: *Interpreter, scope: *Scope, args: []const Value) Erro
     };
 }
 
-fn handleReplaceList(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+fn handleReplaceList(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const list = args[0].list;
     const old = args[1];
     const new = args[2];
@@ -400,7 +399,7 @@ fn handleReplaceList(_: *Interpreter, scope: *Scope, args: []const Value) Error!
     };
 }
 
-fn handleParseNumber(_: *Interpreter, scope: *Scope, args: []const Value) Error!Value {
+fn handleParseNumber(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const str = args[0].string;
 
     const number: ?f64 = std.fmt.parseFloat(f64, str) catch null;
