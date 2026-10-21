@@ -687,13 +687,15 @@ pub const Sema = struct {
             .is_static = value.is_static,
         });
 
-        try self.defineSymbol(scope, .{
-            .name = name,
-            .span = binding.node.trimmedSpan(),
-            .origin = .{
-                .binding = ptr,
-            },
-        });
+        if (std.mem.eql(u8, name, "_") == false) {
+            try self.defineSymbol(scope, .{
+                .name = name,
+                .span = binding.node.trimmedSpan(),
+                .origin = .{
+                    .binding = ptr,
+                },
+            });
+        }
 
         return ptr;
     }
@@ -769,7 +771,7 @@ pub const Sema = struct {
                 const result = try self.analyseExpr(expr, scope);
 
                 if (result.type != .void and result.type != .noreturn) {
-                    try self.diagnostics.warn(
+                    try self.diagnostics.err(
                         expr.node.trimmedSpan(),
                         "discarded value",
                         .{},

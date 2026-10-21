@@ -74,7 +74,7 @@ pub const Parser = struct {
 
             switch (try self.peek()) {
                 .set_kw => try self.parseSet(DECL_START),
-                .ident => try self.parseBinding(DECL_START),
+                .ident => try self.parseBinding(DECL_START, false),
                 .task_kw => try self.parseTask(DECL_START),
                 .group_kw => try self.parseGroup(DECL_START),
                 else => |tag| try self.unexpectedNode(
@@ -185,7 +185,7 @@ pub const Parser = struct {
             try self.parseAttributes(follow.with(&.{ .ident, .task_kw }));
 
             switch (try self.peek()) {
-                .ident => try self.parseBinding(decl_start),
+                .ident => try self.parseBinding(decl_start, false),
                 .task_kw => try self.parseTask(decl_start),
                 else => |tag| try self.unexpectedNode(
                     decl_start,
@@ -199,10 +199,15 @@ pub const Parser = struct {
         try self.close(.group_body);
     }
 
-    fn parseBinding(self: *Parser, follow: FollowSet) Error!void {
+    fn parseBinding(self: *Parser, follow: FollowSet, comptime allow_discard: bool) Error!void {
         try self.precedeTarget(.attributes);
 
-        try self.expectAs(.ident, .name, follow.with(&.{.colon_eq}));
+        if (!allow_discard or try self.eat(.underscore) == false)
+            try self.expectAs(
+                .ident,
+                .name,
+                follow.with(&.{.colon_eq}),
+            );
         try self.expect(.colon_eq, follow.withSet(EXPR_START));
         try self.parseExpr(follow);
 
@@ -360,35 +365,14 @@ pub const Parser = struct {
 
     fn parseStatement(self: *Parser, follow: FollowSet) Error!void {
         switch (try self.peek()) {
-            .ident => {
-                try self.open();
-
-                switch (try self.peekAt(1)) {
-                    .colon_eq => {
-                        // binding: `name := expr`
-                        try self.expectAs(.ident, .name, follow.with(&.{.colon_eq}));
-                        try self.expect(.colon_eq, follow.withSet(EXPR_START));
-                        try self.parseExpr(follow);
-                        try self.close(.binding);
-                    },
-                    .dcolon, .lparen => {
-                        // task call: `name(...)` or `group::name(...)`
-                        try self.expectAs(.ident, .name_ref, follow.with(&.{ .dcolon, .lparen }));
-                        try self.precedeLast();
-
-                        if (try self.eat(.dcolon)) {
-                            try self.expectAs(.ident, .name_ref, follow.with(&.{.lparen}));
-                        }
-
-                        try self.close(.path);
-                        try self.parseTaskCallArgs(follow);
-                        try self.close(.task_call);
-                    },
-                    else => {
-                        try self.parseExpr(follow);
-                        try self.close(.expr_stmt);
-                    },
-                }
+            .underscore, .ident => switch (try self.peekAt(1)) {
+                .colon_eq => try self.parseBinding(follow, true),
+                .dcolon, .lparen => try self.parseTaskCall(follow),
+                else => {
+                    try self.open();
+                    try self.parseExpr(follow);
+                    try self.close(.expr_stmt);
+                },
             },
             .dollar => try self.parseProcess(follow, .stmt),
             .if_kw => try self.parseIfStmt(follow),
