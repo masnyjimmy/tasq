@@ -7,6 +7,7 @@ const compiler = @import("compiler");
 const platform = compiler.platform;
 const functions = compiler.functions;
 const Type = compiler.Type;
+const ir = compiler.ir;
 const Value = compiler.Value;
 const Scope = @import("Scope.zig");
 
@@ -16,9 +17,9 @@ const functions_count = functions.definitions.items.len;
 
 pub const Error = Interpreter.Error;
 
-const FunctionType = *const fn (*Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value;
+const Handler = *const fn (*Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value;
 
-const handlers: [functions_count]FunctionType = .{
+const handlers: [functions_count]Handler = .{
     handleError,
     handlePrint,
     handleParseNumber,
@@ -165,21 +166,57 @@ fn handlePrint(self: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value
     return .void;
 }
 
+fn callLambda(
+    self: *Interpreter,
+    cwd: std.Io.Dir,
+    scope: *Scope,
+    lambda: *const ir.LambdaInstance,
+    args: []const Value,
+) Error!Value {
+    std.debug.assert(args.len == lambda.params.len);
+
+    const parent_scope = scope.findByStatic(lambda.template.parent_scope) orelse unreachable;
+
+    const lambda_scope = try Scope.create(
+        parent_scope,
+        self.allocator,
+        lambda.scope,
+    );
+    defer lambda_scope.destroy();
+
+    for (lambda.params, args) |*param, arg| {
+        try lambda_scope.define(
+            param,
+            .{
+                .name = param.name,
+                .value = arg,
+            },
+            false,
+        );
+    }
+
+    return try self.evaluateExpr(
+        cwd,
+        lambda_scope,
+        &lambda.body,
+    );
+}
+
 fn handleAny(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const list = args[0].list;
 
-    const test_fn = args[1].lambda;
+    const test_fn = args[1].lambda.instance;
 
     for (list.items) |item| {
-        var lambda_scope = try Scope.create(scope, self.allocator, test_fn.scope);
-        defer lambda_scope.destroy();
-
-        try lambda_scope.define(.{
-            .name = test_fn.captures[0].name,
-            .value = item,
-        }, false);
-
-        const result = try self.evaluateExpr(cwd, lambda_scope, &test_fn.body);
+        const result = try callLambda(
+            self,
+            cwd,
+            scope,
+            test_fn,
+            &.{
+                item,
+            },
+        );
 
         if (result.eql(.{ .bool = true }))
             return .{ .bool = true };
@@ -191,18 +228,16 @@ fn handleAny(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const V
 fn handleAll(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const list = args[0].list;
 
-    const test_fn = args[1].lambda;
+    const test_fn = args[1].lambda.instance;
 
     for (list.items) |item| {
-        var lambda_scope = try Scope.create(scope, self.allocator, test_fn.scope);
-        defer lambda_scope.destroy();
-
-        try lambda_scope.define(.{
-            .name = test_fn.captures[0].name,
-            .value = item,
-        }, false);
-
-        const result = try self.evaluateExpr(cwd, lambda_scope, &test_fn.body);
+        const result = try callLambda(
+            self,
+            cwd,
+            scope,
+            test_fn,
+            &.{item},
+        );
 
         if (result.eql(.{ .bool = false }))
             return .{ .bool = false };
@@ -214,23 +249,16 @@ fn handleAll(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const V
 fn handleReduce(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const list = args[0].list;
     var value = args[1];
-    const func = args[2].lambda;
+    const func = args[2].lambda.instance;
 
     for (list.items) |item| {
-        var lambda_scope = try Scope.create(scope, self.allocator, func.scope);
-        defer lambda_scope.destroy();
-
-        try lambda_scope.define(.{
-            .name = func.captures[0].name,
-            .value = value,
-        }, false);
-
-        try lambda_scope.define(.{
-            .name = func.captures[1].name,
-            .value = item,
-        }, false);
-
-        value = try self.evaluateExpr(cwd, lambda_scope, &func.body);
+        value = try callLambda(
+            self,
+            cwd,
+            scope,
+            func,
+            &.{ value, item },
+        );
     }
 
     return value;

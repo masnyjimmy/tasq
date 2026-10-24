@@ -245,12 +245,12 @@ pub const MetaIterated = AnyKindIterable(
 
 pub const Expr = struct {
     const KINDS: []const cst.NodeKind = &.{
-        .literal,     .list,         .name_ref,
-        .paren_expr,  .string,       .string_expr,
-        .binary_expr, .unary_expr,   .builtin_call,
-        .@"if",       .@"for",       .@"switch",
-        .lambda,      .process_expr, .@"continue",
-        .@"break",
+        .literal,     .list,        .name_ref,
+        .paren_expr,  .string,      .string_expr,
+        .binary_expr, .unary_expr,  .builtin_call,
+        .@"if",       .@"for",      .@"switch",
+        .lambda,      .lambda_call, .process_expr,
+        .@"continue", .@"break",
     };
 
     node: *const cst.Node,
@@ -270,6 +270,7 @@ pub const Expr = struct {
         @"for": ForExpr,
         process: ProcessExpr,
         lambda: Lambda,
+        lambda_call: LambdaCall,
         @"continue": cst.Token,
         @"break": cst.Token,
     };
@@ -293,10 +294,30 @@ pub const Expr = struct {
             .@"switch" => .{ .@"switch" = .from(self.node) },
             .@"for" => .{ .@"for" = .from(self.node) },
             .lambda => .{ .lambda = .from(self.node) },
+            .lambda_call => .{ .lambda_call = .from(self.node) },
             .process_expr => .{ .process = .from(self.node) },
             .@"continue" => .{ .@"continue" = self.node.childToken(.continue_kw) orelse unreachable },
             .@"break" => .{ .@"break" = self.node.childToken(.break_kw) orelse unreachable },
             else => unreachable,
+        };
+    }
+};
+
+pub const LambdaCall = struct {
+    node: *const cst.Node,
+    name: Name,
+    args: CallArgs,
+
+    pub fn from(node: *const cst.Node) LambdaCall {
+        var it = node.iter();
+
+        const name = expectNode(&it, Name, .name_ref) orelse unreachable;
+        const args = expectNode(&it, CallArgs, .call_args) orelse unreachable; //TODO: rmeove unreachable
+
+        return .{
+            .node = node,
+            .name = name,
+            .args = args,
         };
     }
 };
@@ -386,7 +407,7 @@ pub const ListExpr = AnyKindIterable(
 pub const BuiltinCall = struct {
     node: *const cst.Node,
     name: ?cst.Token,
-    args: BuiltinCallArgs,
+    args: CallArgs,
     fallback: ?Fallback,
 
     pub fn from(node: *const cst.Node) BuiltinCall {
@@ -395,7 +416,7 @@ pub const BuiltinCall = struct {
         _ = it.expectToken(.at);
 
         const name = it.expectToken(.ident);
-        const args = expectNode(&it, BuiltinCallArgs, .builtin_call_args) orelse unreachable;
+        const args = expectNode(&it, CallArgs, .call_args) orelse unreachable;
         const fallback = eatNode(&it, Fallback, .fallback);
 
         return .{
@@ -407,7 +428,7 @@ pub const BuiltinCall = struct {
     }
 };
 
-pub const BuiltinCallArgs = AnyKindIterable(.strict, Expr, Expr.KINDS);
+pub const CallArgs = AnyKindIterable(.strict, Expr, Expr.KINDS);
 
 pub const Lambda = struct {
     node: *const cst.Node,
@@ -546,13 +567,13 @@ pub const ForExpr = struct {
 pub const Subjects = AnyKindIterable(.strict, Expr, Expr.KINDS);
 
 pub const Captures = StrictIterable(Capture, Capture.next);
-const Capture = union(enum) {
-    none: cst.Token,
+pub const Capture = union(enum) {
+    blank: cst.Token,
     name: Name,
 
     fn next(it: *cst.Iterator) ?Capture {
         if (it.eatToken(.underscore)) |token|
-            return .{ .none = token };
+            return .{ .blank = token };
 
         return .{
             .name = expectNode(it, Name, .name) orelse return null,

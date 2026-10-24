@@ -1,3 +1,4 @@
+const std = @import("std");
 const ir = @import("ir.zig");
 
 const Diagnostics = @import("Diagnostics.zig");
@@ -17,6 +18,17 @@ pub const Origin = union(enum) {
             .binding => |b| b.type,
             .argument => |a| a.type.typeOf(),
             else => null,
+        };
+    }
+
+    pub fn assertValueType(self: *const Origin) @"type".Type {
+        return self.valueType() orelse unreachable;
+    }
+    pub const Identity = *const anyopaque;
+
+    pub fn identity(self: *const Origin) Identity {
+        return switch (self.*) {
+            inline else => |ptr| ptr,
         };
     }
 };
@@ -40,15 +52,21 @@ pub const Symbol = struct {
         };
     }
 
+    pub fn identity(self: *const Symbol) Origin.Identity {
+        return self.origin.identity();
+    }
+
     pub fn debugDump(self: *const Symbol) struct {
         name: []const u8,
         type: Type,
         value_type: ?@"type".Type,
+        exact_type: std.meta.Tag(Origin),
     } {
         return .{
             .name = self.name,
             .type = self.typeOf(),
             .value_type = self.origin.valueType(),
+            .exact_type = std.meta.activeTag(self.origin),
         };
     }
 };

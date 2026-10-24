@@ -1,10 +1,23 @@
 const std = @import("std");
+const ast = @import("ast.zig");
+const Scope = @import("scope.zig").Scope;
+const lib = @import("lib");
 
-const Tag = enum { string, number, bool, list, noreturn, void, lambda, result };
+const Tag = enum {
+    string,
+    number,
+    bool,
+    list,
+    noreturn,
+    void,
+    lambda,
+    result,
+    unknown,
+};
 
-pub const FuncType = struct {
-    params: []const Type,
-    return_type: Type,
+pub const LambdaTemplate = struct {
+    template: ast.Lambda,
+    parent_scope: *Scope,
 };
 
 pub const Type = union(Tag) {
@@ -14,8 +27,9 @@ pub const Type = union(Tag) {
     list: *const Type,
     noreturn,
     void,
-    lambda: *const FuncType,
+    lambda: *const LambdaTemplate,
     result: *const Type,
+    unknown,
 
     pub fn unify(left: Type, right: Type) ?Type {
         if (left == .noreturn) return right;
@@ -38,17 +52,7 @@ pub const Type = union(Tag) {
 
         return switch (tag) {
             .list => eq(left.list.*, right.list.*),
-            .lambda => {
-                if (left.lambda.params.len != right.lambda.params.len)
-                    return false;
-
-                for (left.lambda.params, right.lambda.params) |l, r| {
-                    if (eq(l, r) == false)
-                        return false;
-                }
-
-                return eq(left.lambda.return_type, right.lambda.return_type);
-            },
+            .lambda => left.lambda.template.node == right.lambda.template.node, // only condition when lambda is the same if its exacly the same element,
             .result => eq(left.result.*, right.result.*),
             else => true,
         };
@@ -65,6 +69,8 @@ pub const Type = union(Tag) {
             inline else => |_, tag| try writer.writeAll(@tagName(tag)),
         }
     }
+
+    pub const MapContext = TypeMapContext;
 };
 
 pub const ArgType = enum {
@@ -116,4 +122,29 @@ pub const TypeExpr = union(enum) {
 pub const LambdaTypeExpr = struct {
     params: []const TypeExpr,
     return_type: TypeExpr,
+};
+
+pub const TypeMapContext = struct {
+    pub fn hash(_: @This(), value: Type) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        updateHasher(.from(&hasher), value);
+        return hasher.final();
+    }
+
+    pub fn eql(_: @This(), a: Type, b: Type) bool {
+        return Type.eq(a, b);
+    }
+
+    pub fn updateHasher(hasher: lib.hash.Hasher, value: Type) void {
+        const tag = std.meta.activeTag(value);
+        hasher.update(@tagName(tag));
+        switch (value) {
+            .list => |list| updateHasher(hasher, list.*),
+            .lambda => |lambda| hasher.update(
+                std.mem.asBytes(&lambda.template.node),
+            ),
+            .result => |result| updateHasher(hasher, result.*),
+            else => {},
+        }
+    }
 };

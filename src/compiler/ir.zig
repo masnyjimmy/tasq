@@ -5,6 +5,7 @@ const hst = @import("cst.zig");
 const ast = @import("ast.zig");
 const functions = @import("functions.zig");
 
+const lib = @import("lib");
 const @"type" = @import("type.zig");
 const Type = @"type".Type;
 const ArgType = @"type".ArgType;
@@ -203,7 +204,9 @@ pub const Expr = union(enum) {
     switch_expr: *SwitchExpr,
     for_expr: *ForExpr,
     builtin_call: *BuiltinCall,
-    lambda: *Lambda,
+    /// null if not resolved
+    lambda: LambdaExpr,
+    lambda_call: *LambdaCall,
     process: *ProcessExpr,
     @"continue",
     @"break",
@@ -215,10 +218,64 @@ pub const ProcessExpr = struct {
     fallback: ?Expr,
 };
 
-pub const Lambda = struct {
-    captures: []const Capture,
+pub const LambdaTemplate = @"type".LambdaTemplate;
+
+pub const LambdaInstance = struct {
+    pub const Key = struct {
+        template: *const @"type".LambdaTemplate,
+        params: []const Type,
+
+        pub const MapContext = struct {
+            pub fn hash(_: @This(), value: Key) u64 {
+                var hasher: std.hash.Wyhash = .init(0);
+                updateHasher(.from(&hasher), value);
+                return hasher.final();
+            }
+
+            pub fn eql(_: @This(), a: Key, b: Key) bool {
+                if (a.template.template.node != b.template.template.node)
+                    return false;
+
+                if (a.params.len != b.params.len)
+                    return false;
+
+                for (a.params, b.params) |left, right| {
+                    if (left.eq(right) == false)
+                        return false;
+                }
+
+                return true;
+            }
+
+            pub fn updateHasher(hasher: lib.hash.Hasher, value: Key) void {
+                hasher.update(std.mem.asBytes(&value.template.template.node));
+
+                for (value.params) |param|
+                    Type.MapContext.updateHasher(hasher, param);
+            }
+        };
+    };
+    pub const State = union(enum) {
+        failed,
+        in_progress,
+        ok: *const LambdaInstance,
+    };
+    template: *const @"type".LambdaTemplate,
+    params: []Capture,
     body: Expr,
+    return_type: Type,
     scope: *Scope,
+    is_static: bool,
+};
+
+pub const LambdaExpr = struct {
+    template: *const LambdaTemplate,
+    resolved: ?*const LambdaInstance,
+};
+
+pub const LambdaCall = struct {
+    lambda: *const LambdaInstance,
+    args: []const Expr,
 };
 
 pub const ForExpr = struct {

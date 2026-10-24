@@ -254,6 +254,13 @@ pub fn dump(
                         return;
                     }
 
+                    // if (@hasDecl(T, "debugDump2")) {
+                    //     var buffer: [1024]u8 = undefined;
+
+                    //     var fba: std.heap.FixedBufferAllocator = .init(&buffer);
+                    //     self.dump(value_.debugDump2(fba.allocator()) catch unreachable);
+                    // }
+
                     // ── Iterator (HashMap etc.) ───────────────────────────
                     if (comptime isIterable(T)) {
                         var iter = @constCast(&value_).iterator();

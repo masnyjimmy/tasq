@@ -120,7 +120,7 @@ fn evalEquality(op: ir.BinaryOp, left: Value, right: Value) Value {
 
                 break :blk true;
             },
-            .noreturn, .result => unreachable,
+            .noreturn, .result, .lambda, .unknown => unreachable,
             inline else => |_, tag| {
                 const left_value = @field(left, @tagName(tag));
                 const right_value = @field(right, @tagName(tag));

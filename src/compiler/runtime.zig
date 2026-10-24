@@ -3,7 +3,7 @@ const std = @import("std");
 const type_mod = @import("type.zig");
 const Type = type_mod.Type;
 const FuncType = type_mod.FuncType;
-
+const ast = @import("ast.zig");
 const ir = @import("ir.zig");
 
 pub const ValueMapContext = struct {
@@ -59,14 +59,23 @@ pub const Value = union(Tag) {
     bool: bool,
     list: List,
     void,
-    lambda: *const ir.Lambda,
+    /// mirrors lambda expr, null if not resolved, then
+    lambda: union(enum) {
+        template: *const ir.LambdaTemplate,
+        instance: *const ir.LambdaInstance,
+    },
     result: Result,
 
     pub fn typeOf(self: *const Value) Type {
         return switch (self.*) {
             .list => |list| .{ .list = list.items_type },
             .result => |res| .{ .result = res.type },
-            .lambda => unreachable,
+            .lambda => |lambda| .{
+                .lambda = switch (lambda) {
+                    .template => |t| t,
+                    .instance => |i| i.template,
+                },
+            },
             inline else => |_, tag| @unionInit(Type, @tagName(tag), {}),
         };
     }
@@ -99,6 +108,7 @@ pub const Value = union(Tag) {
                 else
                     try writer.print("error", .{});
             },
+            .lambda => try writer.writeAll("<lambda>"), //TODO: add more details
             inline else => |_, tag| try writer.print("<{t}>", .{tag}),
         }
     }

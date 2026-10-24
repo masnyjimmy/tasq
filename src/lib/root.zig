@@ -19,3 +19,5 @@ pub const dotenv = @import("dotenv.zig");
 pub const platform = @import("platform.zig");
 
 pub const program = @import("program.zig");
+
+pub const hash = @import("hash.zig");

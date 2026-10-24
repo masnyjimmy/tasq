@@ -676,7 +676,10 @@ pub const Parser = struct {
     fn parsePrimary(self: *Parser, follow: FollowSet) Error!void {
         switch (try self.peek()) {
             .true_kw, .false_kw, .number => try self.advanceAs(.literal),
-            .ident => try self.advanceAs(.name_ref),
+            .ident => switch (try self.peekAt(1)) {
+                .lparen => try self.parseLambdaCall(follow),
+                else => try self.advanceAs(.name_ref),
+            },
             .lparen => {
                 try self.open();
 
@@ -715,6 +718,16 @@ pub const Parser = struct {
                 .{tag},
             ),
         }
+    }
+
+    fn parseLambdaCall(self: *Parser, follow: FollowSet) Error!void {
+        try self.open();
+
+        try self.expectAs(.ident, .name_ref, follow.with(&.{.lparen}));
+
+        try self.parseCallArgs(follow);
+
+        try self.close(.lambda_call);
     }
 
     fn parseFallback(self: *Parser, follow: FollowSet) Error!void {
@@ -757,7 +770,7 @@ pub const Parser = struct {
 
         try self.expect(.at, follow.with(&.{.ident}));
         try self.expect(.ident, follow.with(&.{.lparen}));
-        try self.parseBuiltinArgs(follow.withSet(EXPR_START).with(&.{.fallback_kw}));
+        try self.parseCallArgs(follow.withSet(EXPR_START).with(&.{.fallback_kw}));
 
         if (try self.at(.fallback_kw))
             try self.parseFallback(follow);
@@ -765,7 +778,7 @@ pub const Parser = struct {
         try self.close(.builtin_call);
     }
 
-    fn parseBuiltinArgs(self: *Parser, follow: FollowSet) Error!void {
+    fn parseCallArgs(self: *Parser, follow: FollowSet) Error!void {
         try self.open();
 
         try self.parseSequence(
@@ -776,7 +789,7 @@ pub const Parser = struct {
             parseExpr,
         );
 
-        try self.close(.builtin_call_args);
+        try self.close(.call_args);
     }
 
     fn parseChar(self: *Parser, follow: FollowSet) Error!void {

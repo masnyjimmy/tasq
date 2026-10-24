@@ -5,6 +5,11 @@ const sym = @import("symbol.zig");
 const Symbol = sym.Symbol;
 const cst = @import("cst.zig");
 
+// const DebugType = struct{
+//     symbols: []const *Symbol,
+//     children: @TypeOf(@)
+// };
+
 pub const Scope = struct {
     const IndexesStorage = std.array_hash_map.String(usize);
 
@@ -22,8 +27,14 @@ pub const Scope = struct {
         .parent = null,
     };
 
-    pub fn debugDump(self: *const Scope) []const *const Symbol {
-        return self.symbols.items;
+    pub fn debugDump(self: *const Scope) struct {
+        symbols: []const *Symbol,
+        children: @FieldType(Scope, "children"),
+    } {
+        return .{
+            .symbols = self.symbols.items,
+            .children = self.children,
+        };
     }
 
     pub fn init(parent: ?*Scope) Scope {
@@ -44,7 +55,7 @@ pub const Scope = struct {
         self.symbols.deinit(gpa);
     }
 
-    pub fn put_child(self: *Scope, allocator: std.mem.Allocator, node: *const cst.Node, scope: *Scope) !void {
+    pub fn putChild(self: *Scope, allocator: std.mem.Allocator, node: *const cst.Node, scope: *Scope) !void {
         try self.children.putNoClobber(allocator, node, scope);
     }
 

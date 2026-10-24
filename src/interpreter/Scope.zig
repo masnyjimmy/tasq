@@ -1,7 +1,8 @@
 const std = @import("std");
-const static_scope = @import("compiler").scope;
 
 const compiler = @import("compiler");
+const static_symbol = compiler.symbol;
+const static_scope = compiler.scope;
 
 const Value = compiler.Value;
 
@@ -12,9 +13,13 @@ pub const Symbol = struct {
     value: Value,
 };
 
+const Identity = static_symbol.Origin.Identity;
+
+const SymbolMap = std.hash_map.AutoHashMapUnmanaged(Identity, Symbol);
+
 parent: ?*Scope,
 static: *static_scope.Scope,
-symbols: std.StringHashMapUnmanaged(Symbol) = .empty,
+symbols: SymbolMap = .empty,
 arena: std.heap.ArenaAllocator,
 environ: std.process.Environ.Map,
 
@@ -39,15 +44,18 @@ pub fn destroy(self: *Scope) void {
     allocator.destroy(self);
 }
 
-pub fn define(self: *Scope, symbol: Symbol, can_replace: bool) !void {
+pub fn define(self: *Scope, identity: Identity, symbol: Symbol, can_replace: bool) !void {
     std.debug.assert(self.static.resolve(symbol.name, .variable) != null);
-    std.debug.assert(can_replace or self.symbols.contains(symbol.name) == false);
+    std.debug.assert(can_replace or self.symbols.contains(identity) == false);
 
-    try self.symbols.put(self.arena.allocator(), symbol.name, symbol);
+    try self.symbols.put(self.arena.allocator(), identity, symbol);
 }
 
-pub fn resolve(self: *Scope, name: []const u8) ?*Symbol {
-    return self.symbols.getPtr(name) orelse if (self.parent) |p| p.resolve(name) else null;
+pub fn resolve(self: *Scope, identity: Identity) ?*Symbol {
+    return self.symbols.getPtr(identity) orelse if (self.parent) |p|
+        p.resolve(identity)
+    else
+        null;
 }
 
 pub fn findByStatic(self: *Scope, static: *static_scope.Scope) ?*Scope {

@@ -34,6 +34,13 @@ const Error = error{
 pub const Sema = struct {
     arena: *std.heap.ArenaAllocator,
     diagnostics: *Diagnostics,
+
+    lambda_instances: std.hash_map.HashMapUnmanaged(
+        ir.LambdaInstance.Key,
+        ir.LambdaInstance.State,
+        ir.LambdaInstance.Key.MapContext,
+        80,
+    ) = .empty,
     loop_depth: usize = 0,
 
     pub fn init(arena: *std.heap.ArenaAllocator, diagnostics: *Diagnostics) Sema {
@@ -954,7 +961,7 @@ pub const Sema = struct {
                         },
                     });
                 },
-                .none => {
+                .blank => {
                     captures.appendAssumeCapacity(null);
                 },
             }
@@ -979,7 +986,7 @@ pub const Sema = struct {
                             .origin = .{ .capture = ptr },
                         });
                     },
-                    .none => |token| {
+                    .blank => |token| {
                         //TODO: consider making it error?
                         try self.diagnostics.warn(
                             token.span,
@@ -1002,6 +1009,87 @@ pub const Sema = struct {
                 .statements = body,
             },
         };
+    }
+
+    fn getLambdaInstance(
+        self: *Sema,
+        template: *const @"type".LambdaTemplate,
+        types: []const Type,
+    ) !*const ir.LambdaInstance {
+        const key: ir.LambdaInstance.Key = .{
+            .template = template,
+            .params = types,
+        };
+        {
+            const gop = try self.lambda_instances.getOrPut(self.arena.allocator(), key);
+
+            if (gop.found_existing) {
+                return switch (gop.value_ptr.*) {
+                    .failed => return Error.Incomplete,
+                    .in_progress => @panic("lambda instance recursion, handle later"),
+                    .ok => |out| out,
+                };
+            }
+            // create instance
+
+            gop.value_ptr.* = .in_progress;
+        }
+        errdefer self.lambda_instances.getPtr(key).?.* = .failed;
+
+        const prev_loop_depth = self.loop_depth;
+        self.loop_depth = 0;
+        defer self.loop_depth = prev_loop_depth;
+
+        const lambda_scope = try self.createScope(template.parent_scope, null);
+
+        var it = template.template.params.iter();
+
+        const captures = try self.arena.allocator().alloc(
+            ir.Capture,
+            types.len,
+        );
+
+        for (types, captures) |arg, *out| {
+            const r_param = it.next() orelse unreachable; // should be checked already
+            const param = r_param.unwrap() orelse continue;
+            out.* = .{
+                .name = param.name.string().?,
+                .type = arg,
+            };
+
+            try lambda_scope.define(self.arena.allocator(), .{
+                .name = out.name,
+                .span = template.template.node.span,
+                .origin = .{ .capture = out },
+            });
+        }
+
+        const body = try self.analyseExpr(
+            template.template.body orelse return Error.Incomplete,
+            lambda_scope,
+        );
+
+        if (body.type == .lambda) {
+            try self.diagnostics.err(
+                template.template.node.span,
+                "lambda cannot return lambda",
+                .{},
+            );
+            return Error.Incomplete;
+        }
+
+        const instance = try self.create(ir.LambdaInstance, .{
+            .template = template,
+            .params = captures,
+            .body = body.expr,
+            .return_type = body.type,
+            .scope = lambda_scope,
+            .is_static = body.is_static,
+        });
+
+        self.lambda_instances.getPtr(key).?.* = .{ .ok = instance };
+
+        return instance;
     }
 
     fn ExprResult(comptime ExprT: type) type {
@@ -1048,12 +1136,7 @@ pub const Sema = struct {
                     return Error.Incomplete;
                 };
 
-                const symbol_type = switch (symbol.origin) {
-                    .capture => |capture| capture.type,
-                    .binding => |binding| binding.type,
-                    .argument => |argument| argument.type.typeOf(),
-                    else => unreachable,
-                };
+                const symbol_type = symbol.origin.valueType() orelse unreachable;
 
                 return .{
                     .expr = .{
@@ -1284,12 +1367,136 @@ pub const Sema = struct {
                 };
             },
             .lambda => |lambda| {
-                try self.diagnostics.err(
-                    lambda.node.trimmedSpan(),
-                    "lambda only allowed as function argument",
-                    .{},
+                std.debug.assert(scope.child(lambda.node) == null);
+                var it = lambda.params.iter();
+
+                const template_scope = try self.createScope(
+                    scope,
+                    lambda.node,
                 );
-                return Error.Incomplete;
+
+                while (it.next()) |r_param| switch (r_param) {
+                    .value => |param| {
+                        const param_name = param.name.string() orelse continue;
+
+                        const capture = try self.create(
+                            ir.Capture,
+                            .{
+                                .name = param_name,
+                                .type = .unknown,
+                            },
+                        );
+
+                        try self.defineSymbol(
+                            template_scope,
+                            .{
+                                .name = param_name,
+                                .span = param.name.node.span,
+                                .origin = .{ .capture = capture },
+                            },
+                        );
+                    },
+                    else => continue,
+                };
+
+                _ = try self.analyseExpr(
+                    lambda.body orelse return Error.Incomplete,
+                    template_scope,
+                );
+
+                const template = try self.create(@"type".LambdaTemplate, .{
+                    .template = lambda,
+                    .parent_scope = scope,
+                });
+
+                return .{
+                    .expr = .{
+                        .lambda = .{
+                            .template = template,
+                            .resolved = null,
+                        },
+                    },
+                    .type = .{ .lambda = template },
+                    .is_static = false,
+                };
+            },
+            .lambda_call => |lambda_call| {
+                const name = lambda_call.name.string() orelse return Error.Incomplete;
+
+                const symbol = scope.resolve(name, .variable) orelse {
+                    // unknown reference,
+                    try self.diagnostics.err(
+                        lambda_call.name.node.trimmedSpan(),
+                        "unknown value: '{s}'",
+                        .{name},
+                    );
+                    return Error.Incomplete;
+                };
+
+                const lambda = switch (symbol.origin.assertValueType()) {
+                    .lambda => |lambda| lambda,
+                    else => {
+                        try self.diagnostics.err(
+                            lambda_call.name.node.trimmedSpan(),
+                            "'{s}' is not lambda and cannot be called",
+                            .{name},
+                        );
+                        return Error.Incomplete;
+                    },
+                };
+
+                const params_count = blk: {
+                    var count: usize = 0;
+                    var it = lambda.template.params.iter();
+
+                    while (it.next()) |_| count += 1;
+
+                    break :blk count;
+                };
+
+                const args = try lambda_call.args.collect(self.arena.allocator());
+
+                if (args.len != params_count) {
+                    try self.diagnostics.err(
+                        lambda_call.args.node.span,
+                        "invalid arguments count, expected {}, got {}",
+                        .{ params_count, args.len },
+                    );
+                    return Error.Incomplete;
+                }
+
+                var valid = true;
+                const types = try self.arena.allocator().alloc(Type, args.len);
+                const resolved_args = try self.arena.allocator().alloc(ir.Expr, args.len);
+
+                for (args, 0..) |r_arg, idx| {
+                    const arg = r_arg.unwrap() orelse {
+                        valid = false;
+                        types[idx] = .unknown;
+                        resolved_args[idx] = undefined; // won't be used
+                        continue;
+                    };
+
+                    const result = try self.analyseExpr(arg, scope);
+
+                    types[idx] = result.type;
+                    resolved_args[idx] = result.expr;
+                }
+
+                const resolved_lambda = try self.getLambdaInstance(lambda, types);
+
+                if (!valid) return Error.Incomplete;
+
+                //TODO: adjust is_static
+                const ptr = try self.create(ir.LambdaCall, .{
+                    .lambda = resolved_lambda,
+                    .args = resolved_args,
+                });
+                return .{
+                    .expr = .{ .lambda_call = ptr },
+                    .type = resolved_lambda.return_type,
+                    .is_static = false,
+                };
             },
             .@"switch" => |@"switch"| {
                 const result = try self.analyseSwitchExpr(@"switch", scope);
@@ -1408,7 +1615,7 @@ pub const Sema = struct {
         var is_static = true;
 
         const for_scope = try self.createScope(scope, for_expr.node);
-
+        // FIXME: when captures len 0, index out of bounds idx
         for (in_subjects, in_captures[0..in_subjects.len]) |s, c| {
             const subject = s.unwrap() orelse continue;
             const capture = c.unwrap() orelse continue;
@@ -1449,7 +1656,7 @@ pub const Sema = struct {
                         },
                     });
                 },
-                .none => {
+                .blank => {
                     captures.appendAssumeCapacity(null);
                 },
             }
@@ -1474,7 +1681,7 @@ pub const Sema = struct {
                             .origin = .{ .capture = ptr },
                         });
                     },
-                    .none => |token| {
+                    .blank => |token| {
                         //TODO: consider making it error?
                         try self.diagnostics.warn(
                             token.span,
@@ -1646,46 +1853,54 @@ pub const Sema = struct {
 
         const in_args = try builtin_call.args.collect(self.arena.allocator());
 
-        var args: std.ArrayList(ir.Expr) = .empty;
-        var args_types: std.ArrayList(functions.InArg) = .empty;
+        const resolved_args = try self.arena.allocator().alloc(ir.Expr, in_args.len);
+        const resolved_args_types = try self.arena.allocator().alloc(functions.InArg, in_args.len);
 
         var is_static = true;
+        is_static = true;
 
-        for (in_args) |arg_result| switch (arg_result) {
+        for (in_args, 0..) |arg_result, idx| switch (arg_result) {
             .value => |arg| {
-                if (arg.node.kind == .lambda) {
-                    try args.append(self.arena.allocator(), undefined);
-                    try args_types.append(self.arena.allocator(), .{ .lambda = .{
-                        .params = blk: {
-                            const lambda = arg.classify().lambda;
-                            var params = lambda.params.iter();
-                            var count: usize = 0;
-                            while (params.next()) |_| count += 1;
-                            break :blk count;
-                        },
-                    } });
-                    continue;
-                }
-
                 const result = try self.analyseExpr(arg, scope);
-                try args.append(self.arena.allocator(), result.expr);
-                try args_types.append(self.arena.allocator(), .{
-                    .value = .{
-                        .type = result.type,
+
+                switch (result.type) {
+                    .lambda => |lambda| {
+                        const params_count = blk: {
+                            var count: usize = 0;
+                            var it = lambda.template.params.iter();
+                            while (it.next()) |_| count += 1;
+                            break :blk count;
+                        };
+
+                        resolved_args[idx] = .{
+                            .lambda = .{
+                                .template = lambda,
+                                .resolved = null,
+                            },
+                        };
+                        resolved_args_types[idx] = .{
+                            .lambda = .{ .params = params_count },
+                        };
                     },
-                });
+                    else => {
+                        resolved_args[idx] = result.expr;
+                        resolved_args_types[idx] = .{
+                            .value = .{ .type = result.type },
+                        };
+                    },
+                }
             },
             .missing => |span| {
-                //TODO: improve diagnostics
+                //TODO: improve diagnostics or remove it? I mean should be logged in parser
                 try self.diagnostics.err(span, "broken argument", .{});
                 return Error.Incomplete;
             },
         };
 
-        const result = functions.definitions.resolve(
+        const resolved_function = functions.definitions.resolve(
             self.arena.allocator(),
             builtin_call_name,
-            args_types.items,
+            resolved_args_types,
         ) catch |err| switch (err) {
             functions.Error.UnknownFunction => {
                 try self.diagnostics.err(
@@ -1706,77 +1921,36 @@ pub const Sema = struct {
             inline else => |tag| return @errorCast(tag),
         };
 
-        for (in_args, result.params, 0..) |in_arg, param, idx| {
-            const expr = in_arg.unwrap() orelse continue;
-            switch (param) {
-                .lambda => |l| {
-                    const lambda = expr.classify().lambda;
-                    const lambda_in_params = try lambda.params.collect(self.arena.allocator());
+        for (resolved_args, resolved_function.params, 0..) |arg, param, idx| {
+            const lambda = switch (param) {
+                .lambda => |lambda| lambda,
+                else => continue,
+            };
 
-                    const lambda_scope = try self.createScope(scope, lambda.node);
+            const resolved_lambda = try self.getLambdaInstance(
+                arg.lambda.template,
+                lambda.params,
+            );
 
-                    const captures = try self.arena.allocator().alloc(ir.Capture, l.params.len);
-
-                    for (lambda_in_params, l.params, captures) |in_param, in, *out| {
-                        const lambda_param = in_param.unwrap() orelse continue;
-
-                        const name = switch (lambda_param) {
-                            .name => |name| name,
-                            else => continue,
-                        };
-                        const ident = name.string() orelse return Error.Incomplete;
-                        out.* = .{
-                            .name = ident,
-                            .type = in,
-                        };
-
-                        try self.defineSymbol(lambda_scope, .{
-                            .name = ident,
-                            .span = name.node.trimmedSpan(),
-                            .origin = .{
-                                .capture = out,
-                            },
-                        });
-                    }
-
-                    const body = try self.analyseExpr(
-                        lambda.body orelse return Error.Incomplete,
-                        lambda_scope,
-                    );
-
-                    if (body.is_static == false)
-                        is_static = false;
-
-                    if (body.type.eq(l.return_type) == false) {
-                        try self.diagnostics.err(
-                            lambda.node.trimmedSpan(),
-                            "invalid lambda result type, expected '{f}', got '{f}'",
-                            .{ l.return_type, body.type },
-                        );
-                    }
-
-                    const ptr = try self.create(ir.Lambda, .{
-                        .captures = captures,
-                        .body = body.expr,
-                        .scope = lambda_scope,
-                    });
-
-                    args.items[idx] = .{
-                        .lambda = ptr,
-                    };
-                },
-                else => {},
+            if (resolved_lambda.return_type.eq(lambda.return_type) == false) {
+                try self.diagnostics.err(
+                    resolved_lambda.template.template.body.?.node.span,
+                    "invalid lambda result type, expected '{f}', got '{f}'",
+                    .{ lambda.return_type, resolved_lambda.return_type },
+                );
             }
+
+            resolved_args[idx].lambda.resolved = resolved_lambda;
         }
 
-        var result_type = result.return_type;
+        var result_type = resolved_function.return_type;
 
         var fallback: ?ir.Expr = null;
         fb: {
             if (builtin_call.fallback) |fb| {
                 const fb_expr = fb.expr orelse return Error.Incomplete;
 
-                if (result.return_type != .result) {
+                if (resolved_function.return_type != .result) {
                     try self.diagnostics.err(
                         fb.node.trimmedSpan(),
                         "fallback can be only used on errorable functions",
@@ -1806,8 +1980,8 @@ pub const Sema = struct {
 
         return .{
             .expr = .{
-                .function = result,
-                .args = args.items,
+                .function = resolved_function,
+                .args = resolved_args,
                 .fallback = fallback,
             },
             .type = result_type,
@@ -2082,9 +2256,9 @@ pub const Sema = struct {
                 "'{s}' {t} already defined",
                 .{ symbol.name, symbol_type },
             );
-            try self.diagnostics.err(
+            try self.diagnostics.hint(
                 prev.span,
-                "'{t}' defined here",
+                "{t} defined here",
                 .{symbol_type},
             );
             return;
@@ -2098,7 +2272,7 @@ pub const Sema = struct {
         ptr.* = .init(parent);
 
         if (node) |n| if (parent) |p|
-            try p.put_child(self.arena.allocator(), n, ptr);
+            try p.putChild(self.arena.allocator(), n, ptr);
 
         return ptr;
     }

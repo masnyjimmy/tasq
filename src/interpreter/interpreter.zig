@@ -127,7 +127,7 @@ pub fn runTask(self: *Interpreter, scope: *Scope, task: *const ir.Task, values: 
                     }
                     continue;
                 };
-                try group_scope.define(.{
+                try group_scope.define(arg, .{
                     .name = arg.name,
                     .value = try value.clone(group_scope.arena.allocator()),
                 }, same_group);
@@ -159,7 +159,7 @@ pub fn runTask(self: *Interpreter, scope: *Scope, task: *const ir.Task, values: 
                 .{arg.name},
             );
         };
-        try task_scope.define(.{
+        try task_scope.define(arg, .{
             .name = arg.name,
             .value = try value.clone(task_scope.arena.allocator()),
         }, false);
@@ -299,7 +299,7 @@ fn main(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Stat
 
                 for (for_stmt.captures[0..for_stmt.subjects.len], 0..) |maybe_cap, j| {
                     if (maybe_cap) |cap| {
-                        try for_scope.define(.{
+                        try for_scope.define(cap, .{
                             .name = cap.name,
                             .value = values[j].list.items[idx],
                         }, false);
@@ -308,10 +308,14 @@ fn main(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Stat
 
                 if (for_stmt.captures.len == for_stmt.subjects.len + 1) {
                     if (for_stmt.captures[for_stmt.captures.len - 1]) |idx_cap| {
-                        try for_scope.define(.{
-                            .name = idx_cap.name,
-                            .value = .{ .number = @floatFromInt(idx) },
-                        }, false);
+                        try for_scope.define(
+                            idx_cap,
+                            .{
+                                .name = idx_cap.name,
+                                .value = .{ .number = @floatFromInt(idx) },
+                            },
+                            false,
+                        );
                     }
                 }
 
@@ -353,7 +357,7 @@ fn handleDecl(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, decl: *const i
 
     const value = try self.evaluateExpr(cwd, decl_scope, &decl.value);
 
-    try decl_scope.define(.{
+    try decl_scope.define(decl, .{
         .name = decl.name,
         .value = value,
     }, false);
@@ -452,10 +456,9 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
                 },
             };
         },
-
         .ident => |id| {
             // get resolved
-            if (scope.resolve(id.name)) |sym| {
+            if (scope.resolve(id.symbol.identity())) |sym| {
                 return sym.value;
             }
             // resolve if not already (lazy resolution)
@@ -506,7 +509,7 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
 
                 for (for_expr.captures[0..for_expr.subjects.len], 0..) |maybe_cap, j| {
                     if (maybe_cap) |cap| {
-                        try for_scope.define(.{
+                        try for_scope.define(cap, .{
                             .name = cap.name,
                             .value = values[j].list.items[idx],
                         }, false);
@@ -515,10 +518,14 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
 
                 if (for_expr.captures.len == for_expr.subjects.len + 1) {
                     if (for_expr.captures[for_expr.captures.len - 1]) |idx_cap| {
-                        try for_scope.define(.{
-                            .name = idx_cap.name,
-                            .value = .{ .number = @floatFromInt(idx) },
-                        }, false);
+                        try for_scope.define(
+                            idx_cap,
+                            .{
+                                .name = idx_cap.name,
+                                .value = .{ .number = @floatFromInt(idx) },
+                            },
+                            false,
+                        );
                     }
                 }
 
@@ -574,6 +581,7 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
             return .{ .bool = !operand.bool };
         },
         .builtin_call => |call| {
+            // lib.debug.dump(call, 4);
             const args = try scope.arena.allocator().alloc(Value, call.args.len);
 
             for (call.args, args) |in, *out| {
@@ -590,7 +598,38 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
                 else => value,
             };
         },
-        .lambda => |lambda| .{ .lambda = lambda },
+        .lambda => |lambda| .{
+            .lambda = if (lambda.resolved) |resolved|
+                .{ .instance = resolved }
+            else
+                .{ .template = lambda.template },
+        },
+        .lambda_call => |lambda_call| {
+            const lambda = lambda_call.lambda;
+            std.debug.assert(lambda_call.args.len == lambda.params.len);
+
+            const frame = try Scope.create(scope, self.allocator, lambda.scope);
+            defer frame.destroy();
+
+            for (lambda_call.args, lambda.params) |*arg, *param| {
+                const value = try self.evaluateExpr(cwd, scope, arg);
+
+                try frame.define(
+                    param,
+                    .{
+                        .name = param.name,
+                        .value = value,
+                    },
+                    false,
+                );
+            }
+
+            return try self.evaluateExpr(
+                cwd,
+                frame,
+                &lambda.body,
+            );
+        },
         .process => |process_expr| {
             const process = try self.resolveString(cwd, scope, process_expr.command);
             var aw: std.Io.Writer.Allocating = .init(scope.arena.allocator());

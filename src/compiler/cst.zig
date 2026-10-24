@@ -11,6 +11,7 @@ pub const NodeKind = enum {
     set,
     set_body,
     set_decl,
+    // task params
     params,
     parameter,
     param_type,
@@ -40,6 +41,7 @@ pub const NodeKind = enum {
     literal,
     list,
     name_ref,
+    lambda_call,
     paren_expr,
     string_expr,
     binary_expr,
@@ -51,7 +53,7 @@ pub const NodeKind = enum {
     @"if",
 
     builtin_call,
-    builtin_call_args,
+    call_args, // builtin or lambda call args
     fallback,
 
     @"switch",
@@ -96,6 +98,10 @@ pub const Node = struct {
     parent: ?*Node = null,
     children: []const Element,
     span: Span,
+
+    pub fn debugDump(_: Node) []const u8 {
+        return "<node>";
+    }
 
     pub fn trimmedSpan(self: *const Node) Span {
         if (self.children.len == 0)
