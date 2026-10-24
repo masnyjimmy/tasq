@@ -20,8 +20,8 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
         },
     );
 
-    var workspace: compiler.Workspace = .init;
-    defer workspace.deinit(allocator);
+    var workspace: compiler.Workspace = .init(allocator);
+    defer workspace.deinit();
 
     var diag: conzole.command.Diagnostic = undefined;
 

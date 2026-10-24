@@ -149,7 +149,6 @@ pub fn @"textDocument/didOpen"(
     }
 
     _ = try self.workspace.openFile(
-        self.allocator,
         notification.textDocument.uri,
         notification.textDocument.text,
         notification.textDocument.version,

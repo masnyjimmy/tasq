@@ -77,7 +77,6 @@ pub fn compileRunfile(ctx: *const Context, source_filepath: []const u8) !*const 
     defer ctx.allocator.free(content);
 
     const result = try ctx.workspace.openFile(
-        ctx.allocator,
         source_filepath,
         content,
         0,

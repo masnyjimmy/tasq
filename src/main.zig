@@ -4,13 +4,13 @@ const compiler = @import("compiler");
 const lsp = @import("lsp");
 
 pub fn lsp_test(init: std.process.Init) !void {
-    var workspace = compiler.Workspace.init;
-    defer workspace.deinit(init.gpa);
+    var workspace = compiler.Workspace.init(init.gpa);
+    defer workspace.deinit();
 
     const source = try std.Io.Dir.cwd().readFileAlloc(init.io, "tasq", init.gpa, .unlimited);
     defer init.gpa.free(source);
 
-    const result = try workspace.openFile(init.gpa, "tasq", source, 0);
+    const result = try workspace.openFile("tasq", source, 0);
 
     const file = workspace.getFileState(result.id);
 

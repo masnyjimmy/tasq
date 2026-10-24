@@ -28,22 +28,26 @@ pub const FileState = struct {
         self.diagnostics.deinit();
     }
 };
-
+allocator: std.mem.Allocator,
 files: std.array_hash_map.Auto(FileId, FileState) = .empty,
 uri_to_id: std.StringHashMapUnmanaged(FileId) = .empty,
 next_id: u32 = 0,
 
-pub const init: Workspace = .{};
+pub fn init(allocator: std.mem.Allocator) Workspace {
+    return .{
+        .allocator = allocator,
+    };
+}
 
-pub fn deinit(self: *Workspace, allocator: std.mem.Allocator) void {
+pub fn deinit(self: *Workspace) void {
     var iter = self.files.iterator();
 
     while (iter.next()) |kv| {
-        kv.value_ptr.deinit(allocator);
+        kv.value_ptr.deinit(self.allocator);
     }
 
-    self.files.deinit(allocator);
-    self.uri_to_id.deinit(allocator);
+    self.files.deinit(self.allocator);
+    self.uri_to_id.deinit(self.allocator);
     self.next_id = undefined;
 }
 
@@ -52,21 +56,21 @@ pub const OpenResult = struct {
     id: FileId,
 };
 
-pub fn openFile(self: *Workspace, allocator: std.mem.Allocator, uri: []const u8, text: []const u8, version: i32) !OpenResult {
+pub fn openFile(self: *Workspace, uri: []const u8, text: []const u8, version: i32) !OpenResult {
     std.debug.assert(self.getId(uri) == null);
 
     const id: FileId = @enumFromInt(self.next_id);
     self.next_id += 1;
 
-    const owned_uri = try allocator.dupe(u8, uri);
-    try self.uri_to_id.put(allocator, owned_uri, id);
+    const owned_uri = try self.allocator.dupe(u8, uri);
+    try self.uri_to_id.put(self.allocator, owned_uri, id);
 
-    try self.files.put(allocator, id, .{
+    try self.files.put(self.allocator, id, .{
         .uri = owned_uri,
         .version = version,
-        .source = try allocator.dupe(u8, text),
-        .arena = .init(allocator),
-        .diagnostics = .init(allocator),
+        .source = try self.allocator.dupe(u8, text),
+        .arena = .init(self.allocator),
+        .diagnostics = .init(self.allocator),
     });
 
     const valid = try self.reparse(id);
@@ -121,7 +125,10 @@ pub fn reparse(self: *Workspace, id: FileId) !bool {
 
     file.ir = blk: {
         const sem = @import("sema.zig");
-        var sema: sem.Sema = .init(&file.arena, &file.diagnostics);
+        var sema: sem.Sema = .init(
+            &file.arena,
+            &file.diagnostics,
+        );
 
         break :blk try sema.analyseFile(file.tree.?);
     };

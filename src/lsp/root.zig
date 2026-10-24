@@ -17,8 +17,8 @@ pub fn run(
     var stdio_transport: lsp.Transport.Stdio = .init(&read_buffer, .stdin(), .stdout());
     const transport: *lsp.Transport = &stdio_transport.transport;
 
-    var workspace: Workspace = .init;
-    defer workspace.deinit(allocator);
+    var workspace: Workspace = .init(allocator);
+    defer workspace.deinit();
 
     var dispatcher: Dispatcher = .init(allocator, &workspace);
     defer dispatcher.deinit();
