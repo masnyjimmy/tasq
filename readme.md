@@ -22,6 +22,7 @@
    - [4.7 Built-in Functions](#47-built-in-functions)
    - [4.8 Fallback](#48-fallback)
    - [4.9 Process Expressions](#49-process-expressions)
+   - [4.10 Lambdas](#410-lambdas)
 5. [Settings](#5-settings)
 6. [Tasks](#6-tasks)
    - [6.1 Arguments](#61-arguments)
@@ -78,7 +79,7 @@ Runtime types are used for bindings and expressions evaluated at runtime.
 | `number` | Integer or floating-point value | `42`, `3.14` |
 | `string` | UTF-8 text value | `"hello"`, `` `hello {name}` `` (see [§4.2](#42-string-literals-and-interpolation)) |
 | `[]T` | Homogeneous ordered collection of type `T` | `[1, 2, 3]`, `[[1,2],[3,4]]` |
-| `lambda` | An anonymous, inline function value | `\|a, b\| a > b` |
+| `lambda` | A single-expression function, written `\|a, b\| a > b`; every lambda literal has its own type (see [§4.10](#410-lambdas)) | `\|a, b\| a > b` |
 | `void` | The "no meaningful value" result of certain built-in functions | *(none — cannot be written as a literal)* |
 | `noreturn` | Special type given to a built-in function call, or to `break`/`continue`, that never produces a value (it always diverges) | *(none — cannot be written as a literal)* |
 | `!T` | Result of a fallible built-in function call: either a successful `T` value or an error | *(none — only produced by certain built-in functions)* |
@@ -89,7 +90,7 @@ Runtime types are used for bindings and expressions evaluated at runtime.
 - All binding types are **inferred** from the assigned expression. No explicit type annotation is written for bindings.
 - `[]T` may be **nested** — `T` can itself be a list type (e.g. `[][]number`). All elements must share the same type.
 - A `[]T` literal must **not be empty** at a point where its element type cannot be determined from context, since `T` cannot be inferred from an empty literal.
-- A `lambda` literal has the form `|<captures>| <expr>` (see [§4.7](#47-built-in-functions) for the notation used to describe a lambda's parameter and return types, e.g. `|T| -> bool`). A lambda's parameter types and return type are **inferred entirely from the context that expects it** — a lambda literal has no meaning on its own. Currently the only such context is a built-in function parameter declared to accept a lambda (e.g. `@any`). A lambda literal cannot be assigned to a binding, stored in a list, or used anywhere its expected type isn't already known.
+- A `lambda` is a **template**: `|<params>| <expr>` has no fixed signature, and its parameter types and result type are inferred from each use ([§4.10](#410-lambdas)). A lambda can be bound to a name, aliased, passed to other lambdas, and passed to built-in functions that take a lambda ([§4.7](#47-built-in-functions)). Every lambda literal has its own type, so two different lambdas cannot be mixed where a single type is required (for example as the elements of one list). A lambda cannot return a lambda, and a lambda is not a valid task or group argument type ([§2.3](#23-argument-types)).
 - `void` has no literal and cannot be produced directly — it only ever appears as the return type of certain built-in functions (e.g. `@print`). Unlike `noreturn`, `void` **is** a real value and behaves as an ordinary concrete type: it can be assigned to a binding, and two `void`-typed branches unify with each other in `if`/`switch`/`for` — but a `void` branch does **not** unify with a differently-typed branch. Pairing a `void` branch with, say, a `string` branch is a type error.
 - `noreturn` can never be assigned to a binding directly and has no literal form. It only ever appears as the return type of certain built-in functions ([§4.7](#47-built-in-functions)) or the `break`/`continue` expressions ([§4.6](#46-break-and-continue-expressions)). When a `noreturn`-typed branch appears alongside other branches — in an `if` expression ([§4.3](#43-if-expression)), `switch` expression ([§4.4](#44-switch-expression)), or `for` expression ([§4.5](#45-for-expression)) — it unifies with whatever type the other branches produce, since a diverging branch never actually yields a value to compare. If **every** branch is `noreturn`, the expression as a whole is `noreturn`.
 - `!T` has no literal and is produced only by certain built-in functions ([§4.7](#47-built-in-functions)) that can fail. It cannot be assigned to a binding, passed to a process call or task call, stored in a list, or used in **any** other expression context — a `!T` value has exactly one valid use: applying `fallback` ([§4.8](#48-fallback)) directly to the built-in call that produced it. `fallback` unwraps a `!T` into a plain `T`, which can then be used anywhere a `T` is expected.
@@ -148,6 +149,7 @@ name := <expression>
 - Bindings may be declared in: file root scope, group body, or task body.
 - Within the same scope, binding names must be unique.
 - Inside a task body, arguments are treated as regular immutable bindings of their corresponding runtime type.
+- A binding named `_` is never defined; it only discards its value ([§6.3](#63-task-body)).
 
 **Evaluation order:**
 
@@ -433,10 +435,12 @@ Built-in functions are called with an `@` prefix and may appear inside any expre
 | `@replace(str: string, old: string, new: string)` | `string` | Returns a copy of `str` with every occurrence of `old` replaced by `new`. |
 | `@replace(list: []T, old: T, new: T)` | `[]T` | Returns a copy of `list` with every element equal to `old` replaced by `new`. |
 | `@all(list: []T, predicate: \|T\| -> bool)` | `bool` | Returns `true` if `predicate` evaluates to `true` for every element of `list` (vacuously `true` for an empty list). |
-| `@any(array: []T, predicate: \|T\| -> bool)` | `bool` | Returns `true` if `predicate` evaluates to `true` for at least one element of `array`, otherwise `false`. `predicate` is a lambda literal (see [§2.1](#21-runtime-types)); `\|T\| -> bool` denotes "a lambda taking one `T` and returning `bool`". |
+| `@any(array: []T, predicate: \|T\| -> bool)` | `bool` | Returns `true` if `predicate` evaluates to `true` for at least one element of `array`, otherwise `false`. `predicate` is a lambda, either a literal or a bound lambda (see [§4.10](#410-lambdas)); `\|T\| -> bool` denotes "a lambda taking one `T` and returning `bool`". |
 | `@reduce(list: []T, init: T, combine: \|T, T\| -> T)` | `T` | Folds `list` into a single value: starting from `init`, repeatedly calls `combine(accumulator, element)` for each element in order, and returns the final accumulator. `\|T, T\| -> T` denotes "a lambda taking two `T`s (accumulator, then element) and returning a `T`". |
 
 Several entries above share a name with different parameter types (`@len`, `@replace`) — the overload used is determined at compile time from the runtime type of the argument, the same way `[]T` itself is generic over `T`.
+
+**Lambda arguments.** `@all`, `@any` and `@reduce` take a lambda, written inline or given by name (`@any(xs, big)` with `big := |n| n > 10`). The overload is chosen from the function name, the types of the non-lambda arguments and the lambda's **number of parameters**; the lambda's parameter types then come from the chosen overload, and the type of its body must match the result the overload expects (for example `bool` for `@any`).
 
 Functions whose return type is `!T` (`@env`, `@parse_number`, `@which`) can fail; see [§4.8 Fallback](#48-fallback) for the only way to obtain a usable value from them.
 
@@ -550,6 +554,83 @@ task probe {
     @print(tool)
 }
 ```
+
+### 4.10 Lambdas
+
+A **lambda** is a function written as a single expression:
+
+```
+|<params>| <expr>
+```
+
+```
+double := |x| x * 2
+add    := |a, b| a + b
+```
+
+Parameters are comma-separated names between the bars. They have **no type annotations**. The body is one expression and extends as far to the right as possible.
+
+**Binding.** Binding a lambda evaluates nothing; it creates a lambda value. Lambda bindings follow the ordinary rules for bindings ([§3](#3-bindings)): they may be declared at file root, in a group body or in a task body, and they are immutable. A lambda can be aliased (`twice := double`).
+
+**Calling.** The meaning of `name(args)` depends on where it is written:
+
+| Position | `name(...)` is |
+|----------|----------------|
+| Statement (a line of a task body) | a **task call** ([§7](#7-task-calls)) |
+| Expression (right-hand side of `:=`, an argument, an interpolation, ...) | a **lambda call** |
+
+- A lambda call takes positional arguments only, and their number must equal the number of parameters.
+- The value of the call is the value of the body.
+- To call a lambda whose body is `void` (for example one that calls `@print`) for its effect, wrap the call in parentheses so that it is an expression: `(say("hi"))`. Any other value must be used, or discarded with `_ :=` ([§6.3](#63-task-body)).
+
+**Parameter types come from the use.** A lambda has no fixed signature. On each call the argument types become the parameter types, and the body is checked with them. For every distinct list of parameter types tasq creates one *instance* of the lambda; all uses with those types share it. The same lambda can therefore be used with different types, as long as its body is valid for each of them:
+
+```
+show   := |v| `<{v}>`
+double := |x| x * 2
+
+task demo {
+    @print(show(1))        // instance for (number): "<1>"
+    @print(show("a"))      // instance for (string): "<a>"
+    @print(`{double(21)}`) // 42
+    _ := double("a")       // compile-time error: the body is not valid for (string)
+}
+```
+
+An error inside a body is reported when a use instantiates the lambda with types for which the body is invalid. A lambda that is never used is never analysed (see [§12](#12-planned-features)).
+
+**Scope.** A lambda body is **lexically scoped**: it sees its own parameters and the names visible where the lambda is **written**, never the locals of whoever calls it.
+
+```
+g := |k, h| h(k)
+
+task test {
+    k := 1
+    f := |a| a + k          // this k is the task's k
+    @print(`{g(5, f)}`)     // 6, not 10: g's own `k` (5) is not visible inside f
+}
+```
+
+Parameters follow the no-shadowing rule of bindings: a parameter cannot have the same name as a name that is already visible (compile-time error).
+
+**Lambdas as values.** A lambda value can be bound, aliased and passed around:
+
+```
+apply := |fn, x| fn(x)
+
+task demo {
+    @print(`{apply(double, 4)}`)    // 8
+}
+```
+
+It can also be passed to the built-in functions that take a lambda ([§4.7](#47-built-in-functions)). Every lambda literal has its own type; two different lambdas have different types and cannot be mixed where one type is required, for example as the items of one list.
+
+**Limits:**
+
+- **No recursion.** A lambda cannot call itself, directly or through other lambdas (compile-time error).
+- **A lambda cannot return a lambda.** `|a| |b| a + b` is a compile-time error (`lambda cannot return a lambda`).
+- A lambda body is an expression, so it cannot contain task calls or statements. Use a task for actions.
+- A lambda cannot be a task or group argument ([§2.3](#23-argument-types)).
 
 ---
 
@@ -712,6 +793,16 @@ A task body may contain any combination of the following:
 | Task call | `name(...)` / `::name(...)` / `group::name(...)` |
 
 Internally, if a line in a task body doesn't match any of the statement forms above, the parser falls back to parsing it as a plain **expression statement** — an expression whose value is simply discarded. This is mainly what allows a built-in call like `@print(msg)` to be written on its own line without binding its result: `@print(...)` is an expression, but since its type is `void`, discarding the result is harmless.
+
+**Discarding values:**
+
+An expression statement whose value is not `void` (or `noreturn`) is a compile-time error (`discarded value`), because the value would be silently lost. To evaluate an expression and ignore its result on purpose, bind it to `_`:
+
+```
+_ := double(2)        // evaluated, result discarded
+```
+
+`_` is never defined as a name, so it cannot be read, and it can be used any number of times in the same scope.
 
 **Statement blocks:**
 
@@ -941,7 +1032,7 @@ task test(name: string) [build()]
 
 ## 7. Task Calls
 
-Tasks can be called from within other task bodies. Task calls are **statements** — they do not produce a value and cannot appear inside expressions.
+Tasks can be called from within other task bodies. Task calls are **statements** — they do not produce a value and cannot appear inside expressions. (`name(...)` written in expression position is a lambda call instead, see [§4.10](#410-lambdas).)
 
 ### Scope Resolution
 
@@ -1401,6 +1492,7 @@ task cleanup {
 | `"text"` | `string` | No | Basic string |
 | `` `text {expr}` `` | `string` | Yes (`{ }`) | Interpolated string |
 | `'c'` | `char` | No | Single character |
+| `\|a, b\| expr` | lambda | No | Single-expression function; types inferred per use ([§4.10](#410-lambdas)) |
 | `` $`command {expr}` `` | process call | Yes (`{ }`) | Statement: echoed, stdout and stderr inherited. Expression: not echoed, yields stdout as `string` with trailing newlines removed |
 
 Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` `` `\0` `\xNN` `\u{NNNN...}` `\{` `\}`
@@ -1447,7 +1539,7 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 | Attribute values, setting values | Meta types |
 | Task/group parameter declarations | Argument types |
 | Inside task body (arguments as values) | Runtime types (mapped from argument types) |
-| Built-in function parameters declared as lambda | Runtime types, restricted to a `lambda` literal — the only context where a lambda literal is valid (§2.1) |
+| Lambda parameters and result | Runtime types, inferred per use ([§4.10](#410-lambdas)) |
 | Result of a fallible built-in call | `!T`, unusable until unwrapped to `T` via `fallback` (§4.8) |
 
 ---
@@ -1462,3 +1554,6 @@ The following are reserved for future versions and not currently part of the lan
 - **Isolated `@status_code()` for static bindings** — today a lazily evaluated static binding that runs a process updates `@status_code()` like any other process; this may be changed so that evaluating a static binding leaves it untouched
 - **Eager evaluation of selected static bindings** — a way to force chosen static bindings to be evaluated at startup instead of on first reference
 - **Configurable stdin for process expressions** — process expressions currently read an empty stdin
+- **Definition-time checking of lambdas** — today a lambda body is analysed only when it is used, so a lambda that is never used is never checked. Planned: check every lambda where it is defined (unknown names, errors that do not depend on parameter types) and require that a body only uses names declared before the lambda
+- **Lambda diagnostics with instantiation traces** — errors inside a lambda body should also point at the call that instantiated it and at the lambda's definition
+- **Returning lambdas (closures)** — a lambda cannot return a lambda today, because lambda values do not capture their environment
