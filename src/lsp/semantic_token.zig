@@ -191,12 +191,16 @@ pub const Collector = struct {
         return self.context.scope_stack.getLast();
     }
 
-    fn significantParentNode(self: *const Collector, comptime kinds: []const cst.NodeKind) ?cst.NodeKind {
+    fn significantParentNode(self: *const Collector, comptime kinds: []const cst.NodeKind) ?*cst.Node {
         return self.context.tree_stack.closest(kinds);
     }
 
+    fn significantParentNodeKind(self: *const Collector, comptime kinds: []const cst.NodeKind) ?cst.NodeKind {
+        return self.context.tree_stack.closestKind(kinds);
+    }
+
     fn parentNode(self: *const Collector) cst.NodeKind {
-        return self.context.tree_stack.stack.getLast();
+        return self.context.tree_stack.stack.getLast().kind;
     }
 
     fn handleNode(self: *Collector, node: *const cst.Node) Error!void {
@@ -208,7 +212,7 @@ pub const Collector = struct {
             }
         }
 
-        try self.context.tree_stack.enter(self.allocator, node.kind);
+        try self.context.tree_stack.enter(self.allocator, node);
         defer self.context.tree_stack.pop();
 
         for (node.children) |*child| {
@@ -235,7 +239,7 @@ pub const Collector = struct {
             else => switch (token.kind) {
                 .ident => switch (parent) {
                     .name => {
-                        const significant = self.significantParentNode(&.{
+                        const significant = self.significantParentNodeKind(&.{
                             .task, .group, .binding, .parameter, .captures, .attribute,
                         }) orelse return;
                         switch (significant) {
@@ -297,7 +301,7 @@ pub const Collector = struct {
                         }
                     },
                     .name_ref => {
-                        const significant = self.significantParentNode(&.{.task_call});
+                        const significant = self.significantParentNodeKind(&.{.task_call});
 
                         if (significant) |s| switch (s) {
                             .task_call => {
@@ -316,6 +320,13 @@ pub const Collector = struct {
                                 token.lexeme,
                                 .variable,
                             ) orelse return;
+
+                            if (symbol.origin.valueType()) |vt| {
+                                if (vt == .lambda) {
+                                    try self.add(token.span, .function, null);
+                                    return;
+                                }
+                            }
 
                             const tt: TokenType = switch (symbol.origin) {
                                 .argument, .capture => .parameter,
@@ -398,16 +409,16 @@ const Context = struct {
 const ScopeStack = std.ArrayList(*compiler.scope.Scope);
 
 const TreeStack = struct {
-    stack: std.ArrayList(cst.NodeKind),
+    stack: std.ArrayList(*const cst.Node),
 
     const empty: TreeStack = .{
         .stack = .empty,
     };
 
-    fn enter(self: *TreeStack, allocator: std.mem.Allocator, kind: cst.NodeKind) !void {
+    fn enter(self: *TreeStack, allocator: std.mem.Allocator, node: *const cst.Node) !void {
         try self.stack.append(
             allocator,
-            kind,
+            node,
         );
     }
 
@@ -415,16 +426,23 @@ const TreeStack = struct {
         _ = self.stack.pop();
     }
 
-    fn closest(self: *const TreeStack, comptime kinds: []const cst.NodeKind) ?cst.NodeKind {
+    fn closest(self: *const TreeStack, comptime kinds: []const cst.NodeKind) ?*const cst.Node {
         const set: std.EnumSet(cst.NodeKind) = comptime .initMany(kinds);
 
         var it = std.mem.reverseIterator(self.stack.items);
 
-        while (it.next()) |kind| {
-            if (set.contains(kind))
-                return kind;
+        while (it.next()) |node| {
+            if (set.contains(node.kind))
+                return node;
         }
 
         return null;
+    }
+
+    fn closestKind(self: *const TreeStack, comptime kinds: []const cst.NodeKind) ?cst.NodeKind {
+        return if (self.closest(kinds)) |node|
+            node.kind
+        else
+            null;
     }
 };
