@@ -51,7 +51,7 @@ pub const Cursor = struct {
     }
 
     pub fn kindAt(self: *Cursor, pos: usize) Token.Kind {
-        if (self.pos >= self.events.len) return .eof;
+        if (pos >= self.events.len) return .eof;
 
         return eventKind(self.events[pos]);
     }
