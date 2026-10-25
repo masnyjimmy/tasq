@@ -59,15 +59,17 @@ pub fn build(b: *std.Build) void {
     cli_mod.addImport("interpreter", interpreter_mod);
     cli_mod.addImport("lsp", lsp_mod);
 
+    const exe_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe = b.addExecutable(.{
         .name = "tasq",
         .use_llvm = true,
         .use_lld = true,
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = exe_mod,
     });
     exe.root_module.addImport("lib", lib_mod);
     exe.root_module.addImport("compiler", compiler_mod);
@@ -76,6 +78,14 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("lsp", lsp_mod);
 
     b.installArtifact(exe);
+
+    const exe_check = b.addExecutable(.{
+        .name = "tasq",
+        .root_module = exe_mod,
+    });
+
+    const check = b.step("check", "Check if foo compiles");
+    check.dependOn(&exe_check.step);
 
     //----- run step -----
 
