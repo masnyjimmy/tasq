@@ -20,12 +20,11 @@ pub const Kind = enum {
 
 const platform_specs = blk: {
     const ti = @typeInfo(platform.Tag).@"enum";
+    var specs: [ti.field_names.len]Spec = undefined;
 
-    var specs: [ti.fields.len]Spec = undefined;
-
-    for (ti.fields, 0..) |f, idx| {
+    for (ti.field_names, 0..) |field_name, idx| {
         specs[idx] = .{
-            .name = f.name,
+            .name = field_name,
             .value_types = &.{},
             .default = .auto,
             .unique = true,
@@ -217,7 +216,7 @@ fn Attributes(comptime specs: []const Spec) type {
         for (specs, 0..) |spec, idx| {
             defs[idx] = def: {
                 var out = ct.copyFields(Definition, spec);
-                out.type = @enumFromInt(idx);
+                out.type = @fromBackingInt(@intCast(idx));
 
                 break :def out;
             };
@@ -262,7 +261,7 @@ fn Attributes(comptime specs: []const Spec) type {
         pub fn get(name: []const u8, target: ?Target) ?Definition {
             const def = blk: {
                 const attr_type = name_map.get(name) orelse return null;
-                break :blk defs[@intFromEnum(attr_type)];
+                break :blk defs[@backingInt(attr_type)];
             };
 
             // validate
@@ -312,7 +311,7 @@ pub const ValidFor = union(TargetType) {
     process_expr,
     argument: std.EnumSet(ArgType),
 
-    pub const any_argument: ValidFor = .{ .argument = .initEmpty() };
+    pub const any_argument: ValidFor = .{ .argument = .empty };
 
     pub fn arguments(types: []const ArgType) ValidFor {
         return .{ .argument = .initMany(types) };

@@ -308,7 +308,7 @@ pub const Delims = struct {
     };
 
     const close_set = blk: {
-        var set = std.EnumSet(Token.Kind).initEmpty();
+        var set: std.EnumSet(Token.Kind) = .empty;
         for (pairs) |p| set.insert(p.close);
         break :blk set;
     };

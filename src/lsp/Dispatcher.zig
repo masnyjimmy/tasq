@@ -379,7 +379,9 @@ pub fn @"textDocument/diagnostic"(
 
     for (diagnostics.records.items, result) |in, *out| {
         out.* = .{
-            .message = in.message,
+            .message = .{
+                .string = in.message,
+            },
             .range = lsp.offsets.locToRange(
                 file.source,
                 .{

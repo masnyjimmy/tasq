@@ -29,11 +29,11 @@ pub fn copyFields(comptime Out: type, in: anytype) Out {
 
     if (in_ti.is_tuple) @compileError("in cannot be tuple");
 
-    inline for (in_ti.fields) |field| {
-        if (@hasField(Out, field.name)) {
-            if (field.type != @FieldType(Out, field.name)) @compileError("type mismatch: " ++ field.name);
+    inline for (in_ti.field_names, in_ti.field_types) |field_name, field_type| {
+        if (@hasField(Out, field_name)) {
+            if (field_type != @FieldType(Out, field_name)) @compileError("type mismatch: " ++ field_name);
 
-            @field(out, field.name) = @field(in, field.name);
+            @field(out, field_name) = @field(in, field_name);
         }
     }
 

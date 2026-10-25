@@ -1,14 +1,14 @@
 .{
     .name = .tsq,
-    .version = "0.16.0",
+    .version = "0.17.0",
     .dependencies = .{
         .conzole = .{
-            .url = "git+https://github.com/masnyjimmy/conzole#146aaadb28884c1d14cbe40dc4f985b6f3877084",
-            .hash = "conzole-1.0.10-DmAtFBvdAACQpYuv27Ll8NxCRN0yAd3LpNl4voRJognl",
+            .url = "git+https://github.com/masnyjimmy/conzole#a15c2742c9823fb590c6d94a815a206f35ee1986",
+            .hash = "conzole-1.0.11-DmAtFJfbAABbqC0kFJtY4XWV3h9fp0yLr1UeZQ8az-wn",
         },
         .lsp_kit = .{
-            .url = "git+https://github.com/zigtools/lsp-kit.git?ref=0.16.x#cf0ff08ac00301859656bbd4a5af6fcb889497e4",
-            .hash = "lsp_kit-0.1.0-bi_PL8cxDAAxREwBYHZFTGG2xVuzAjgnZPMmwiajkFu0",
+            .url = "git+https://github.com/zigtools/lsp-kit#3e1058db66079911fdde82f833fdce6856e0a706",
+            .hash = "lsp_kit-0.1.0-bi_PL9o2DADHS1PDra3MGz1MXnsboN_ewNvrc419z7Fb",
         },
     },
     .paths = .{""},

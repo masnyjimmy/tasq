@@ -28,7 +28,7 @@ pub fn StaticSet(comptime T: type) type {
 
                 defer self.index += 1;
                 return .{
-                    .key = @enumFromInt(self.index),
+                    .key = @fromBackingInt(@intCast(self.index)),
                     .value = self.src.data[self.index],
                 };
             }
@@ -40,7 +40,7 @@ pub fn StaticSet(comptime T: type) type {
             comptime var data: [len]bool = .{};
 
             for (values) |v| {
-                const idx = @intFromEnum(v);
+                const idx = @backingInt(v);
 
                 data[idx] = true;
             }
@@ -51,7 +51,7 @@ pub fn StaticSet(comptime T: type) type {
         }
 
         pub fn has(self: *Self, key: T) bool {
-            const idx = @intFromEnum(key);
+            const idx = @backingInt(key);
             return self.data[idx];
         }
 
@@ -80,10 +80,10 @@ pub fn generateEnumNameMap(comptime T: type) std.StaticStringMap(T) {
             else => @compileError("T must be enum"),
         };
 
-        var out: [ti.fields.len]struct { []const u8, T } = undefined;
+        var out: [ti.field_names.len]struct { []const u8, T } = undefined;
 
-        for (ti.fields, 0..) |f, idx| {
-            out[idx] = .{ f.name, @as(T, @enumFromInt(f.value)) };
+        for (ti.field_names, ti.field_values, 0..) |field_name, field_value, idx| {
+            out[idx] = .{ field_name, @as(T, @fromBackingInt(@intCast(field_value))) };
         }
 
         return .initComptime(out);
@@ -112,7 +112,7 @@ pub fn EnumMultimap(comptime E: type, comptime V: type) type {
         pub const Storage = std.EnumArray(E, Array);
         const Self = @This();
 
-        keys: Keys = .initEmpty(),
+        keys: Keys = .empty,
         storage: Storage = .initFill(.empty),
 
         pub const empty: Self = .{};

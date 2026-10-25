@@ -49,7 +49,7 @@ pub const TokenModifier = enum(u32) {
         var out: u32 = 0;
 
         for (mods) |mod| {
-            out |= @intFromEnum(mod);
+            out |= @backingInt(mod);
         }
 
         return out;
@@ -65,7 +65,7 @@ const RawToken = struct {
         return .{
             .start = span.start,
             .end = span.end(),
-            .ttype = @intFromEnum(ttype),
+            .ttype = @backingInt(ttype),
             .mods = TokenModifier.modsToInt(mods),
         };
     }
@@ -174,7 +174,7 @@ pub const Collector = struct {
                 if (tok.start < max_end) {
                     std.debug.panic(
                         "semantic token overlap: '{t}' [{d}, {d}] collides with a preceding token '{t}' ending at {d} -- some span was likely registered twice",
-                        .{ @as(TokenType, @enumFromInt(tok.ttype)), tok.start, tok.end, @as(TokenType, @enumFromInt(ttype)), max_end },
+                        .{ @as(TokenType, @fromBackingInt(@intCast(tok.ttype))), tok.start, tok.end, @as(TokenType, @fromBackingInt(@intCast(ttype))), max_end },
                     );
                 }
                 max_end = @max(max_end, tok.end);
@@ -283,9 +283,9 @@ pub const Collector = struct {
                                         inline else => |tag| {
                                             const mod_name = "attr_" ++ @tagName(tag);
                                             const ti = @typeInfo(TokenModifier).@"enum";
-                                            inline for (ti.fields) |f| {
-                                                if (std.mem.eql(u8, f.name, mod_name))
-                                                    break :mod @enumFromInt(f.value);
+                                            inline for (ti.field_names, ti.field_values) |field_name, field_value| {
+                                                if (std.mem.eql(u8, field_name, mod_name))
+                                                    break :mod @fromBackingInt(@intCast(field_value));
                                             } else unreachable;
                                         },
                                     };

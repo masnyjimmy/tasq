@@ -88,10 +88,10 @@ fn Dump(ctx: *const Context) !void {
             var out: []const u8 = "";
 
             const ti = @typeInfo(@This()).@"enum";
-            const last = ti.fields.len - 1;
+            const last = ti.field_names.len - 1;
 
-            for (ti.fields, 0..) |f, idx| {
-                out = out ++ f.name;
+            for (ti.field_names, 0..) |field_name, idx| {
+                out = out ++ field_name;
 
                 if (idx != last)
                     out = out ++ ", ";

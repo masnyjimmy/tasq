@@ -141,15 +141,15 @@ pub fn dump(
 
                 .@"enum" => |e| {
                     // FIX: handle id like enums
-                    const has_field = inline for (e.fields) |field| {
-                        if (field.value == @intFromEnum(value_))
+                    const has_field = inline for (e.field_values) |field_value| {
+                        if (field_value == @backingInt(value_))
                             break true;
                     } else false;
 
                     if (has_field) {
                         cprint(C_ENUM, ".{s}", .{@tagName(value_)});
                     } else {
-                        cprint(C_ENUM, "{}", .{@intFromEnum(value_)});
+                        cprint(C_ENUM, "{}", .{@backingInt(value_)});
                     }
                 },
 
@@ -275,10 +275,10 @@ pub fn dump(
                             indent(child_pad);
                             const vT = @TypeOf(v);
                             const vTi = @typeInfo(vT);
-                            if (vTi == .@"struct" and vTi.@"struct".fields.len == 2) {
-                                self.dump(@field(v, vTi.@"struct".fields[0].name), depth + 1); // FIX: removed `try`
+                            if (vTi == .@"struct" and vTi.@"struct".field_names.len == 2) {
+                                self.dump(@field(v, vTi.@"struct".field_names[0]), depth + 1); // FIX: removed `try`
                                 print(": ", .{});
-                                self.dump(@field(v, vTi.@"struct".fields[1].name), depth + 1); // FIX: removed `try`
+                                self.dump(@field(v, vTi.@"struct".field_names[1]), depth + 1); // FIX: removed `try`
                             } else {
                                 self.dump(v, depth + 1); // FIX: removed `try`
                             }
@@ -289,19 +289,19 @@ pub fn dump(
                         return;
                     }
 
-                    const fields = ti.@"struct".fields;
-                    if (fields.len == 0) {
+                    const field_names = ti.@"struct".field_names;
+                    if (field_names.len == 0) {
                         cprint(C_DIM, "{}", .{});
                         return;
                     }
 
                     print("{{\n", .{});
-                    inline for (fields, 0..) |field, i| {
+                    inline for (field_names, 0..) |field_name, i| {
                         indent(child_pad);
-                        cprint(C_KEY, "{s}", .{field.name});
+                        cprint(C_KEY, "{s}", .{field_name});
                         print(": ", .{});
-                        self.dump(@field(value_, field.name), depth + 1);
-                        if (i + 1 < fields.len) print(",", .{});
+                        self.dump(@field(value_, field_name), depth + 1);
+                        if (i + 1 < field_names.len) print(",", .{});
                         print("\n", .{});
                     }
                     indent(pad);
