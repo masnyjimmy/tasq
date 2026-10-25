@@ -13,62 +13,73 @@ page_size = 1 << 12
 
 def log2_int(i): return i.bit_length() - 1
 
-MAX_REASONABLE_CAPACITY = 1 << 24  # 16M slots — generous for real hashmaps, bounds worst-case hang
-MAX_REASONABLE_LEN      = 1 << 24  # elements, for slices
-MAX_REASONABLE_STRLEN   = 1 << 20  # bytes, for strings
+class ValueInit:
+    def __init__(self, value: lldb.SBValue): self.value = value
+    def toBytes(self, parent: lldb.SBValue, value_type: lldb.SBType) -> bytes:
+        return self.value.data.uint8
+    def create(self, parent: lldb.SBValue, name: str, value_type: lldb.SBType) -> lldb.SBValue:
+        return self.value.Clone(name)
 
-def _readable_span(process, addr, size):
-    """True iff [addr, addr+size) appears readable."""
-    if size <= 0:
-        return False
+class FromBytes(ValueInit):
+    def __init__(self, value_bytes: bytes): self.value_bytes = value_bytes
+    def toBytes(self, parent: lldb.SBValue, value_type: lldb.SBType) -> bytes: return self.value_bytes
+    def create(self, parent: lldb.SBValue, name: str, value_type: lldb.SBType) -> lldb.SBValue:
+        data = lldb.SBData()
+        error = lldb.SBError()
+        value_bytes = self.toBytes(parent, value_type);
+        target = parent.target
+        data.SetData(error, value_bytes, target.byte_order, target.addr_size)
+        return parent.CreateValueFromData(name, data, value_type)
 
-    region = lldb.SBMemoryRegionInfo()
-    err = process.GetMemoryRegionInfo(addr, region)
-    if err.Success() and region.IsReadable() and region.GetRegionEnd() >= addr + size:
-        return True
-
-    # GetMemoryRegionInfo() is unreliable or unimplemented on some process
-    # plugins (certain corefile readers, some remote targets), where it
-    # just fails unconditionally. That would otherwise make every slice
-    # look unreadable and suppress all synthetic children. Fall back to
-    # actually probing memory instead of trusting region info alone.
-    error = lldb.SBError()
-    process.ReadMemory(addr, 1, error)
-    if error.Fail():
-        return False
-
-    error.Clear()
-    process.ReadMemory(addr + size - 1, 1, error)
-    return error.Success()
-
-def create_struct(parent, name, struct_type, inits):
-    struct_bytes, struct_data = bytearray(struct_type.size), lldb.SBData()
-    for field in struct_type.fields:
-        field_size = field.type.size
-        field_init = inits[field.name]
-        if isinstance(field_init, int):
-            match struct_data.byte_order:
-                case lldb.eByteOrderLittle:
-                    byte_order = 'little'
-                case lldb.eByteOrderBig:
-                    byte_order = 'big'
-            field_bytes = field_init.to_bytes(field_size, byte_order, signed=field.type.GetTypeFlags() & lldb.eTypeIsSigned != 0)
-        elif isinstance(field_init, lldb.SBValue):
-            field_bytes = field_init.data.uint8
-        else: return
-        match struct_data.byte_order:
+class IntLiteral(FromBytes):
+    def __init__(self, int_value: int): self.int_value = int_value
+    def toBytes(self, parent: lldb.SBValue, int_type: lldb.SBType) -> bytes:
+        int_flags = int_type.GetTypeFlags()
+        assert int_flags & lldb.eTypeIsInteger != 0
+        int_is_signed = int_flags & lldb.eTypeIsSigned != 0
+        match parent.target.byte_order:
             case lldb.eByteOrderLittle:
-                field_bytes = field_bytes[:field_size]
-                field_start = field.byte_offset
-                struct_bytes[field_start:field_start + len(field_bytes)] = field_bytes
+                byte_order = 'little'
             case lldb.eByteOrderBig:
-                field_bytes = field_bytes[-field_size:]
-                field_end = field.byte_offset + field_size
-                struct_bytes[field_end - len(field_bytes):field_end] = field_bytes
-    struct_data.SetData(lldb.SBError(), struct_bytes, struct_data.byte_order, struct_data.GetAddressByteSize())
-    return parent.CreateValueFromData(name, struct_data, struct_type)
+                byte_order = 'big'
+        return self.int_value.to_bytes(int_type.size, byte_order, signed=int_is_signed)
 
-# Define Zig Language
+class FromBackingInt(FromBytes):
+    def __init__(self, field_value: int): self.field_value = field_value
+    def fieldValue(self, enum_type: lldb.SBType) -> int: return self.field_value
+    def toBytes(self, parent: lldb.SBValue, enum_type: lldb.SBType) -> bytes:
+        assert enum_type.type == lldb.eTypeClassEnumeration
+        backing_int = IntLiteral(self.fieldValue(enum_type));
+        return backing_int.toBytes(parent, enum_type.GetEnumerationIntegerType())
+
+class EnumField(FromBackingInt):
+    def __init__(self, field_index: int): self.field_index = field_index
+    def fieldIndex(self, enum_type: lldb.SBType) -> int: return self.field_index
+    def fieldValue(self, enum_type: lldb.SBType) -> int:
+        enum_is_signed = enum_type.GetEnumerationIntegerType().GetTypeFlags() & lldb.eTypeIsSigned != 0
+        field = enum_type.enum_members[self.fieldIndex(enum_type)]
+        return field.signed if enum_is_signed else field.unsigned
+
+class EnumLiteral(EnumField):
+    def __init__(self, field_name: str): self.field_name = field_name
+    def fieldName(self, enum_type: lldb.SBType) -> str: return self.field_name
+    def fieldIndex(self, enum_type: lldb.SBType) -> int:
+        field_name = self.fieldName(enum_type)
+        return next(field_index for field_index, field in enumerate(enum_type.enum_members)
+            if field.name == field_name)
+
+class StructInit(FromBytes):
+    def __init__(self, field_inits: dict[str, ValueInit]): self.field_inits = field_inits
+    def toBytes(self, parent: lldb.SBValue, struct_type: lldb.SBType) -> bytes:
+        assert struct_type.type == lldb.eTypeClassStruct
+        struct_bytes = bytearray(struct_type.size)
+        for field in struct_type.fields:
+            field_bytes = self.field_inits[field.name].toBytes(parent, field.type)
+            assert len(field_bytes) == field.type.size
+            struct_bytes[field.byte_offset:field.byte_offset + len(field_bytes)] = field_bytes
+        return bytes(struct_bytes)
+
+# Define Zig Language (for programs compiled with the llvm backend)
 
 zig_keywords = {
     'addrspace',
@@ -157,19 +168,12 @@ def zig_IsFieldName(string): return string not in zig_keywords and zig_identifie
 class zig_Slice_SynthProvider:
     def __init__(self, value, _=None): self.value = value
     def update(self):
-        self.len = 0
         try:
             self.ptr = self.value.GetChildMemberWithName('ptr')
+            self.len = self.value.GetChildMemberWithName('len').unsigned if self.ptr.unsigned > page_size else 0
             self.elem_type = self.ptr.type.GetPointeeType()
-            self.elem_size = self.elem_type.size or 1
-
-            addr = self.ptr.unsigned
-            if addr > page_size:
-                length = self.value.GetChildMemberWithName('len').unsigned
-                if 0 < length <= MAX_REASONABLE_LEN and _readable_span(self.value.process, addr, length * self.elem_size):
-                    self.len = length
-        except:
-            self.len = 0
+            self.elem_size = self.elem_type.size
+        except: pass
     def has_children(self): return True
     def num_children(self): return self.len or 0
     def get_child_index(self, name):
@@ -183,16 +187,7 @@ class zig_Slice_SynthProvider:
 def zig_String_decode(value, offset=0, length=None):
     try:
         value = value.GetNonSyntheticValue()
-        ptr = value.GetChildMemberWithName('ptr')
-        length = length if length is not None else value.GetChildMemberWithName('len').unsigned
-        if length <= 0:
-            return ''
-        truncated = length > MAX_REASONABLE_STRLEN
-        if truncated:
-            length = MAX_REASONABLE_STRLEN
-        if not _readable_span(value.process, ptr.unsigned, offset + length):
-            return None
-        data = ptr.GetPointeeData(offset, length)
+        data = value.GetChildMemberWithName('ptr').GetPointeeData(offset, length if length is not None else value.GetChildMemberWithName('len').unsigned)
         b = bytes(data.uint8)
         b = b.replace(b'\\', b'\\\\')
         b = b.replace(b'\n', b'\\n')
@@ -201,33 +196,33 @@ def zig_String_decode(value, offset=0, length=None):
         b = b.replace(b'"', b'\\"')
         b = b.replace(b'\'', b'\\\'')
         s = b.decode(encoding='ascii', errors='backslashreplace')
-        s = s if s.isprintable() else ''.join((c if c.isprintable() else '\\x%02x' % ord(c) for c in s))
-        return s + ('...' if truncated else '')
-    except: 
-        return None
-def zig_String_SummaryProvider(value, _=None): return '"%s"' % zig_String_decode(value)
+        return s if s.isprintable() else ''.join((c if c.isprintable() else '\\x%02x' % ord(c) for c in s))
+    except: return None
+def zig_String_SummaryProvider(value, _=None):
+    s = zig_String_decode(value)
+    return '"%s"' % s if s is not None else '<invalid>'
 def zig_String_AsIdentifier(value, pred):
     string = zig_String_decode(value)
     return string if pred(string) else '@"%s"' % string
 
+# Strings show only their text, without the per-byte `[0] = 104 ...` children.
+# Use `frame variable --raw-output <var>` or `v -R <var>` to see the raw bytes.
+class zig_String_SynthProvider:
+    def __init__(self, value, _=None): self.value = value
+    def update(self): pass
+    def has_children(self): return False
+    def num_children(self): return 0
+    def get_child_index(self, name): return -1
+    def get_child_at_index(self, index): return None
+
 class zig_Optional_SynthProvider:
     def __init__(self, value, _=None): self.value = value
     def update(self):
-        self.child = False
         try:
-            some = self.value.GetChildMemberWithName('some')
-            if some.IsValid():
-                # tagged representation: struct { data: T, some: bool }
-                if some.unsigned == 1:
-                    self.child = self.value.GetChildMemberWithName('data').Clone('child')
-            else:
-                # pointer-like payload: the optional itself is the pointer;
-                # null (0) means `none`, anything else is `some`
-                if self.value.unsigned != 0:
-                    self.child = self.value.Clone('child')
+            self.child = self.value.GetChildMemberWithName('some').unsigned == 1 and self.value.GetChildMemberWithName('data').Clone('child')
         except: pass
     def has_children(self): return bool(self.child)
-    def num_children(self): return int(bool(self.child))
+    def num_children(self): return int(self.child)
     def get_child_index(self, name): return 0 if self.child and (name == 'child' or name == '?') else -1
     def get_child_at_index(self, index): return self.child if self.child and index == 0 else None
 def zig_Optional_SummaryProvider(value, _=None):
@@ -260,7 +255,7 @@ class zig_TaggedUnion_SynthProvider:
         except: return -1
     def get_child_at_index(self, index): return (self.tag, self.payload)[index] if index in range(2) else None
 
-# Define Zig Standard Library
+# Define Zig Standard Library (for programs compiled with the llvm backend)
 
 class std_MultiArrayList_SynthProvider:
     def __init__(self, value, _=None): self.value = value
@@ -347,36 +342,15 @@ class std_HashMapUnmanaged_SynthProvider:
                 if ptr_self_type.GetPointeeType() == value_type: break
             else: return
             self.entry_type = ptr_entry_type.GetPointeeType()
+
             hdr_type = ptr_hdr_type.GetPointeeType()
-
-            hdr_addr = self.metadata.deref.load_addr - hdr_type.size
-            if not _readable_span(self.value.process, hdr_addr, hdr_type.size):
-                return
-
-            hdr = self.metadata.CreateValueFromAddress('header', hdr_addr, hdr_type)
+            hdr = self.metadata.CreateValueFromAddress('header', self.metadata.deref.load_addr - hdr_type.size, hdr_type)
             self.values = hdr.GetChildMemberWithName('values')
             self.keys = hdr.GetChildMemberWithName('keys')
             self.capacity = hdr.GetChildMemberWithName('capacity').unsigned
 
-            # must be 0 or a power of two (HashMapUnmanaged always doubles)
-            if self.capacity != 0 and (self.capacity & (self.capacity - 1)) != 0:
-                self.capacity = 0
-                return
-
-            # sanity bound BEFORE we touch any memory sized by capacity
-            if self.capacity > MAX_REASONABLE_CAPACITY:
-                self.capacity = 0
-                return
-
-            # the metadata byte array itself must actually be backed by `capacity` readable bytes
-            if not _readable_span(self.value.process, self.metadata.unsigned, self.capacity):
-                self.capacity = 0
-                return
-
-            self.indices = tuple(i for i, v in enumerate(self.metadata.GetPointeeData(0, self.capacity).sint8) if v < 0)
-        except:
-            self.capacity = 0
-            self.indices = tuple()
+            self.indices = tuple(i for i, value in enumerate(self.metadata.GetPointeeData(0, self.capacity).sint8) if value < 0)
+        except: pass
     def has_children(self): return True
     def num_children(self): return len(self.indices)
     def get_capacity(self): return self.capacity
@@ -408,7 +382,7 @@ class std_Entry_SynthProvider:
     def get_child_index(self, name): return self.indices.get(name)
     def get_child_at_index(self, index): return self.children[index].deref if index in range(len(self.children)) else None
 
-# Define Zig Compiler
+# Define Zig Compiler (compiled with the llvm backend)
 
 class TagAndPayload_SynthProvider:
     def __init__(self, value, _=None): self.value = value
@@ -512,8 +486,9 @@ class InternPool_Index_SynthProvider:
     def __init__(self, value, _=None): self.value = value
     def update(self):
         try:
+            target = self.value.target
             index_type = self.value.type
-            for helper in self.value.target.FindFunctions('%s.dbHelper' % index_type.name, lldb.eFunctionNameTypeFull):
+            for helper in target.FindFunctions('%s.dbHelper' % index_type.name, lldb.eFunctionNameTypeFull):
                 ptr_self_type, ptr_tag_to_encoding_map_type = helper.function.type.GetFunctionArgumentTypes()
                 if ptr_self_type.GetPointeeType() == index_type: break
             else: return
@@ -542,7 +517,7 @@ class InternPool_Index_SynthProvider:
                     for trailing_field in encoding_field.type.fields:
                         trailing_data.Append(extra.GetChildAtIndex(extra_index).address_of.data)
                         trailing_len = dynamic_values['trailing.%s.len' % trailing_field.name].unsigned
-                        trailing_data.Append(lldb.SBData.CreateDataFromInt(trailing_len, trailing_data.GetAddressByteSize()))
+                        trailing_data.Append(lldb.SBData.CreateDataFromInt(trailing_len, target.addr_size, target=target))
                         extra_index += trailing_len
                     self.trailing = self.data.CreateValueFromData('trailing', trailing_data, encoding_field.type)
                 else:
@@ -762,8 +737,18 @@ value_tag_handlers = {
 class root_InternPool_Local_List_SynthProvider:
     def __init__(self, value, _=None): self.value = value
     def update(self):
-        capacity = self.value.EvaluateExpression('@as(*@This().Header, @alignCast(@ptrCast(@this().bytes - @This().bytes_offset))).capacity')
-        self.view = create_struct(self.value, '.view', self.value.type.FindDirectNestedType('View'), { 'bytes': self.value.GetChildMemberWithName('bytes'), 'len': capacity, 'capacity': capacity }).GetNonSyntheticValue()
+        capacity = IntLiteral(self.value.EvaluateExpression(
+            '@as(*@This().Header, @alignCast(@ptrCast(@this().bytes - @This().bytes_offset))).capacity',
+        ).unsigned)
+        View = self.value.type.FindDirectNestedType('View')
+        self.view = StructInit({
+            'bytes': ValueInit(self.value.GetChildMemberWithName('bytes')),
+            'len': capacity,
+            'capacity': capacity,
+            'pointer_stability': StructInit({
+                'state': EnumField(0),
+            }),
+        }).create(self.value, '.view', View).GetNonSyntheticValue()
     def has_children(self): return True
     def num_children(self): return 1
     def get_child_index(self, name):
@@ -796,7 +781,10 @@ class root_InternPool_Index_SynthProvider:
         unwrapped_type = self.value.type.FindDirectNestedType('Unwrapped')
         ip = self.value.CreateValueFromType(unwrapped_type).GetChildMemberWithName('debug_state').GetChildMemberWithName('intern_pool').GetNonSyntheticValue().GetChildMemberWithName('?')
         tid_shift_30 = ip.GetChildMemberWithName('tid_shift_30').unsigned
-        self.unwrapped = create_struct(self.value, '.unwrapped', unwrapped_type, { 'tid': wrapped >> tid_shift_30, 'index': wrapped & (1 << tid_shift_30) - 1 })
+        self.unwrapped = StructInit({
+            'tid': FromBackingInt(wrapped >> tid_shift_30),
+            'index': IntLiteral(wrapped & (1 << tid_shift_30) - 1),
+        }).create(self.value, '.unwrapped', unwrapped_type)
     def has_children(self): return True
     def num_children(self): return 0
     def get_child_index(self, name):
@@ -809,6 +797,7 @@ class root_InternPool_Index_SynthProvider:
 class root_InternPool_Index_Unwrapped_SynthProvider:
     def __init__(self, value, _=None): self.value = value
     def update(self):
+        target = self.value.target
         self.tag, self.index, self.data, self.payload, self.trailing = None, None, None, None, None
         index = self.value.GetChildMemberWithName('index')
         ip = self.value.CreateValueFromType(self.value.type).GetChildMemberWithName('debug_state').GetChildMemberWithName('intern_pool').GetNonSyntheticValue().GetChildMemberWithName('?')
@@ -819,36 +808,34 @@ class root_InternPool_Index_Unwrapped_SynthProvider:
         encoding_index, encoding_data, encoding_payload, encoding_trailing, encoding_config = encoding.GetChildMemberWithName('index'), encoding.GetChildMemberWithName('data'), encoding.GetChildMemberWithName('payload'), encoding.GetChildMemberWithName('trailing'), encoding.GetChildMemberWithName('config')
         if encoding_index:
             index_type = encoding_index.GetValueAsType()
-            index_bytes, index_data = index.data.uint8, lldb.SBData()
-            match index_data.byte_order:
+            index_bytes = index.data.uint8
+            match target.byte_order:
                 case lldb.eByteOrderLittle:
                     index_bytes = bytes(index_bytes[:index_type.size])
                 case lldb.eByteOrderBig:
                     index_bytes = bytes(index_bytes[-index_type.size:])
-            index_data.SetData(lldb.SBError(), index_bytes, index_data.byte_order, index_data.GetAddressByteSize())
-            self.index = self.value.CreateValueFromData('.index', index_data, index_type)
+            self.index = FromBytes(index_bytes).create(self.value, '.index', index_type)
         elif encoding_data:
             data_type = encoding_data.GetValueAsType()
-            data_bytes, data_data = item_data.data.uint8, lldb.SBData()
-            match data_data.byte_order:
+            data_bytes = item_data.data.uint8
+            match target.byte_order:
                 case lldb.eByteOrderLittle:
                     data_bytes = bytes(data_bytes[:data_type.size])
                 case lldb.eByteOrderBig:
                     data_bytes = bytes(data_bytes[-data_type.size:])
-            data_data.SetData(lldb.SBError(), data_bytes, data_data.byte_order, data_data.GetAddressByteSize())
-            self.data = self.value.CreateValueFromData('.data', data_data, data_type)
+            self.data = FromBytes(data_bytes).create(self.value, '.data', data_type)
         elif encoding_payload:
             extra = shared.GetChildMemberWithName('extra').GetChildMemberWithName('view').GetChildMemberWithName('0')
             extra_index = item_data.unsigned
             payload_type = encoding_payload.GetValueAsType()
             payload_fields = dict()
             for payload_field in payload_type.fields:
-                payload_fields[payload_field.name] = extra.child[extra_index]
+                payload_fields[payload_field.name] = ValueInit(extra.child[extra_index])
                 extra_index += 1
-            self.payload = create_struct(self.value, '.payload', payload_type, payload_fields)
+            self.payload = StructInit(payload_fields).create(self.value, '.payload', payload_type)
             if encoding_trailing and encoding_config:
                 trailing_type = encoding_trailing.GetValueAsType()
-                trailing_bytes, trailing_data = bytearray(trailing_type.size), lldb.SBData()
+                trailing_bytes = bytearray(trailing_type.size)
                 def eval_config(config_name):
                     expr = encoding_config.GetChildMemberWithName(config_name).value.removeprefix('.').removeprefix('@"').removesuffix('"').replace(r'\"', '"')
                     if 'payload.' in expr:
@@ -857,13 +844,11 @@ class root_InternPool_Index_Unwrapped_SynthProvider:
                         field_type, field_byte_offset = trailing_type, 0
                         expr_parts = expr.split('.')
                         for expr_part in expr_parts[1:]:
-                            field = next(filter(lambda field: field.name == expr_part, field_type.fields))
+                            field = next(field for field in field_type.fields if field.name == expr_part)
                             field_type = field.type
                             field_byte_offset += field.byte_offset
-                        field_data = lldb.SBData()
                         field_bytes = trailing_bytes[field_byte_offset:field_byte_offset + field_type.size]
-                        field_data.SetData(lldb.SBError(), field_bytes, field_data.byte_order, field_data.GetAddressByteSize())
-                        return self.value.CreateValueFromData('.%s' % expr_parts[-1], field_data, field_type)
+                        return FromBytes(field_bytes).create(self.value, '.%s' % expr_parts[-1], field_type)
                     else:
                         return self.value.frame.EvaluateExpression(expr)
                 for trailing_field in trailing_type.fields:
@@ -889,7 +874,7 @@ class root_InternPool_Index_Unwrapped_SynthProvider:
                                 trailing_bytes[ptr_field_byte_offset:ptr_field_byte_offset + ptr_field.type.size] = extra.child[extra_index].address_of.data.uint8
                                 len_field_value = eval_config('%s.len' % trailing_field_name)
                                 len_field_size = len_field.type.size
-                                match trailing_data.byte_order:
+                                match target.byte_order:
                                     case lldb.eByteOrderLittle:
                                         len_field_bytes = len_field_value.data.uint8[:len_field_size]
                                         trailing_bytes[len_field_byte_offset:len_field_byte_offset + len(len_field_bytes)] = len_field_bytes
@@ -904,8 +889,7 @@ class root_InternPool_Index_Unwrapped_SynthProvider:
                                     trailing_bytes[trailing_field_byte_offset + offset:trailing_field_byte_offset + offset + 4] = extra.child[extra_index].data.uint8
                                     extra_index += 1
                                 break
-                trailing_data.SetData(lldb.SBError(), trailing_bytes, trailing_data.byte_order, trailing_data.GetAddressByteSize())
-                self.trailing = self.value.CreateValueFromData('.trailing', trailing_data, trailing_type)
+                self.trailing = FromBytes(trailing_bytes).create(self.value, '.trailing', trailing_type)
     def has_children(self): return True
     def num_children(self): return 1 + ((self.index or self.data or self.payload) is not None) + (self.trailing is not None)
     def get_child_index(self, name):
@@ -976,16 +960,18 @@ def add(debugger, *, category, regex=False, type, identifier=None, synth=False, 
     if synth: debugger.HandleCommand('type synthetic add --category %s%s --python-class %s_SynthProvider "%s"' % (category, ' --regex' if regex else '', prefix, type))
 
 def __lldb_init_module(debugger, _=None):
-    # Initialize Zig Categories
-    debugger.HandleCommand('type category define --language c99 zig.lang zig.std')
+    # Initialize Zig Categories (for programs compiled with the llvm backend)
+    debugger.HandleCommand('type category define --language c99 zig.lang zig.std zig.compiler')
 
-    # Initialize Zig Language
+    # Initialize Zig Language (for programs compiled with the llvm backend)
     add(debugger, category='zig.lang', regex=True, type='^\\[\\]', identifier='zig_Slice', synth=True, expand=True, summary='len=${svar%#}')
-    add(debugger, category='zig.lang', regex=True, type='^\\[\\](const )?u8$', identifier='zig_String', summary=True)
+    # Strings: exact type names win over the generic `^\[\]` slice regex above.
+    for string_type in ('[]u8', '[]const u8', '[:0]u8', '[:0]const u8'):
+        add(debugger, category='zig.lang', type=string_type, identifier='zig_String', synth=True, summary=True)
     add(debugger, category='zig.lang', regex=True, type='^\\?', identifier='zig_Optional', synth=True, summary=True)
     add(debugger, category='zig.lang', regex=True, type='^(error{.*}|anyerror)!', identifier='zig_ErrorUnion', synth=True, inline_children=True, summary=True)
 
-    # Initialize Zig Standard Library
+    # Initialize Zig Standard Library (for programs compiled with the llvm backend)
     add(debugger, category='zig.std', type='mem.Allocator', summary='${var.ptr}')
     add(debugger, category='zig.std', regex=True, type='^multi_array_list\\.MultiArrayList\\(.*\\)$', identifier='std_MultiArrayList', synth=True, expand=True, summary='len=${var.len} capacity=${var.capacity}')
     add(debugger, category='zig.std', regex=True, type='^multi_array_list\\.MultiArrayList\\(.*\\)\\.Slice$', identifier='std_MultiArrayList_Slice', synth=True, expand=True, summary='len=${var.len} capacity=${var.capacity}')
@@ -993,7 +979,7 @@ def __lldb_init_module(debugger, _=None):
     add(debugger, category='zig.std', regex=True, type='^hash_map\\.HashMapUnmanaged\\(.*\\)$', identifier='std_HashMapUnmanaged', synth=True, expand=True, summary=True)
     add(debugger, category='zig.std', regex=True, type='^hash_map\\.HashMapUnmanaged\\(.*\\)\\.Entry$', identifier = 'std_Entry', synth=True, inline_children=True, summary=True)
 
-    # Initialize Zig Compiler
+    # Initialize Zig Compiler (compiled with the llvm backend)
     add(debugger, category='zig.compiler', type='Zir.Inst', identifier='TagAndPayload', synth=True, inline_children=True, summary=True)
     add(debugger, category='zig.compiler', regex=True, type=MultiArrayList_Entry('Zir\\.Inst'), identifier='TagAndPayload', synth=True, inline_children=True, summary=True)
     add(debugger, category='zig.compiler', regex=True, type='^Zir\\.Inst\\.Data\\.Data__struct_[1-9][0-9]*$', inline_children=True, summary=True)
