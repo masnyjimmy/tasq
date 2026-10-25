@@ -210,6 +210,7 @@ pub const Expr = union(enum) {
     process: *ProcessExpr,
     @"continue",
     @"break",
+    unknown, // poison
 };
 
 pub const ProcessExpr = struct {

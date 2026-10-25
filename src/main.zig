@@ -20,9 +20,14 @@ pub fn lsp_test(init: std.process.Init) !void {
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
 
-    if (std.mem.eql(u8, args[1], "::LSP_TEST")) {
-        try lsp_test(init);
-        return;
+    switch (args.len) {
+        2 => {
+            if (std.mem.eql(u8, args[1], "::LSP_TEST")) {
+                try lsp_test(init);
+                return;
+            }
+        },
+        else => {},
     }
 
     try cli.run(

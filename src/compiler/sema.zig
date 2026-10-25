@@ -1097,6 +1097,17 @@ pub const Sema = struct {
             expr: ExprT,
             type: Type,
             is_static: bool,
+
+            fn makeUnknown() Error!@This() {
+                if (ExprT != ir.Expr)
+                    return Error.Incomplete;
+
+                return .{
+                    .expr = ir.Expr.unknown,
+                    .type = .unknown,
+                    .is_static = true,
+                };
+            }
         };
     }
 
@@ -1430,10 +1441,11 @@ pub const Sema = struct {
                         "unknown value: '{s}'",
                         .{name},
                     );
-                    return Error.Incomplete;
+                    return try .makeUnknown();
                 };
 
                 const lambda = switch (symbol.origin.assertValueType()) {
+                    .unknown => return try .makeUnknown(),
                     .lambda => |lambda| lambda,
                     else => {
                         try self.diagnostics.err(
@@ -1441,7 +1453,7 @@ pub const Sema = struct {
                             "'{s}' is not lambda and cannot be called",
                             .{name},
                         );
-                        return Error.Incomplete;
+                        return try .makeUnknown();
                     },
                 };
 
@@ -1462,7 +1474,7 @@ pub const Sema = struct {
                         "invalid arguments count, expected {}, got {}",
                         .{ params_count, args.len },
                     );
-                    return Error.Incomplete;
+                    return try .makeUnknown();
                 }
 
                 var valid = true;

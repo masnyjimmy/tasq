@@ -674,6 +674,7 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
         },
         .@"continue" => Error.Continue,
         .@"break" => Error.Break,
+        .unknown => unreachable,
     };
 }
 
