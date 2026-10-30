@@ -79,13 +79,13 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
-    const exe_check = b.addExecutable(.{
-        .name = "tasq",
-        .root_module = exe_mod,
-    });
+    // const exe_check = b.addExecutable(.{
+    //     .name = "tasq",
+    //     .root_module = exe_mod,
+    // });
 
-    const check = b.step("check", "Check if foo compiles");
-    check.dependOn(&exe_check.step);
+    // const check = b.step("check", "Check if foo compiles");
+    // check.dependOn(&exe_check.step);
 
     //----- run step -----
 
