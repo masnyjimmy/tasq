@@ -162,7 +162,7 @@ pub const IfStmt = struct {
 };
 
 pub const Decl = struct {
-    name: []const u8,
+    name: ?[]const u8,
     value: Expr,
     type: Type,
     scope: *Scope,

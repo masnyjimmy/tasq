@@ -679,7 +679,14 @@ pub const Sema = struct {
             try self.diagnostics.err(attrs.node.trimmedSpan(), "bindings doesn't support attributes", .{});
         }
 
-        const name = binding.name.string() orelse unreachable;
+        const name: ?[]const u8 = blk: {
+            const name = binding.name.string() orelse unreachable;
+            if (std.mem.eql(u8, name, "_")) {
+                break :blk null;
+            }
+
+            break :blk name;
+        };
 
         const value = if (binding.value) |value|
             try self.analyseExpr(value, scope)
@@ -694,9 +701,9 @@ pub const Sema = struct {
             .is_static = value.is_static,
         });
 
-        if (std.mem.eql(u8, name, "_") == false) {
+        if (name) |n| {
             try self.defineSymbol(scope, .{
-                .name = name,
+                .name = n,
                 .span = binding.node.trimmedSpan(),
                 .origin = .{
                     .binding = ptr,
