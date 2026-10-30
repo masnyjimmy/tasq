@@ -383,7 +383,7 @@ fn Functions(comptime specs: []const Spec) type {
                 unique_count += 1;
                 break :blk2 unique_count - 1;
             };
-            ids[spec_idx] = @enumFromInt(uidx);
+            ids[spec_idx] = @fromBackingInt(@intCast(uidx));
         }
 
         break :blk ids;
@@ -405,7 +405,7 @@ fn Functions(comptime specs: []const Spec) type {
             defs[idx] = def: {
                 @setEvalBranchQuota(2_000);
                 var out = ct.copyFields(Definition, spec);
-                out.id = @enumFromInt(idx);
+                out.id = @fromBackingInt(@intCast(idx));
                 out.ident = spec_to_id[idx];
 
                 break :def out;
@@ -425,8 +425,17 @@ fn Functions(comptime specs: []const Spec) type {
 
         pub const Id = FunctionId;
 
+        /// Picks the overload of `name` that accepts `args`.
+        ///
+        /// Overloads are told apart by argument count and by what each argument can be. An
+        /// argument of type `unknown` can be anything, so it may fit several overloads. In that
+        /// case the first matching overload is returned (its parameters are only ever used for
+        /// lambda templates or after an error, where nothing runs) and the result type is only
+        /// claimed when every matching overload agrees on it; otherwise it is `unknown`.
         pub fn resolve(allocator: std.mem.Allocator, name: []const u8, args: []const InArg) Error!ResolvedFunction {
             const ident = name_map.get(name) orelse return Error.UnknownFunction;
+
+            var chosen: ?ResolvedFunction = null;
 
             for (defs) |def| {
                 if (def.ident != ident)
@@ -435,25 +444,30 @@ fn Functions(comptime specs: []const Spec) type {
                 if (def.args.len != args.len)
                     continue;
 
-                var resolved = try resolveArguments(allocator, def.args, args) orelse continue;
-                defer resolved.deinit();
+                var bindings = try resolveArguments(allocator, def.args, args) orelse continue;
+                defer bindings.deinit();
 
                 const params = try allocator.alloc(OutArg, args.len);
 
                 for (def.args, params) |in, *out| {
-                    out.* = try resolveType(allocator, &resolved, in.type);
+                    out.* = try resolveType(allocator, &bindings, in.type);
                 }
 
-                const return_type = try resolveType(allocator, &resolved, def.return_type);
+                const return_type = (try resolveType(allocator, &bindings, def.return_type)).value;
 
-                return .{
-                    .id = def.id,
-                    .params = params,
-                    .return_type = return_type.value,
-                };
+                if (chosen) |*first| {
+                    if (!Type.same(first.return_type, return_type))
+                        first.return_type = .unknown;
+                } else {
+                    chosen = .{
+                        .id = def.id,
+                        .params = params,
+                        .return_type = return_type,
+                    };
+                }
             }
 
-            return Error.InvalidArguments;
+            return chosen orelse Error.InvalidArguments;
         }
     };
 }
@@ -477,8 +491,11 @@ pub const InArg = union(enum) {
     },
 };
 
-pub fn resolveArguments(allocator: std.mem.Allocator, params: []const Spec.Param, args: []const InArg) !?std.StringHashMap(Type) {
-    var bindings: std.StringHashMap(Type) = .init(allocator);
+/// What the generic parameters (`T`) of one overload were pinned to.
+const Bindings = std.StringHashMap(Type);
+
+pub fn resolveArguments(allocator: std.mem.Allocator, params: []const Spec.Param, args: []const InArg) !?Bindings {
+    var bindings: Bindings = .init(allocator);
     defer bindings.deinit();
 
     for (params, args) |param, arg| {
@@ -489,37 +506,57 @@ pub fn resolveArguments(allocator: std.mem.Allocator, params: []const Spec.Param
     return bindings.move(); // move to prevent deinit on returned map
 }
 
-fn matchAndBind(bindings: *std.StringHashMap(Type), p: TypeExpr, a: InArg) !bool {
-    return switch (p) {
-        .concrete => |t| switch (a) {
-            .value => |T| Type.eq(t, T.type),
-            .lambda => false,
+/// A generic parameter accumulates information from every argument that mentions it. Arguments
+/// are combined with `unify`, so a known type wins over `unknown` in either order, and a conflict
+/// rejects the overload. A parameter nothing pinned stays `unknown`.
+fn bind(bindings: *Bindings, name: []const u8, arg_type: Type) !bool {
+    const gop = try bindings.getOrPut(name);
+
+    if (!gop.found_existing) {
+        gop.value_ptr.* = arg_type;
+        return true;
+    }
+
+    gop.value_ptr.* = Type.unify(gop.value_ptr.*, arg_type) orelse return false;
+    return true;
+}
+
+fn matchAndBind(bindings: *Bindings, param: TypeExpr, arg: InArg) !bool {
+    switch (param) {
+        .concrete => |t| switch (arg) {
+            .value => |v| return Type.eq(t, v.type),
+            .lambda => return false,
         },
-        .generic => |name| switch (a) {
-            .value => |T| {
-                if (bindings.get(name)) |bound| return Type.eq(bound, T.type);
-                try bindings.put(name, T.type);
-                return true;
+        .generic => |name| switch (arg) {
+            .value => |v| return try bind(bindings, name, v.type),
+            .lambda => return false,
+        },
+        .list => |elem_param| switch (arg) {
+            .value => |v| {
+                // `unknown` (and a diverging `noreturn`) may be a list of anything: it fits the
+                // parameter and tells us nothing about the element type
+                const elem_type: Type = switch (v.type) {
+                    .list => |items| items.*,
+                    .unknown, .noreturn => .unknown,
+                    else => return false,
+                };
+
+                return try matchAndBind(bindings, elem_param.*, .{
+                    .value = .{ .type = elem_type },
+                });
             },
-            .lambda => false,
+            .lambda => return false,
         },
-        .list => |elem_p| switch (a) {
-            .value => |T| T.type == .list and try matchAndBind(bindings, elem_p.*, .{
-                .value = .{
-                    .type = T.type.list.*,
-                },
-            }),
-            .lambda => false,
+        .lambda => |lambda_param| switch (arg) {
+            .lambda => |l| return lambda_param.params.len == l.params,
+            // an `unknown` value may be a lambda: it fits, and there is nothing to instantiate
+            .value => |v| return v.type == .unknown,
         },
-        .lambda => |lambda| switch (a) {
-            .value => false,
-            .lambda => |L| lambda.params.len == L.params,
+        .result => |inner| switch (arg) {
+            .value => |v| return try matchAndBind(bindings, inner.*, .{ .value = v }),
+            .lambda => return false,
         },
-        .result => |result| switch (a) {
-            .value => |T| try matchAndBind(bindings, result.*, .{ .value = .{ .type = T.type } }),
-            .lambda => false,
-        },
-    };
+    }
 }
 
 pub const OutArg = union(enum) {
@@ -536,10 +573,11 @@ pub const ResolvedFunction = struct {
     return_type: Type,
 };
 
-fn resolveType(allocator: std.mem.Allocator, bindings: *const std.StringHashMap(Type), p: TypeExpr) !OutArg {
+fn resolveType(allocator: std.mem.Allocator, bindings: *const Bindings, p: TypeExpr) !OutArg {
     return switch (p) {
         .concrete => |t| .{ .value = t },
-        .generic => |name| .{ .value = bindings.get(name) orelse unreachable }, // unbound generic, shouldn't ever happen on builtin functions
+        // a generic that no argument pinned down is `unknown`
+        .generic => |name| .{ .value = bindings.get(name) orelse .unknown },
         .list => |elem_p| {
             const items_type = try allocator.create(Type);
 
