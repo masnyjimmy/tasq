@@ -306,19 +306,6 @@ fn main(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Stat
                     }
                 }
 
-                if (for_stmt.captures.len == for_stmt.subjects.len + 1) {
-                    if (for_stmt.captures[for_stmt.captures.len - 1]) |idx_cap| {
-                        try for_scope.define(
-                            idx_cap,
-                            .{
-                                .name = idx_cap.name,
-                                .value = .{ .number = @floatFromInt(idx) },
-                            },
-                            false,
-                        );
-                    }
-                }
-
                 self.runBlock(cwd, for_scope, for_stmt.body.statements) catch |err| switch (err) {
                     Error.Continue => continue,
                     Error.Break => break,
@@ -515,19 +502,6 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
                             .name = cap.name,
                             .value = values[j].list.items[idx],
                         }, false);
-                    }
-                }
-
-                if (for_expr.captures.len == for_expr.subjects.len + 1) {
-                    if (for_expr.captures[for_expr.captures.len - 1]) |idx_cap| {
-                        try for_scope.define(
-                            idx_cap,
-                            .{
-                                .name = idx_cap.name,
-                                .value = .{ .number = @floatFromInt(idx) },
-                            },
-                            false,
-                        );
                     }
                 }
 

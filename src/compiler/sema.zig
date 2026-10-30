@@ -918,7 +918,7 @@ pub const Sema = struct {
         const in_subjects = try for_stmt.subjects.collect(self.arena.allocator());
         const in_captures = try for_stmt.captures.collect(self.arena.allocator());
 
-        if (in_subjects.len != in_captures.len and in_subjects.len + 1 != in_captures.len) {
+        if (in_subjects.len != in_captures.len) {
             try self.diagnostics.err(
                 for_stmt.captures.node.trimmedSpan(),
                 "captures number must be equal to subjects number, or subject number + 1 if iteration index is needed",
@@ -1615,7 +1615,7 @@ pub const Sema = struct {
         const in_subjects = try for_expr.subjects.collect(self.arena.allocator());
         const in_captures = try for_expr.captures.collect(self.arena.allocator());
 
-        if (in_subjects.len != in_captures.len and in_subjects.len + 1 != in_captures.len) {
+        if (in_subjects.len != in_captures.len) {
             try self.diagnostics.err(
                 for_expr.captures.node.trimmedSpan(),
                 "captures num must be equal to subjects num or subject num + 1 if iteration index is needed",
