@@ -29,35 +29,87 @@ pub const Type = union(Tag) {
     void,
     lambda: *const LambdaTemplate,
     result: *const Type,
+    /// "No information about this type." It is never a real type of a value that reaches the
+    /// interpreter. It comes from lambda templates (parameters are not known yet), from error
+    /// recovery, and from empty list literals (`[]` is a list of `unknown` until a context gives
+    /// it its element type).
     unknown,
 
+    /// The most informative type compatible with both `left` and `right`, or `null` when they
+    /// conflict. This is the one rule everything else is built on:
+    ///
+    ///   - `noreturn` diverges, so it takes whatever the other side is
+    ///   - `unknown` carries no information, so the other side wins (`unify([]number, []unknown)`
+    ///     is `[]number`, in either argument order)
+    ///   - otherwise the shapes must match, recursively for lists and results
+    ///   - two lambdas are compatible only if they are the same lambda
+    ///
+    /// No allocation is needed: a type is a chain of wrappers (list, result) ending in a leaf, and
+    /// the chain that carries more information is always one of the two inputs.
     pub fn unify(left: Type, right: Type) ?Type {
-        if (left == .noreturn) return right;
-        if (right == .noreturn) return left;
-        if (eq(left, right) == false) return null;
-        return left;
+        switch (left) {
+            .noreturn, .unknown => return right,
+            else => {},
+        }
+
+        switch (right) {
+            .noreturn, .unknown => return left,
+            else => {},
+        }
+
+        if (@as(Tag, left) != @as(Tag, right)) return null;
+
+        switch (left) {
+            .list => |l| {
+                const inner = unify(l.*, right.list.*) orelse return null;
+                if (same(inner, l.*)) return left;
+                std.debug.assert(same(inner, right.list.*));
+                return right;
+            },
+            .result => |l| {
+                const inner = unify(l.*, right.result.*) orelse return null;
+                if (same(inner, l.*)) return left;
+                std.debug.assert(same(inner, right.result.*));
+                return right;
+            },
+            .lambda => return if (same(left, right)) left else null,
+            else => return left,
+        }
     }
 
-    pub fn eq(left: Type, right: Type) bool {
-        std.debug.assert(left != .noreturn and right != .noreturn);
+    /// Strict structural identity. `unknown` is only the same as `unknown`.
+    /// Use it where types are keys (hashing, caches); use `unify` / `eq` for compatibility.
+    pub fn same(left: Type, right: Type) bool {
+        if (@as(Tag, left) != @as(Tag, right)) return false;
 
-        const tag = blk: {
-            const L = @as(Tag, left);
-            const R = @as(Tag, right);
-            if (L != R)
-                return false;
-
-            break :blk L;
-        };
-
-        return switch (tag) {
-            .list => eq(left.list.*, right.list.*),
-            .lambda => left.lambda.template.node == right.lambda.template.node, // only condition when lambda is the same if its exacly the same element,
-            .result => eq(left.result.*, right.result.*),
+        return switch (left) {
+            .list => |l| same(l.*, right.list.*),
+            .result => |r| same(r.*, right.result.*),
+            // a lambda has no signature, it is its own type: the same syntax node is the same lambda
+            .lambda => |l| l.template.node == right.lambda.template.node,
             else => true,
         };
     }
-    // unknown, // used during inference before type is resolved
+
+    /// Compatibility: could a value of one type be used where the other is expected?
+    pub fn eq(left: Type, right: Type) bool {
+        return unify(left, right) != null;
+    }
+
+    pub fn containsUnknown(self: Type) bool {
+        return switch (self) {
+            .unknown => true,
+            .list => |items| items.containsUnknown(),
+            .result => |t| t.containsUnknown(),
+            else => false,
+        };
+    }
+
+    /// Partially known: `[]unknown` is partial, `unknown` itself is not (it says nothing at all,
+    /// so there is nothing to complete, and whoever produced it has already reported why).
+    pub fn isPartial(self: Type) bool {
+        return self != .unknown and self.containsUnknown();
+    }
 
     pub fn format(
         self: @This(),
@@ -124,6 +176,8 @@ pub const LambdaTypeExpr = struct {
     return_type: TypeExpr,
 };
 
+/// Hash map context for types used as keys. `eql` is the strict `same`, never the wildcard-ish
+/// compatibility check, so that equal keys always hash equally.
 pub const TypeMapContext = struct {
     pub fn hash(_: @This(), value: Type) u64 {
         var hasher = std.hash.Wyhash.init(0);
@@ -132,7 +186,7 @@ pub const TypeMapContext = struct {
     }
 
     pub fn eql(_: @This(), a: Type, b: Type) bool {
-        return Type.eq(a, b);
+        return Type.same(a, b);
     }
 
     pub fn updateHasher(hasher: lib.hash.Hasher, value: Type) void {
