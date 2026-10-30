@@ -626,11 +626,13 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
                 );
             }
 
-            return try self.evaluateExpr(
+            const result = try self.evaluateExpr(
                 cwd,
                 frame,
                 &lambda.body,
             );
+
+            return result.clone(scope.arena.allocator());
         },
         .process => |process_expr| {
             const process = try self.resolveString(cwd, scope, process_expr.command);
