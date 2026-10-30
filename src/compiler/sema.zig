@@ -931,7 +931,8 @@ pub const Sema = struct {
 
         const for_scope = try self.createScope(scope, for_stmt.node);
 
-        for (in_subjects, in_captures[0..in_subjects.len]) |s, c| {
+        const valid_pairs = @min(in_subjects.len, in_captures.len);
+        for (in_subjects[0..valid_pairs], in_captures[0..valid_pairs]) |s, c| {
             const subject = s.unwrap() orelse continue;
             const capture = c.unwrap() orelse continue;
 
@@ -1629,8 +1630,9 @@ pub const Sema = struct {
         var is_static = true;
 
         const for_scope = try self.createScope(scope, for_expr.node);
-        // FIXME: when captures len 0, index out of bounds idx
-        for (in_subjects, in_captures[0..in_subjects.len]) |s, c| {
+
+        const valid_pairs = @min(in_subjects.len, in_captures.len);
+        for (in_subjects[0..valid_pairs], in_captures[0..valid_pairs]) |s, c| {
             const subject = s.unwrap() orelse continue;
             const capture = c.unwrap() orelse continue;
 
