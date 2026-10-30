@@ -357,10 +357,12 @@ fn handleDecl(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, decl: *const i
 
     const value = try self.evaluateExpr(cwd, decl_scope, &decl.value);
 
-    try decl_scope.define(decl, .{
-        .name = decl.name,
-        .value = value,
-    }, false);
+    if (decl.name) |name| {
+        try decl_scope.define(decl, .{
+            .name = name,
+            .value = value,
+        }, false);
+    }
 
     return value;
 }
