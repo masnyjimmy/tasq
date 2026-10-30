@@ -220,41 +220,50 @@ pub fn @"textDocument/didClose"(
     try self.workspace.closeFile(self.allocator, file_id);
 }
 
-// pub fn @"textDocument/hover"(
-//     self: *Dispatcher,
-//     allocator: std.mem.Allocator,
-//     params: lsp.types.Hover.Params,
-// ) ?lsp.types.Hover {
-//     std.log.debug("Received 'textDocument/hover' request", .{});
+pub fn @"textDocument/hover"(
+    self: *Dispatcher,
+    allocator: std.mem.Allocator,
+    params: lsp.types.Hover.Params,
+) !?lsp.types.Hover {
+    const hover = @import("hover.zig");
 
-//     const file_id = blk: {
-//         if (self.workspace.getId(params.textDocument.uri)) |file_id|
-//             break :blk file_id;
+    std.log.debug("Received 'textDocument/hover' request", .{});
 
-//         std.log.warn("Hover on non existent document: '{s}'", .{params.textDocument.uri});
-//         return null;
-//     };
+    const file_id = blk: {
+        if (self.workspace.getId(params.textDocument.uri)) |file_id|
+            break :blk file_id;
 
-//     const file = self.workspace.getFileState(file_id);
+        std.log.warn("Hover on non existent document: '{s}'", .{params.textDocument.uri});
+        return null;
+    };
 
-//     const source_index = lsp.offsets.positionToIndex(file.source, params.position, self.offset_encodings);
-//     std.log.debug("Hover position: line={d}, character={d}, index={d}", .{
-//         params.position.line, params.position.character, source_index,
-//     });
+    const file = self.workspace.getFileState(file_id);
 
-//     return .{
-//         .contents = .{
-//             .markup_content = .{
-//                 .kind = .plaintext,
-//                 .value = if (cc.exact) |elem| switch (elem.*) {
-//                     .node => |node| std.fmt.allocPrint(allocator, "{t}>{t}", .{ node.parent.?.kind, node.kind }) catch unreachable,
-//                     .token => |token| std.fmt.allocPrint(allocator, "{t}>{t}", .{ cc.lastNode().?.kind, token.kind }) catch unreachable,
-//                     else => "missing element",
-//                 } else "none",
-//             },
-//         },
-//     };
-// }
+    const source_index = lsp.offsets.positionToIndex(
+        file.source,
+        params.position,
+        self.capabilities.offset_encoding,
+    );
+
+    std.log.debug("Hover position: line={d}, character={d}, index={d}", .{
+        params.position.line, params.position.character, source_index,
+    });
+
+    const symbol_type = try hover.getSymbolType(
+        allocator,
+        file,
+        @intCast(source_index),
+    ) orelse return null;
+
+    return .{
+        .contents = .{
+            .markup_content = .{
+                .kind = .plaintext,
+                .value = try allocator.print("{f}", .{symbol_type}),
+            },
+        },
+    };
+}
 
 pub fn @"textDocument/completion"(
     self: *Dispatcher,
