@@ -874,7 +874,7 @@ pub const Sema = struct {
             scope,
         );
 
-        if (cond.type != .bool) {
+        if (cond.type != .bool and cond.type != .unknown) {
             try self.diagnostics.err(
                 if_stmt.cond.?.node.trimmedSpan(),
                 "condition must be of boolean type",
@@ -943,21 +943,25 @@ pub const Sema = struct {
                 else => return err,
             };
 
-            if (result.type != .list) {
-                try self.diagnostics.err(
-                    subject.node.trimmedSpan(),
-                    "'{f}' type is not iterable",
-                    .{result.type},
-                );
-                continue;
-            }
+            const capture_type: Type = switch (result.type) {
+                .list => |items_type| items_type.*,
+                .unknown => result.type,
+                else => |t| err: {
+                    try self.diagnostics.err(
+                        subject.node.trimmedSpan(),
+                        "'{f}' type is not iterable",
+                        .{t},
+                    );
+                    break :err .unknown;
+                },
+            };
 
             switch (capture) {
                 .name => |name| {
                     const capture_ident = name.string() orelse continue;
                     const ptr = try self.create(ir.Capture, .{
                         .name = capture_ident,
-                        .type = result.type.list.*,
+                        .type = capture_type,
                     });
                     captures.appendAssumeCapacity(ptr);
                     try self.defineSymbol(for_scope, .{
@@ -1173,7 +1177,7 @@ pub const Sema = struct {
                 var items: std.ArrayList(ir.Expr.List.Item) = .empty;
 
                 var is_static = true;
-                var items_type: ?*Type = null;
+                var items_type: *Type = try self.create(Type, .unknown);
 
                 while (it.next()) |item| {
                     const result = self.analyseExpr(
@@ -1183,17 +1187,15 @@ pub const Sema = struct {
                         Error.Incomplete => continue,
                         else => return err,
                     };
-                    if (items_type) |t| {
-                        if (t.eq(result.type) == false) {
-                            // BUG: multiple diagnostics
-                            try self.diagnostics.err(
-                                it.lastSpan(),
-                                "All list items must be of the same type, expected '{f}', got '{f}'",
-                                .{ t.*, result.type },
-                            );
-                        }
-                    } else {
-                        items_type = try self.create(Type, result.type);
+
+                    if (items_type.* == .unknown) {
+                        items_type.* = result.type;
+                    } else if (items_type.eq(result.type) == false) {
+                        try self.diagnostics.err(
+                            it.lastSpan(),
+                            "All list items must be of the same type, expected '{f}', got '{f}'",
+                            .{ items_type.*, result.type },
+                        );
                     }
 
                     if (result.is_static == false)
@@ -1205,23 +1207,14 @@ pub const Sema = struct {
                     });
                 }
 
-                const final_type = items_type orelse {
-                    try self.diagnostics.err(
-                        expr.node.trimmedSpan(),
-                        "unable to infer list type",
-                        .{},
-                    );
-                    return Error.Incomplete;
-                };
-
                 return .{
                     .expr = .{
                         .list = .{
                             .items = try items.toOwnedSlice(self.arena.allocator()),
-                            .items_type = final_type.*,
+                            .items_type = items_type.*,
                         },
                     },
-                    .type = .{ .list = final_type },
+                    .type = .{ .list = items_type },
                     .is_static = is_static,
                 };
             },
@@ -1335,25 +1328,27 @@ pub const Sema = struct {
                 }
 
                 const result_type: Type = switch (op) {
-                    .not_op => blk: {
-                        if (operand.type != .bool) {
+                    .not_op => switch (operand.type) {
+                        inline .bool, .unknown => operand.type,
+                        else => |t| err: {
                             try self.diagnostics.err(
                                 expr.node.trimmedSpan(),
-                                "'not' requires a bool or flag",
-                                .{},
+                                "invalid not operand type, expected 'bool', got '{t}'",
+                                .{t},
                             );
-                        }
-                        break :blk .bool;
+                            break :err .unknown;
+                        },
                     },
-                    .negate => blk: {
-                        if (operand.type != .number) {
+                    .negate => switch (operand.type) {
+                        inline .number, .unknown => operand.type,
+                        else => |t| err: {
                             try self.diagnostics.err(
                                 expr.node.trimmedSpan(),
-                                "unary '-' requires number",
-                                .{},
+                                "invalid negate operand type, expected 'number', got '{t}'",
+                                .{t},
                             );
-                        }
-                        break :blk operand.type;
+                            break :err .unknown;
+                        },
                     },
                 };
 
@@ -1650,21 +1645,25 @@ pub const Sema = struct {
             if (result.is_static == false)
                 is_static = false;
 
-            if (result.type != .list) {
-                try self.diagnostics.err(
-                    subject.node.trimmedSpan(),
-                    "'{f}' type is not iterable",
-                    .{result.type},
-                );
-                continue;
-            }
+            const capture_type: Type = switch (result.type) {
+                .list => |items_type| items_type.*,
+                .unknown => .unknown,
+                else => err: {
+                    try self.diagnostics.err(
+                        subject.node.trimmedSpan(),
+                        "'{f}' type is not iterable",
+                        .{result.type},
+                    );
+                    break :err .unknown;
+                },
+            };
 
             switch (capture) {
                 .name => |name| {
                     const capture_ident = name.string() orelse continue;
                     const ptr = try self.create(ir.Capture, .{
                         .name = capture_ident,
-                        .type = result.type.list.*,
+                        .type = capture_type,
                     });
                     captures.appendAssumeCapacity(ptr);
                     try self.defineSymbol(for_scope, .{
@@ -1740,7 +1739,7 @@ pub const Sema = struct {
             scope,
         );
 
-        if (cond.type != .bool) {
+        if (cond.type != .bool and cond.type != .unknown) {
             try self.diagnostics.err(
                 if_expr.cond.?.node.trimmedSpan(),
                 "invalid condition type, expected '{f}', got '{f}'",
@@ -1951,7 +1950,8 @@ pub const Sema = struct {
                 lambda.params,
             );
 
-            if (resolved_lambda.return_type.eq(lambda.return_type) == false) {
+            // TODO: consider if that's enough, or type compare is required too
+            if (resolved_lambda.return_type.unify(lambda.return_type) == null) {
                 try self.diagnostics.err(
                     resolved_lambda.template.template.body.?.node.span,
                     "invalid lambda result type, expected '{f}', got '{f}'",
