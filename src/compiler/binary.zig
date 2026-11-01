@@ -10,11 +10,20 @@ pub const Error = error{
 };
 
 pub fn binaryResultType(op: ir.BinaryOp, left: Type, right: Type) Error!BinaryResult {
-    std.debug.assert(left != .noreturn and right != .noreturn);
+    // std.debug.assert(left != .noreturn and right != .noreturn);
 
-    if (left == .unknown or right == .unknown) return .{
-        .result_type = .unknown,
-    };
+    switch (left) {
+        .noreturn, .unknown => return .{
+            .result_type = right,
+        },
+        else => {},
+    }
+    switch (right) {
+        .noreturn, .unknown => return .{
+            .result_type = left,
+        },
+        else => {},
+    }
 
     if (op == .add and left == .string and right == .string) {
         return .{ .result_type = .string };
