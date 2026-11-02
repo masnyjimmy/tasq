@@ -43,6 +43,27 @@ fn IterableBase(comptime T: type, comptime next_fn: fn (it: *cst.Iterator) ?T) t
             return try out.toOwnedSlice(allocator);
         }
 
+        pub fn count(self: *const Self) usize {
+            var it = self.iter();
+
+            var amount: usize = 0;
+
+            while (it.next()) |_|
+                amount += 1;
+
+            return amount;
+        }
+
+        pub fn assertOne(self: *const Self) T {
+            var it = self.iter();
+
+            const out = it.next() orelse unreachable;
+
+            std.debug.assert(it.next() == null);
+
+            return out;
+        }
+
         pub fn from(node: *const cst.Node) Self {
             return .{ .node = node };
         }
