@@ -13,14 +13,14 @@ pub fn binaryResultType(op: ir.BinaryOp, left: Type, right: Type) Error!BinaryRe
     // std.debug.assert(left != .noreturn and right != .noreturn);
 
     switch (left) {
-        .noreturn, .unknown => return .{
-            .result_type = right,
+        inline .noreturn, .unknown => |_, tag| return .{
+            .result_type = @unionInit(Type, @tagName(tag), {}),
         },
         else => {},
     }
     switch (right) {
-        .noreturn, .unknown => return .{
-            .result_type = left,
+        inline .noreturn, .unknown => |_, tag| return .{
+            .result_type = @unionInit(Type, @tagName(tag), {}),
         },
         else => {},
     }
