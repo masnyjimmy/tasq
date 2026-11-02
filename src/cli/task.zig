@@ -866,3 +866,10 @@ pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []cons
         values,
     );
 }
+
+pub fn runCheck(ctx: *const Context, source_filepath: []const u8) !void {
+    _ = compileRunfile(ctx, source_filepath) catch |err| switch (err) {
+        error.CompilationFailed => return,
+        else => return err,
+    };
+}

@@ -47,6 +47,13 @@ fn RunTask(ctx: *const Context) !void {
     );
 }
 
+fn RunCheck(ctx: *const Context) !void {
+    try task_mod.runCheck(
+        &ctx.app,
+        ctx.getValueT("file", .string) orelse DEFAULT_FILEPATH,
+    );
+}
+
 fn ShowUsage(ctx: *const Context) !void {
     switch (ctx.args.len) {
         1 => {},
@@ -198,6 +205,12 @@ pub fn buildCommand(allocator: std.mem.Allocator) !*Command {
         .brief = "Shows this help message",
         .global = true,
     }, .flag);
+
+    _ = try rootCmd.createSub(.{
+        .name = "--check",
+        .brief = "Runs the diagnostics over source file",
+        .run = .set(RunCheck),
+    });
 
     _ = try rootCmd.createSub(.{
         .name = "--version",
