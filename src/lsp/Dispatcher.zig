@@ -387,6 +387,28 @@ pub fn @"textDocument/diagnostic"(
     const result = try arena.alloc(lsp.types.Diagnostic, diagnostics.records.items.len);
 
     for (diagnostics.records.items, result) |in, *out| {
+        const related = blk: {
+            if (in.related.len != 0) {
+                const related = try arena.alloc(lsp.types.Diagnostic.RelatedInformation, in.related.len);
+
+                for (in.related, related) |rel, *rel_out| {
+                    rel_out.* = .{
+                        .location = .{
+                            .range = self.indexesToRange(
+                                file.source,
+                                rel.span.start,
+                                rel.span.end(),
+                            ),
+                            .uri = file.uri,
+                        },
+                        .message = rel.message,
+                    };
+                }
+                break :blk related;
+            }
+            break :blk null;
+        };
+
         out.* = .{
             .message = .{
                 .string = in.message,
@@ -409,6 +431,7 @@ pub fn @"textDocument/diagnostic"(
                 .unnecessary => &.{.Unnecessary},
                 else => null,
             },
+            .relatedInformation = related,
         };
     }
 
