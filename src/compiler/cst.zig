@@ -109,15 +109,16 @@ pub const Node = struct {
         if (self.children.len == 0)
             return self.span;
 
-        const first: *const Element = for (self.children) |child| {
-            switch (child) {
+        // `|*child|` so we return a pointer into `children`, not into a loop-local copy
+        const first: *const Element = for (self.children) |*child| {
+            switch (child.*) {
                 .token => |token| {
                     if (token.kind.isTrivia())
                         continue;
                 },
                 else => {},
             }
-            break &child;
+            break child;
         } else return self.span; // trivia only? weird but ok
 
         const last = &self.children[self.children.len - 1];
@@ -158,7 +159,7 @@ pub const Node = struct {
     }
 
     pub fn nthNode(self: *const Node, n: usize) ?*Node {
-        var i = 0;
+        var i: usize = 0;
         for (self.children) |el| switch (el) {
             .node => |node| {
                 if (i == n) return node;
@@ -344,32 +345,55 @@ pub const Iterator = struct {
         };
     }
 
-    /// Consumes the very next non-trivia slot, asserting it is a token
-    /// of one of `kinds`. Sets `state` to `.missing` if that slot was a
-    /// missing marker, or `.error` if it was an unexpected error node.
+    /// Consumes the next token of one of `kinds`.
+    ///
+    /// Syntax errors never crash: `error_tree` nodes sitting in front of the
+    /// wanted token are skipped (the token is still found behind them); if
+    /// the token isn't there, exactly one element is consumed and `state` is
+    /// set to `.missing` / `.error`, returning null.
+    ///
+    /// A real token of the WRONG kind with no recovery junk before it can't
+    /// come from a syntax error (the parser wraps those in `error_tree` or
+    /// emits `.missing`), so it means the AST element definition is wrong
+    /// and the assert fires.
     pub fn expectToken(self: *Iterator, comptime kind: Token.Kind) ?Token {
         return self.expectAnyToken(&.{kind});
     }
 
     pub fn expectAnyToken(self: *Iterator, comptime kinds: []const Token.Kind) ?Token {
         const set: std.EnumSet(Token.Kind) = comptime .initMany(kinds);
-        const elem = self.next() orelse return null;
 
-        return switch (elem) {
-            .token => |t| blk: {
-                std.debug.assert(set.contains(t.kind));
-                break :blk t;
-            },
-            .missing => blk: {
-                self.state = .missing;
-                break :blk null;
-            },
-            .node => |n| blk: {
-                std.debug.assert(n.kind == .error_tree);
-                self.state = .@"error";
-                break :blk null;
-            },
+        const i = self.peekIndex() orelse {
+            self.state = .eof;
+            return null;
         };
+
+        // look past recovery junk to see if the wanted token is right behind it
+        var j = i;
+        while (j < self.items.len and
+            (isTrivia(self.items[j]) or isErrorNode(self.items[j]))) : (j += 1)
+        {}
+
+        if (j < self.items.len) switch (self.items[j]) {
+            .token => |t| {
+                if (set.contains(t.kind)) {
+                    self.idx = j + 1;
+                    self.state = .valid;
+                    return t;
+                }
+                // wrong real token with no junk before it: that's an AST bug
+                std.debug.assert(j != i);
+            },
+            else => {},
+        };
+
+        // syntax error: consume exactly one element, so loose loops make progress
+        self.idx = i + 1;
+        self.state = switch (self.items[i]) {
+            .missing => .missing,
+            else => .@"error",
+        };
+        return null;
     }
 
     fn isTrivia(element: Element) bool {
@@ -378,6 +402,13 @@ pub const Iterator = struct {
                 .whitespace, .comment => true,
                 else => false,
             },
+            else => false,
+        };
+    }
+
+    fn isErrorNode(element: Element) bool {
+        return switch (element) {
+            .node => |n| n.kind == .error_tree,
             else => false,
         };
     }
