@@ -332,7 +332,7 @@ pub const Sema = struct {
                 },
             });
         } else {
-            try self.reportInactive(task.node.span, &attributes_result);
+            try self.reportInactive(task.node.trimmedSpan(), &attributes_result);
         }
 
         return ptr;
@@ -439,7 +439,7 @@ pub const Sema = struct {
                 });
             }
         } else {
-            try self.reportInactive(group.node.span, &attributes_result);
+            try self.reportInactive(group.node.trimmedSpan(), &attributes_result);
         }
 
         return ptr;
@@ -1057,7 +1057,7 @@ pub const Sema = struct {
                     .failed => return Error.Incomplete,
                     .in_progress => {
                         try self.diagnostics.err(
-                            template.template.node.span,
+                            template.template.node.trimmedSpan(),
                             "recursive lambda: this lambda is called again while it is still being analysed with the same argument types, recursion is not supported",
                             .{},
                         );
@@ -1101,7 +1101,7 @@ pub const Sema = struct {
 
             try lambda_scope.define(self.arena.allocator(), .{
                 .name = out.name,
-                .span = template.template.node.span,
+                .span = template.template.node.trimmedSpan(),
                 .origin = .{ .capture = out },
             });
         }
@@ -1113,7 +1113,7 @@ pub const Sema = struct {
 
         if (body.type == .lambda) {
             try self.diagnostics.err(
-                template.template.node.span,
+                template.template.node.trimmedSpan(),
                 "a lambda cannot return another lambda",
                 .{},
             );
@@ -1549,7 +1549,7 @@ pub const Sema = struct {
                             template_scope,
                             .{
                                 .name = param_name,
-                                .span = param.name.node.span,
+                                .span = param.name.node.trimmedSpan(),
                                 .origin = .{ .capture = capture },
                             },
                         );
@@ -1624,7 +1624,7 @@ pub const Sema = struct {
 
                 if (in_args.len != params_count) {
                     try self.diagnostics.err(
-                        lambda_call.args.node.span,
+                        lambda_call.args.node.trimmedSpan(),
                         "lambda '{s}' takes {} argument(s), got {}",
                         .{ name, params_count, in_args.len },
                     );
@@ -1657,6 +1657,13 @@ pub const Sema = struct {
                 // the result is unknown as well.
                 if (!allKnown(types)) return unknownResult();
 
+                try self.diagnostics.pushRelated(
+                    lambda_call.node.trimmedSpan(),
+                    "<- from lambda call",
+                    .{},
+                );
+                defer self.diagnostics.popRelated();
+
                 const resolved_lambda = try self.getLambdaInstance(lambda, types);
 
                 //TODO: adjust is_static
@@ -1664,6 +1671,7 @@ pub const Sema = struct {
                     .lambda = resolved_lambda,
                     .args = resolved_args,
                 });
+
                 return .{
                     .expr = .{ .lambda_call = ptr },
                     .type = resolved_lambda.return_type,
@@ -1714,7 +1722,7 @@ pub const Sema = struct {
 
                     if (nofail) {
                         try self.diagnostics.err(
-                            fallback.node.span,
+                            fallback.node.trimmedSpan(),
                             "a process with 'nofail' cannot have a fallback: failures are ignored, so the fallback would never run",
                             .{},
                         );
@@ -1725,7 +1733,7 @@ pub const Sema = struct {
 
                     result_type = Type.unify(result_type, fallback_expr.type) orelse rt: {
                         try self.diagnostics.err(
-                            fallback_node.node.span,
+                            fallback_node.node.trimmedSpan(),
                             "invalid fallback type: a process yields 'string', got '{f}'",
                             .{fallback_expr.type},
                         );
@@ -1988,12 +1996,19 @@ pub const Sema = struct {
                         // Parameter types that nothing pinned down (an `unknown` list, inside a
                         // template) leave nothing to instantiate with
                         if (allKnown(expected.params)) {
+                            try self.diagnostics.pushRelated(
+                                node.node.trimmedSpan(),
+                                "<- from lambda called here",
+                                .{},
+                            );
+                            defer self.diagnostics.popRelated();
+
                             const instance = try self.getLambdaInstance(template, expected.params);
 
                             // TODO: consider if that's enough, or type compare is required too
                             if (Type.unify(instance.return_type, expected.return_type) == null) {
                                 try self.diagnostics.err(
-                                    template.template.body.?.node.span,
+                                    template.template.body.?.node.trimmedSpan(),
                                     "invalid lambda result type for '{s}': expected '{f}', got '{f}'",
                                     .{ builtin_call_name, expected.return_type, instance.return_type },
                                 );
@@ -2670,7 +2685,7 @@ const OptionsResolver = struct {
         defer attributes_result.deinit(self.sema.arena.allocator());
 
         if (attributes_result.matchesPlatform() == false) {
-            try self.sema.reportInactive(set.node.span, &attributes_result);
+            try self.sema.reportInactive(set.node.trimmedSpan(), &attributes_result);
             return;
         }
 
