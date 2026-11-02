@@ -750,7 +750,7 @@ const Range = struct {
     right: ?i64,
 };
 
-fn integerize(value: f64) i64 {
+pub fn integerize(value: f64) i64 {
     return @ceil(value);
 }
 

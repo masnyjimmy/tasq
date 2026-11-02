@@ -33,11 +33,13 @@ const handlers: [functions_count]Handler = .{
     handleStartsWith,
     handleEndsWith,
     handleReplaceString,
+    handleAtString,
     handleLen,
     handleReplaceList,
     handleAny,
     handleAll,
     handleReduce,
+    handleAtList,
     handleEnv,
     handleOs,
     handleStatusCode,
@@ -51,7 +53,7 @@ pub fn callFunction(
     id: functions.definitions.Id,
     args: []const Value,
 ) Error!Value {
-    const index = @intFromEnum(id);
+    const index = @backingInt(id);
 
     const handler = handlers[index];
 
@@ -264,6 +266,21 @@ fn handleReduce(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []cons
     return value;
 }
 
+fn handleAtList(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    const list = args[0].list;
+
+    const pos: i64 = blk: {
+        const number = args[1].number;
+        break :blk Interpreter.integerize(number);
+    };
+
+    if (pos < 0 or list.items.len <= pos) {
+        return makeResult(scope, list.items_type, null);
+    }
+
+    return makeResult(scope, list.items_type, list.items[@intCast(pos)]);
+}
+
 fn handleLen(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
     const length = switch (args[0]) {
         .string => |str| str.len,
@@ -404,6 +421,23 @@ fn handleReplaceString(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []co
     return .{
         .string = replaced,
     };
+}
+
+fn handleAtString(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    const str = args[0].string;
+
+    const pos: i64 = blk: {
+        const number = args[1].number;
+        break :blk Interpreter.integerize(number);
+    };
+
+    if (pos < 0 or str.len <= pos) {
+        return makeResult(scope, &.string, null);
+    }
+
+    const idx: usize = @intCast(pos);
+
+    return makeResult(scope, &.string, .{ .string = str[idx .. idx + 1] });
 }
 
 fn handleReplaceList(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {

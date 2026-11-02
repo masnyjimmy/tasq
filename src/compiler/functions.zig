@@ -165,7 +165,6 @@ const string_functions: []const Spec = &.{
         },
         .return_type = .{ .concrete = Type.bool },
     },
-
     .{
         .name = "replace",
         .args = &.{
@@ -183,6 +182,20 @@ const string_functions: []const Spec = &.{
             },
         },
         .return_type = .{ .concrete = Type.string },
+    },
+    .{
+        .name = "at",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+            .{
+                .name = "pos",
+                .type = .{ .concrete = Type.number },
+            },
+        },
+        .return_type = .{ .result = &.{ .concrete = Type.string } },
     },
 };
 
@@ -295,6 +308,20 @@ const collections_functions: []const Spec = &.{
         },
         .return_type = .{ .generic = "T" },
     },
+    .{
+        .name = "at",
+        .args = &.{
+            .{
+                .name = "list",
+                .type = .{ .list = &.{ .generic = "T" } },
+            },
+            .{
+                .name = "pos",
+                .type = .{ .concrete = .number },
+            },
+        },
+        .return_type = .{ .result = &.{ .generic = "T" } },
+    },
 };
 
 const misc_functions: []const Spec = &.{
@@ -366,6 +393,7 @@ fn Functions(comptime specs: []const Spec) type {
 
     // For each spec (by original index), which unique-name index (i.e. FnId) it maps to.
     const spec_to_id: [specs.len]FnIdent = blk: {
+        @setEvalBranchQuota(2_000);
         var unique_names: [specs.len][]const u8 = undefined;
         var unique_count: usize = 0;
         var ids: [specs.len]FnIdent = undefined;
