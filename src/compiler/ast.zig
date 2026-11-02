@@ -250,7 +250,7 @@ pub const Expr = struct {
         .binary_expr, .unary_expr,  .builtin_call,
         .@"if",       .@"for",      .@"switch",
         .lambda,      .lambda_call, .process_expr,
-        .@"continue", .@"break",
+        .slice,       .@"continue", .@"break",
     };
 
     node: *const cst.Node,
@@ -271,6 +271,7 @@ pub const Expr = struct {
         process: ProcessExpr,
         lambda: Lambda,
         lambda_call: LambdaCall,
+        slice: SliceExpr,
         @"continue": cst.Token,
         @"break": cst.Token,
     };
@@ -296,6 +297,7 @@ pub const Expr = struct {
             .lambda => .{ .lambda = .from(self.node) },
             .lambda_call => .{ .lambda_call = .from(self.node) },
             .process_expr => .{ .process = .from(self.node) },
+            .slice => .{ .slice = .from(self.node) },
             .@"continue" => .{ .@"continue" = self.node.childToken(.continue_kw) orelse unreachable },
             .@"break" => .{ .@"break" = self.node.childToken(.break_kw) orelse unreachable },
             else => unreachable,
@@ -380,6 +382,25 @@ pub const BinaryExpr = struct {
         const op = it.expectAnyToken(OP_TOKENS);
         const right = expectAnyNode(&it, Expr, Expr.KINDS);
         return .{ .node = node, .left = left, .op = op, .right = right };
+    }
+};
+
+pub const SliceExpr = struct {
+    node: *const cst.Node,
+    expr: ?Expr,
+    range: ?Range,
+
+    pub fn from(node: *const cst.Node) SliceExpr {
+        var it = node.iter();
+
+        const expr = expectAnyNode(&it, Expr, Expr.KINDS);
+        const range = expectNode(&it, Range, .range);
+
+        return .{
+            .node = node,
+            .expr = expr,
+            .range = range,
+        };
     }
 };
 
@@ -551,35 +572,64 @@ const SwitchPattern = struct {
 
 pub const ForExpr = struct {
     node: *const cst.Node,
-    subjects: Subjects,
+    subjects: ForSubjects,
     captures: Captures,
     body: ?Expr,
 
     pub fn from(node: *const cst.Node) ForExpr {
         var it = node.iter();
-        const subjects = expectNode(&it, Subjects, .subjects) orelse unreachable;
+        const subjects = expectNode(&it, ForSubjects, .subjects) orelse unreachable;
         const captures = expectNode(&it, Captures, .captures) orelse unreachable;
         const body = expectAnyNode(&it, Expr, Expr.KINDS);
         return .{ .node = node, .subjects = subjects, .captures = captures, .body = body };
     }
 };
 
-pub const Subjects = AnyKindIterable(.strict, Expr, Expr.KINDS);
+pub const Range = struct {
+    node: *const cst.Node,
+    left: ?Expr,
+    right: ?Expr,
 
-pub const Captures = StrictIterable(Capture, Capture.next);
-pub const Capture = union(enum) {
-    blank: cst.Token,
-    name: Name,
+    pub fn from(node: *const cst.Node) Range {
+        var it = node.iter();
 
-    fn next(it: *cst.Iterator) ?Capture {
-        if (it.eatToken(.underscore)) |token|
-            return .{ .blank = token };
+        const left = expectAnyNode(&it, Expr, Expr.KINDS);
+        const right = expectAnyNode(&it, Expr, Expr.KINDS);
 
         return .{
-            .name = expectNode(it, Name, .name) orelse return null,
+            .node = node,
+            .left = left,
+            .right = right,
         };
     }
 };
+pub const ForSubject = struct {
+    const KINDS: []const cst.NodeKind = Expr.KINDS ++ [_]cst.NodeKind{.range};
+
+    node: *const cst.Node,
+
+    pub const Kind = union(enum) {
+        range: Range,
+        expr: Expr,
+    };
+
+    pub fn from(node: *const cst.Node) ForSubject {
+        return .{ .node = node };
+    }
+
+    pub fn classify(self: *const ForSubject) Kind {
+        return switch (self.node.kind) {
+            .range => .{ .range = .from(self.node) },
+            else => .{ .expr = Expr.from(self.node) },
+        };
+    }
+};
+
+pub const ForSubjects = AnyKindIterable(.strict, ForSubject, ForSubject.KINDS);
+
+pub const Subjects = AnyKindIterable(.strict, Expr, Expr.KINDS);
+
+pub const Captures = KindIterable(.strict, Name, .name);
 
 //============================================================
 // declarations — binding, task, group members
@@ -982,14 +1032,14 @@ pub const IfStmt = struct {
 
 pub const ForStmt = struct {
     node: *const cst.Node,
-    subjects: Subjects,
+    subjects: ForSubjects,
     captures: Captures,
     body: Statements,
 
     pub fn from(node: *const cst.Node) ForStmt {
         var it = node.iter();
 
-        const subjects = expectNode(&it, Subjects, .subjects) orelse unreachable;
+        const subjects = expectNode(&it, ForSubjects, .subjects) orelse unreachable;
         const captures = expectNode(&it, Captures, .captures) orelse unreachable;
         const body = expectNode(&it, Statements, .stmt_block) orelse unreachable;
 

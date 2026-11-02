@@ -40,12 +40,14 @@ pub const NodeKind = enum {
 
     literal,
     list,
+    slice,
     name_ref,
     lambda_call,
     paren_expr,
     string_expr,
     binary_expr,
     unary_expr,
+    range,
 
     lambda,
     lambda_params,

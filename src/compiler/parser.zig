@@ -569,9 +569,22 @@ pub const Parser = struct {
             .rparen,
             .comma,
             follow.withSet(EXPR_START),
-            parseExpr,
+            parseForSubject,
         );
         try self.close(.subjects);
+    }
+
+    fn parseForSubject(self: *Parser, follow: FollowSet) Error!void {
+        try self.parseExpr(follow);
+
+        if (try self.at(.double_dot)) {
+            try self.precedeLast();
+            try self.advance();
+            if (EXPR_START.contains(try self.peek()))
+                try self.parseExpr(follow);
+
+            try self.close(.range);
+        }
     }
 
     fn parseCaptures(self: *Parser, follow: FollowSet) Error!void {
@@ -662,7 +675,7 @@ pub const Parser = struct {
             return;
         }
 
-        try self.parsePrimary(follow);
+        try self.parsePostfix(follow);
     }
 
     fn unaryBp(op: TokenKind) ?u8 {
@@ -671,6 +684,17 @@ pub const Parser = struct {
             .minus => 11,
             else => null,
         };
+    }
+
+    fn parsePostfix(self: *Parser, follow: FollowSet) Error!void {
+        try self.parsePrimary(follow);
+        while (try self.atImmediate(.lbracket)) {
+            try self.precedeLast();
+            try self.advance();
+            try self.parseRange(follow);
+            try self.expect(.rbracket, follow);
+            try self.close(.slice);
+        }
     }
 
     fn parsePrimary(self: *Parser, follow: FollowSet) Error!void {
@@ -718,6 +742,18 @@ pub const Parser = struct {
                 .{tag},
             ),
         }
+    }
+
+    fn parseRange(self: *Parser, follow: FollowSet) Error!void {
+        try self.open();
+
+        try self.parseExpr(follow);
+        try self.expect(.double_dot, follow);
+
+        if (EXPR_START.contains(try self.peek()))
+            try self.parseExpr(follow);
+
+        try self.close(.range);
     }
 
     fn parseLambdaCall(self: *Parser, follow: FollowSet) Error!void {
@@ -1082,6 +1118,10 @@ pub const Parser = struct {
     fn peek(self: *Parser) Error!TokenKind {
         try self.skipTrivia();
         return self.cursor.peek();
+    }
+
+    fn atImmediate(self: *Parser, token: TokenKind) Error!bool {
+        return try self.at(token) and self.pending_trivia.items.len == 0;
     }
 
     fn peekAt(self: *Parser, offset: usize) Error!TokenKind {

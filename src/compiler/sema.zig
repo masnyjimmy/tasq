@@ -928,17 +928,45 @@ pub const Sema = struct {
         };
     }
 
+    // ------------------------------------------------------------------------------------------
+    // `for` loops and ranges
+    // ------------------------------------------------------------------------------------------
+
     const ForHeader = struct {
         scope: *Scope,
-        subjects: []ir.Expr,
-        captures: []?*ir.Capture,
+        subjects: []ir.ForSubject,
+        captures: []*ir.Capture,
         is_static: bool,
+    };
+
+    /// One analysed subject of a `for`: what is iterated and the type of what each iteration yields.
+    const ForSubjectResult = struct {
+        subject: ir.ForSubject,
+        /// Type of the capture that receives the items.
+        type: Type,
+        is_static: bool,
+    };
+
+    const ForNodeKind = enum {
+        expr,
+        stmt,
+
+        fn Type(comptime kind: ForNodeKind) type {
+            return switch (kind) {
+                .expr => ast.ForExpr,
+                .stmt => ast.ForStmt,
+            };
+        }
     };
 
     /// The part `for (subjects) |captures|` shared by the statement and the expression form:
     /// analyses the subjects (in the enclosing scope) and defines the captures (in a new scope).
     /// Works on `ast.ForStmt` and `ast.ForExpr`.
-    fn analyseForHeader(self: *Sema, for_node: anytype, scope: *Scope) Error!ForHeader {
+    ///
+    /// `subjects` and `captures` of the result always have the same length and line up by index.
+    /// A capture whose subject is broken is still defined (typed `unknown`) so that its uses in
+    /// the body do not produce a cascade of "cannot find value" errors.
+    fn analyseForHeader(self: *Sema, comptime kind: ForNodeKind, for_node: kind.Type(), scope: *Scope) Error!ForHeader {
         const alloc = self.arena.allocator();
 
         const in_subjects = try for_node.subjects.collect(alloc);
@@ -953,57 +981,44 @@ pub const Sema = struct {
         }
         const valid_pairs_count = @min(in_subjects.len, in_captures.len);
 
-        var subjects: std.ArrayList(ir.Expr) = try .initCapacity(alloc, valid_pairs_count);
-        var captures: std.ArrayList(?*ir.Capture) = try .initCapacity(alloc, valid_pairs_count);
+        var subjects: std.ArrayList(ir.ForSubject) = try .initCapacity(alloc, valid_pairs_count);
+        var captures: std.ArrayList(*ir.Capture) = try .initCapacity(alloc, valid_pairs_count);
 
         var is_static = true;
 
         const for_scope = try self.createScope(scope, for_node.node);
 
         for (in_subjects[0..valid_pairs_count], in_captures[0..valid_pairs_count]) |s, c| {
-            const subject = s.unwrap() orelse continue;
             const capture = c.unwrap() orelse continue;
+            const capture_name = capture.string() orelse continue;
 
-            var result = try skipIncomplete(self.analyseExpr(subject, scope)) orelse continue;
-            _ = try self.rejectNoreturn(subject, &result, "a 'for' subject", .{});
+            const analysed: ?ForSubjectResult = if (s.unwrap()) |subject|
+                try self.analyseForSubject(subject, scope)
+            else
+                null;
+
+            const capture_type: Type = if (analysed) |a| a.type else .unknown;
+
+            const ptr = try self.create(ir.Capture, .{
+                .name = capture_name,
+                .type = capture_type,
+            });
+
+            try self.defineSymbol(for_scope, .{
+                .name = capture_name,
+                .span = capture.node.trimmedSpan(),
+                .origin = .{
+                    .capture = ptr,
+                },
+            });
+
+            const result = analysed orelse continue;
 
             if (result.is_static == false)
                 is_static = false;
 
-            const capture_type: Type = switch (result.type) {
-                .list => |items_type| items_type.*,
-                .unknown => .unknown,
-                else => |t| blk: {
-                    try self.diagnostics.err(
-                        subject.node.trimmedSpan(),
-                        "cannot iterate over a value of type '{f}': 'for' needs a list",
-                        .{t},
-                    );
-                    break :blk .unknown;
-                },
-            };
-
-            switch (capture) {
-                .name => |name| {
-                    const capture_ident = name.string() orelse continue;
-                    const ptr = try self.create(ir.Capture, .{
-                        .name = capture_ident,
-                        .type = capture_type,
-                    });
-                    captures.appendAssumeCapacity(ptr);
-                    try self.defineSymbol(for_scope, .{
-                        .name = capture_ident,
-                        .span = name.node.trimmedSpan(),
-                        .origin = .{
-                            .capture = ptr,
-                        },
-                    });
-                },
-                .blank => {
-                    captures.appendAssumeCapacity(null);
-                },
-            }
-            subjects.appendAssumeCapacity(result.expr);
+            subjects.appendAssumeCapacity(result.subject);
+            captures.appendAssumeCapacity(ptr);
         }
 
         return .{
@@ -1014,8 +1029,100 @@ pub const Sema = struct {
         };
     }
 
+    /// A single subject of a `for`: a range (`0..10`, yields numbers) or a list expression
+    /// (yields its items). Returns `null` when the subject is broken and already reported.
+    fn analyseForSubject(self: *Sema, subject: anytype, scope: *Scope) Error!?ForSubjectResult {
+        switch (subject.classify()) {
+            .range => |range| {
+                const result = try skipIncomplete(self.analyseRange(range, scope)) orelse return null;
+
+                return .{
+                    .subject = .{ .range = result.expr },
+                    .type = .number,
+                    .is_static = result.is_static,
+                };
+            },
+            .expr => |expr| {
+                var result = try skipIncomplete(self.analyseExpr(expr, scope)) orelse return null;
+                _ = try self.rejectNoreturn(expr, &result, "a 'for' subject", .{});
+
+                const items_type: Type = switch (result.type) {
+                    .list => |items_type| items_type.*,
+                    .unknown => .unknown,
+                    else => |t| blk: {
+                        try self.diagnostics.err(
+                            expr.node.trimmedSpan(),
+                            "cannot iterate over a value of type '{f}': a 'for' subject must be a list or a range",
+                            .{t},
+                        );
+                        break :blk .unknown;
+                    },
+                };
+
+                return .{
+                    .subject = .{ .expr = result.expr },
+                    .type = items_type,
+                    .is_static = result.is_static,
+                };
+            },
+        }
+    }
+
+    const RangeResult = struct {
+        expr: ir.Range,
+        is_static: bool,
+    };
+
+    const RangeBound = enum { start, end };
+
+    /// A range `start..end` (or the open-ended `start..`), used by `for` subjects and slices.
+    /// Both bounds must be numbers. They are analysed independently, so a mistake in the start
+    /// does not hide a mistake in the end.
+    fn analyseRange(self: *Sema, range: ast.Range, scope: *Scope) Error!RangeResult {
+        const left_node = range.left orelse return Error.Incomplete;
+
+        const left = try skipIncomplete(self.analyseRangeBound(left_node, scope, .start));
+
+        // `null` is ambiguous here: no end at all (`0..`) or an end that failed
+        const right: ?ExprResult(ir.Expr) = if (range.right) |right_node|
+            try skipIncomplete(self.analyseRangeBound(right_node, scope, .end))
+        else
+            null;
+
+        const right_failed = range.right != null and right == null;
+        if (left == null or right_failed) return Error.Incomplete;
+
+        return .{
+            .expr = .{
+                .left = left.?.expr,
+                .right = if (right) |r| r.expr else null,
+            },
+            .is_static = left.?.is_static and (if (right) |r| r.is_static else true),
+        };
+    }
+
+    fn analyseRangeBound(
+        self: *Sema,
+        node: ast.Expr,
+        scope: *Scope,
+        comptime which: RangeBound,
+    ) Error!ExprResult(ir.Expr) {
+        var result = try self.analyseExpr(node, scope);
+        _ = try self.rejectNoreturn(node, &result, "the " ++ @tagName(which) ++ " of a range", .{});
+
+        if (result.type != .number and result.type != .unknown) {
+            try self.diagnostics.err(
+                node.node.trimmedSpan(),
+                "range " ++ @tagName(which) ++ " must be a 'number', got '{f}'",
+                .{result.type},
+            );
+        }
+
+        return result;
+    }
+
     fn analyseForStmt(self: *Sema, for_stmt: ast.ForStmt, scope: *Scope) Error!ir.ForStmt {
-        const header = try self.analyseForHeader(for_stmt, scope);
+        const header = try self.analyseForHeader(.stmt, for_stmt, scope);
 
         // only the body is inside the loop: a `break` in a subject belongs to an enclosing loop
         self.loop_depth += 1;
@@ -1095,7 +1202,7 @@ pub const Sema = struct {
             const r_param = it.next() orelse unreachable; // should be checked already
             const param = r_param.unwrap() orelse continue;
             out.* = .{
-                .name = param.name.string().?,
+                .name = param.string().?,
                 .type = arg,
             };
 
@@ -1171,7 +1278,8 @@ pub const Sema = struct {
     }
 
     /// Strict entry point. Use it wherever a value is consumed (bindings, conditions, operands,
-    /// arguments of lambda calls, ...): the type of what is consumed must be fully known.
+    /// arguments of lambda calls, range bounds, slice operands, ...): the type of what is
+    /// consumed must be fully known.
     ///
     /// The only expressions that can be incomplete are those containing an empty list literal,
     /// whose element type has to come from somewhere else. Forms that can supply it (list items,
@@ -1212,7 +1320,7 @@ pub const Sema = struct {
     /// Gives the empty list literals reachable through `expr` the element type `target`
     /// prescribes, so the interpreter never sees an `unknown` type. Only forms that pass a
     /// value through can contain such a literal: a list literal, `if`, `switch` and `for`.
-    /// Everything else already has a complete type.
+    /// Everything else already has a complete type (a slice, for one, requires a complete operand).
     fn retypeExpr(expr: ir.Expr, target: Type) ir.Expr {
         switch (expr) {
             .list => |list| {
@@ -1535,7 +1643,7 @@ pub const Sema = struct {
 
                 while (it.next()) |r_param| switch (r_param) {
                     .value => |param| {
-                        const param_name = param.name.string() orelse continue;
+                        const param_name = param.string() orelse continue;
 
                         const capture = try self.create(
                             ir.Capture,
@@ -1549,7 +1657,7 @@ pub const Sema = struct {
                             template_scope,
                             .{
                                 .name = param_name,
-                                .span = param.name.node.trimmedSpan(),
+                                .span = param.node.trimmedSpan(),
                                 .origin = .{ .capture = capture },
                             },
                         );
@@ -1755,6 +1863,45 @@ pub const Sema = struct {
                     .is_static = false,
                 };
             },
+            .slice => |slice| {
+                const operand_node = slice.expr orelse return Error.Incomplete;
+                const range_node = slice.range orelse return Error.Incomplete;
+
+                // Both parts are analysed before giving up, so one broken part does not hide
+                // the diagnostics of the other. The operand is analysed strictly: a slice has the
+                // type of its operand, so nothing around it could complete an empty list anyway.
+                const operand_result = try skipIncomplete(self.analyseExpr(operand_node, scope));
+                const range_result = try skipIncomplete(self.analyseRange(range_node, scope));
+
+                var operand = operand_result orelse return Error.Incomplete;
+                const range = range_result orelse return Error.Incomplete;
+
+                _ = try self.rejectNoreturn(operand_node, &operand, "the operand of a slice", .{});
+
+                const result_type: Type = switch (operand.type) {
+                    .list, .unknown => operand.type,
+                    else => |t| err: {
+                        try self.diagnostics.err(
+                            operand_node.node.trimmedSpan(),
+                            "cannot slice a value of type '{f}': only lists can be sliced",
+                            .{t},
+                        );
+                        break :err .unknown;
+                    },
+                };
+
+                const ptr = try self.create(ir.SliceExpr, .{
+                    .operand = operand.expr,
+                    .range = range.expr,
+                    .type = result_type,
+                });
+
+                return .{
+                    .expr = .{ .slice = ptr },
+                    .is_static = operand.is_static and range.is_static,
+                    .type = result_type,
+                };
+            },
             inline .@"continue", .@"break" => |token, tag| {
                 if (self.loop_depth == 0) {
                     try self.diagnostics.err(
@@ -1774,7 +1921,7 @@ pub const Sema = struct {
     }
 
     fn analyseForExpr(self: *Sema, for_expr: ast.ForExpr, scope: *Scope) Error!ExprResult(ir.ForExpr) {
-        const header = try self.analyseForHeader(for_expr, scope);
+        const header = try self.analyseForHeader(.expr, for_expr, scope);
 
         // only the body is inside the loop: a `break` in a subject belongs to an enclosing loop
         self.loop_depth += 1;

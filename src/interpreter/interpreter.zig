@@ -277,40 +277,62 @@ fn main(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Stat
             }
         },
         .for_stmt => |*for_stmt| {
-            const values = try self.allocator.alloc(Value, for_stmt.subjects.len);
+            const ranges = try self.allocator.alloc(Range, for_stmt.subjects.len);
+            defer self.allocator.free(ranges);
+
+            const values = try self.allocator.alloc(?Value, for_stmt.subjects.len);
             defer self.allocator.free(values);
 
-            for (values, for_stmt.subjects) |*out, in| {
-                out.* = try self.evaluateExpr(cwd, scope, &in);
+            for (for_stmt.subjects, 0..) |in, idx| {
+                switch (in) {
+                    .range => |*range| {
+                        ranges[idx] = try self.evaluateRange(cwd, scope, range);
+                        values[idx] = null;
+                    },
+                    .expr => |*list_expr| {
+                        const value = try self.evaluateExpr(cwd, scope, list_expr);
+                        ranges[idx] = .{
+                            .left = 0,
+                            .right = @intCast(value.list.items.len),
+                        };
+                        values[idx] = value;
+                    },
+                }
             }
 
-            const max_length = blk: {
-                var out: usize = values[0].list.items.len;
+            const final_range = clampRanges(ranges);
 
-                for (values[1..]) |val|
-                    out = @min(out, val.list.items.len);
+            const for_scope = try Scope.create(scope, self.allocator, for_stmt.body.scope);
+            defer for_scope.destroy();
 
-                break :blk out;
-            };
-
-            for (0..max_length) |idx| {
-                const for_scope = try Scope.create(scope, self.allocator, for_stmt.body.scope);
-                defer for_scope.destroy();
-
-                for (for_stmt.captures[0..for_stmt.subjects.len], 0..) |maybe_cap, j| {
-                    if (maybe_cap) |cap| {
-                        try for_scope.define(cap, .{
-                            .name = cap.name,
-                            .value = values[j].list.items[idx],
-                        }, false);
+            var idx = final_range.left;
+            if (final_range.right) |right| {
+                while (idx < right) : (idx += 1) {
+                    defer for_scope.clearSymbols();
+                    for (for_stmt.captures, 0..) |capture, j| {
+                        if (values[j]) |value| {
+                            try for_scope.define(capture, .{
+                                .name = capture.name,
+                                .value = value.list.items[@intCast(idx)],
+                            }, false);
+                        } else {
+                            try for_scope.define(capture, .{
+                                .name = capture.name,
+                                .value = .{
+                                    .number = @floatFromInt(idx),
+                                },
+                            }, false);
+                        }
                     }
-                }
 
-                self.runBlock(cwd, for_scope, for_stmt.body.statements) catch |err| switch (err) {
-                    Error.Continue => continue,
-                    Error.Break => break,
-                    else => return err,
-                };
+                    self.runBlock(cwd, for_scope, for_stmt.body.statements) catch |err| switch (err) {
+                        Error.Continue => continue,
+                        Error.Break => break,
+                        else => return err,
+                    };
+
+                    for_scope.clearSymbols();
+                }
             }
         },
         .task_call => |*task_call| {
@@ -474,49 +496,69 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
             return try self.evaluateExpr(cwd, scope, &value);
         },
         .for_expr => |for_expr| {
-            const values = try self.allocator.alloc(Value, for_expr.subjects.len);
+            const ranges = try self.allocator.alloc(Range, for_expr.subjects.len);
+            defer self.allocator.free(ranges);
+
+            const values = try self.allocator.alloc(?Value, for_expr.subjects.len);
             defer self.allocator.free(values);
 
-            for (values, for_expr.subjects) |*out, in| {
-                out.* = try self.evaluateExpr(cwd, scope, &in);
+            for (for_expr.subjects, 0..) |in, idx| {
+                switch (in) {
+                    .range => |*range| {
+                        ranges[idx] = try self.evaluateRange(cwd, scope, range);
+                        values[idx] = null;
+                    },
+                    .expr => |*list_expr| {
+                        const value = try self.evaluateExpr(cwd, scope, list_expr);
+                        ranges[idx] = .{
+                            .left = 0,
+                            .right = @intCast(value.list.items.len),
+                        };
+                        values[idx] = value;
+                    },
+                }
             }
 
-            const max_length = blk: {
-                var out: usize = values[0].list.items.len;
-
-                for (values[1..]) |val|
-                    out = @min(out, val.list.items.len);
-
-                break :blk out;
-            };
+            const final_range = clampRanges(ranges);
 
             var result: std.ArrayList(Value) = .empty;
 
-            for (0..max_length) |idx| {
-                const for_scope = try Scope.create(scope, self.allocator, for_expr.scope);
-                defer for_scope.destroy();
+            const for_scope = try Scope.create(scope, self.allocator, for_expr.scope);
+            defer for_scope.destroy();
 
-                for (for_expr.captures[0..for_expr.subjects.len], 0..) |maybe_cap, j| {
-                    if (maybe_cap) |cap| {
-                        try for_scope.define(cap, .{
-                            .name = cap.name,
-                            .value = values[j].list.items[idx],
-                        }, false);
+            var idx = final_range.left;
+
+            if (final_range.right) |right| {
+                while (idx < right) : (idx += 1) {
+                    defer for_scope.clearSymbols();
+                    for (for_expr.captures, 0..) |capture, j| {
+                        if (values[j]) |value| {
+                            try for_scope.define(capture, .{
+                                .name = capture.name,
+                                .value = value.list.items[@intCast(idx)],
+                            }, false);
+                        } else {
+                            try for_scope.define(capture, .{
+                                .name = capture.name,
+                                .value = .{
+                                    .number = @floatFromInt(idx),
+                                },
+                            }, false);
+                        }
                     }
+
+                    const item = self.evaluateExpr(cwd, for_scope, &for_expr.body) catch |err| switch (err) {
+                        Error.Continue => continue,
+                        Error.Break => break,
+                        else => return err,
+                    };
+
+                    try result.append(
+                        scope.arena.allocator(),
+                        try item.clone(scope.arena.allocator()),
+                    );
                 }
-
-                const item = self.evaluateExpr(cwd, for_scope, &for_expr.body) catch |err| switch (err) {
-                    Error.Continue => continue,
-                    Error.Break => break,
-                    else => return err,
-                };
-
-                try result.append(
-                    scope.arena.allocator(),
-                    try item.clone(scope.arena.allocator()),
-                );
             }
-
             return .{
                 .list = .{
                     .items_type = &for_expr.type,
@@ -650,9 +692,94 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
 
             return .{ .string = result };
         },
+        .slice => |slice| {
+            const operand = try self.evaluateExpr(cwd, scope, &slice.operand);
+
+            const range = clampRange(
+                try self.evaluateRange(cwd, scope, &slice.range),
+                .{
+                    .left = 0,
+                    .right = @intCast(operand.list.items.len),
+                },
+            );
+
+            const result: Value = .{
+                .list = .{
+                    .items_type = operand.list.items_type,
+                    .items = operand.list.items[@intCast(range.left)..@intCast(range.right.?)],
+                },
+            };
+
+            return result.clone(scope.arena.allocator());
+        },
         .@"continue" => Error.Continue,
         .@"break" => Error.Break,
         .unknown => unreachable,
+    };
+}
+
+fn clampRanges(ranges: []const Range) Range {
+    std.debug.assert(ranges.len != 0);
+    var range = ranges[0];
+
+    for (ranges[1..]) |r| {
+        range = clampRange(range, r);
+    }
+
+    return range;
+}
+
+fn clampRange(a: Range, b: Range) Range {
+    const left = @max(a.left, b.left);
+
+    const right = if (a.right == null)
+        b.right
+    else if (b.right == null)
+        a.right
+    else
+        @min(a.right.?, b.right.?);
+
+    return .{
+        .left = left,
+        .right = right,
+    };
+}
+
+const Range = struct {
+    left: i64,
+    right: ?i64,
+};
+
+fn integerize(value: f64) i64 {
+    return @ceil(value);
+}
+
+fn evaluateRange(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, range: *const ir.Range) Error!Range {
+    const left: i64 = blk: {
+        const value = try self.evaluateExpr(
+            cwd,
+            scope,
+            &range.left,
+        );
+
+        break :blk integerize(value.number);
+    };
+
+    const right: ?i64 = blk: {
+        const right = range.right orelse break :blk null;
+
+        const value = try self.evaluateExpr(
+            cwd,
+            scope,
+            &right,
+        );
+
+        break :blk @max(integerize(value.number), left);
+    };
+
+    return .{
+        .left = left,
+        .right = right,
     };
 }
 

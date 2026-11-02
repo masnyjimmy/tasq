@@ -141,9 +141,19 @@ pub const Capture = struct {
     type: Type,
 };
 
+pub const Range = struct {
+    left: Expr,
+    right: ?Expr,
+};
+
+pub const ForSubject = union(enum) {
+    range: Range,
+    expr: Expr,
+};
+
 pub const ForStmt = struct {
-    subjects: []const Expr,
-    captures: []?*Capture,
+    subjects: []ForSubject,
+    captures: []*Capture,
     body: StatementBlock,
 };
 
@@ -208,9 +218,16 @@ pub const Expr = union(enum) {
     lambda: LambdaExpr,
     lambda_call: *LambdaCall,
     process: *ProcessExpr,
+    slice: *SliceExpr,
     @"continue",
     @"break",
     unknown, // poison
+};
+
+pub const SliceExpr = struct {
+    operand: Expr,
+    range: Range,
+    type: Type,
 };
 
 pub const ProcessExpr = struct {
@@ -280,8 +297,8 @@ pub const LambdaCall = struct {
 };
 
 pub const ForExpr = struct {
-    subjects: []const Expr,
-    captures: []?*Capture,
+    subjects: []ForSubject,
+    captures: []*Capture,
     scope: *Scope,
     body: Expr,
     type: Type,

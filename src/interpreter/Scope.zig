@@ -51,6 +51,10 @@ pub fn define(self: *Scope, identity: Identity, symbol: Symbol, can_replace: boo
     try self.symbols.put(self.arena.allocator(), identity, symbol);
 }
 
+pub fn clearSymbols(self: *Scope) void {
+    self.symbols.clearRetainingCapacity();
+}
+
 pub fn resolve(self: *Scope, identity: Identity) ?*Symbol {
     return self.symbols.getPtr(identity) orelse if (self.parent) |p|
         p.resolve(identity)

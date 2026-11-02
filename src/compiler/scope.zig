@@ -64,6 +64,9 @@ pub const Scope = struct {
     }
 
     pub fn define(self: *Scope, gpa: std.mem.Allocator, symbol: Symbol) !void {
+        // '_' is anonymous symbol, should never tried to be defined
+        std.debug.assert(std.mem.eql(u8, symbol.name, "_") == false);
+
         const index = self.symbols.items.len;
 
         const ptr = try gpa.create(Symbol);
