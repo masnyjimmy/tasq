@@ -238,8 +238,11 @@ pub const Lexer = struct {
                     return self.consumeChar(.backtick);
                 },
                 '.' => {
-                    if (self.peekAt(1) == '.' and self.peekAt(2) == '.') {
-                        return self.consumeN(.triple_dot, 3);
+                    if (self.peekAt(1) == '.') {
+                        if (self.peekAt(2) == '.')
+                            return self.consumeN(.triple_dot, 3);
+
+                        return self.consumeN(.double_dot, 2);
                     }
 
                     return self.consumeChar(.dot);

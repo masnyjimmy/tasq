@@ -47,6 +47,7 @@ pub const Kind = enum {
     colon, // :
     dcolon, // ::
     dot, // .
+    double_dot, // ..
     triple_dot, // ...
     comma, // ,
     apostrophe, // '
