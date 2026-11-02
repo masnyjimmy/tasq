@@ -59,7 +59,7 @@ pub const OpenResult = struct {
 pub fn openFile(self: *Workspace, uri: []const u8, text: []const u8, version: i32) !OpenResult {
     std.debug.assert(self.getId(uri) == null);
 
-    const id: FileId = @enumFromInt(self.next_id);
+    const id: FileId = @fromBackingInt(@intCast(self.next_id));
     self.next_id += 1;
 
     const owned_uri = try self.allocator.dupe(u8, uri);
@@ -133,7 +133,7 @@ pub fn reparse(self: *Workspace, id: FileId) !bool {
         break :blk try sema.analyseFile(file.tree.?);
     };
 
-    return file.diagnostics.has_error == false;
+    return file.diagnostics.errors_count == 0;
 }
 
 pub fn changeFile(self: *Workspace, allocator: std.mem.Allocator, id: FileId, new_text: []const u8, version: i32) !bool {

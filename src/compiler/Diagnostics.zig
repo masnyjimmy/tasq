@@ -18,45 +18,72 @@ pub const Severity = enum {
     }
 };
 
+const RelatedData = struct {
+    span: Span,
+    message: []const u8,
+};
+
 const Record = struct {
     span: Span,
     severity: Severity,
     message: []const u8,
+    related: []const RelatedData = &.{},
 };
 
 const Diagnostics = @This();
 
 allocator: std.mem.Allocator,
+arena: std.heap.ArenaAllocator,
 records: std.ArrayList(Record) = .empty,
-has_error: bool = false,
+related: std.ArrayList(RelatedData) = .empty,
+errors_count: u32 = 0,
 
 pub fn init(allocator: std.mem.Allocator) Diagnostics {
-    return .{ .allocator = allocator };
+    return .{
+        .allocator = allocator,
+        .arena = .init(allocator),
+    };
 }
 
 pub fn deinit(self: *Diagnostics) void {
-    for (self.records.items) |*rec| {
-        self.allocator.free(rec.message);
-    }
-
     self.records.deinit(self.allocator);
+    self.related.deinit(self.allocator);
+    self.arena.deinit();
 }
 
 pub fn clear(self: *Diagnostics) void {
     self.records.clearRetainingCapacity();
-    self.has_error = false;
+    self.related.clearRetainingCapacity();
+    _ = self.arena.reset(.retain_capacity);
+    self.errors_count = 0;
 }
 
 pub fn append(self: *Diagnostics, severity: Severity, span: Span, comptime fmt: []const u8, args: anytype) !void {
-    if (severity == .err) {
-        self.has_error = true;
-    }
+    var arena = self.arena.allocator();
 
     try self.records.append(self.allocator, .{
         .span = span,
         .severity = severity,
-        .message = try std.fmt.allocPrint(self.allocator, fmt, args),
+        .message = try arena.print(fmt, args),
+        .related = try arena.dupe(RelatedData, self.related.items),
     });
+
+    if (severity == .err)
+        self.errors_count += 1;
+}
+
+pub fn pushRelated(self: *Diagnostics, span: Span, comptime fmt: []const u8, args: anytype) !void {
+    try self.related.append(
+        self.allocator,
+        .{
+            .span = span,
+            .message = try self.arena.allocator().print(fmt, args),
+        },
+    );
+}
+
+pub fn popRelated(self: *Diagnostics) void {
+    _ = self.related.pop();
 }
 
 pub fn err(self: *Diagnostics, span: Span, comptime fmt: []const u8, args: anytype) !void {
