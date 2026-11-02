@@ -706,11 +706,13 @@ pub const Parser = struct {
             },
             .lparen => {
                 try self.open();
-
-                try self.expect(.lparen, follow.withSet(EXPR_START));
-                try self.parseExpr(follow.with(&.{.rparen}));
-                try self.expect(.rparen, follow);
-
+                try self.parseSequence(
+                    .lparen,
+                    .rparen,
+                    .comma,
+                    follow,
+                    parseExpr,
+                );
                 try self.close(.paren_expr);
             },
             .dollar => try self.parseProcess(follow, .expr),

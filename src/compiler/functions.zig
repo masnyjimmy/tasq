@@ -522,12 +522,12 @@ pub const InArg = union(enum) {
 /// What the generic parameters (`T`) of one overload were pinned to.
 const Bindings = std.StringHashMap(Type);
 
-pub fn resolveArguments(allocator: std.mem.Allocator, params: []const Spec.Param, args: []const InArg) !?Bindings {
-    var bindings: Bindings = .init(allocator);
+pub fn resolveArguments(arena: std.mem.Allocator, params: []const Spec.Param, args: []const InArg) !?Bindings {
+    var bindings: Bindings = .init(arena);
     defer bindings.deinit();
 
     for (params, args) |param, arg| {
-        if (!try matchAndBind(&bindings, param.type, arg))
+        if (!try matchAndBind(arena, &bindings, param.type, arg))
             return null;
     }
 
@@ -537,7 +537,7 @@ pub fn resolveArguments(allocator: std.mem.Allocator, params: []const Spec.Param
 /// A generic parameter accumulates information from every argument that mentions it. Arguments
 /// are combined with `unify`, so a known type wins over `unknown` in either order, and a conflict
 /// rejects the overload. A parameter nothing pinned stays `unknown`.
-fn bind(bindings: *Bindings, name: []const u8, arg_type: Type) !bool {
+fn bind(arena: std.mem.Allocator, bindings: *Bindings, name: []const u8, arg_type: Type) !bool {
     const gop = try bindings.getOrPut(name);
 
     if (!gop.found_existing) {
@@ -545,18 +545,18 @@ fn bind(bindings: *Bindings, name: []const u8, arg_type: Type) !bool {
         return true;
     }
 
-    gop.value_ptr.* = Type.unify(gop.value_ptr.*, arg_type) orelse return false;
+    gop.value_ptr.* = try Type.unify(arena, gop.value_ptr.*, arg_type) orelse return false;
     return true;
 }
 
-fn matchAndBind(bindings: *Bindings, param: TypeExpr, arg: InArg) !bool {
+fn matchAndBind(arena: std.mem.Allocator, bindings: *Bindings, param: TypeExpr, arg: InArg) !bool {
     switch (param) {
         .concrete => |t| switch (arg) {
             .value => |v| return Type.eq(t, v.type),
             .lambda => return false,
         },
         .generic => |name| switch (arg) {
-            .value => |v| return try bind(bindings, name, v.type),
+            .value => |v| return try bind(arena, bindings, name, v.type),
             .lambda => return false,
         },
         .list => |elem_param| switch (arg) {
@@ -569,7 +569,7 @@ fn matchAndBind(bindings: *Bindings, param: TypeExpr, arg: InArg) !bool {
                     else => return false,
                 };
 
-                return try matchAndBind(bindings, elem_param.*, .{
+                return try matchAndBind(arena, bindings, elem_param.*, .{
                     .value = .{ .type = elem_type },
                 });
             },
@@ -581,7 +581,7 @@ fn matchAndBind(bindings: *Bindings, param: TypeExpr, arg: InArg) !bool {
             .value => |v| return v.type == .unknown,
         },
         .result => |inner| switch (arg) {
-            .value => |v| return try matchAndBind(bindings, inner.*, .{ .value = v }),
+            .value => |v| return try matchAndBind(arena, bindings, inner.*, .{ .value = v }),
             .lambda => return false,
         },
     }

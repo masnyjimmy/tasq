@@ -28,6 +28,7 @@ pub const ValueMapContext = struct {
                 hasher.update(std.mem.asBytes(&n));
             },
             .list => |l| for (l.items) |item| hashValue(hasher, item),
+            .tuple => |t| for (t.elements) |elem| hashValue(hasher, elem),
             else => unreachable,
         }
     }
@@ -48,9 +49,15 @@ const Tag = enum {
     number,
     bool,
     list,
+    tuple,
     void,
     lambda,
     result,
+};
+
+pub const Tuple = struct {
+    types: []const Type,
+    elements: []const Value,
 };
 
 pub const Value = union(Tag) {
@@ -58,6 +65,7 @@ pub const Value = union(Tag) {
     number: f64,
     bool: bool,
     list: List,
+    tuple: Tuple,
     void,
     /// mirrors lambda expr, null if not resolved, then
     lambda: union(enum) {
@@ -70,6 +78,7 @@ pub const Value = union(Tag) {
         return switch (self.*) {
             .list => |list| .{ .list = list.items_type },
             .result => |res| .{ .result = res.type },
+            .tuple => |tuple| .{ .tuple = tuple.types },
             .lambda => |lambda| .{
                 .lambda = switch (lambda) {
                     .template => |t| t,
@@ -101,6 +110,14 @@ pub const Value = union(Tag) {
                     }
                 }
                 try writer.writeAll("]");
+            },
+            .tuple => |t| {
+                try writer.writeAll("(");
+                for (t.elements, 0..) |elem, idx| {
+                    if (idx != 0) try writer.writeAll(", ");
+                    try elem.format(writer);
+                }
+                try writer.writeAll(")");
             },
             .result => |s| {
                 if (s.value) |val|
@@ -139,6 +156,17 @@ pub const Value = union(Tag) {
 
                 return true;
             },
+            .tuple => {
+                if (left.tuple.elements.len != right.tuple.elements.len)
+                    return false;
+
+                for (left.tuple.elements, right.tuple.elements) |l, r| {
+                    if (eql(l, r) == false)
+                        return false;
+                }
+
+                return true;
+            },
             .result => {
                 if (left.result.value == null and right.result.value == null)
                     return true;
@@ -166,6 +194,20 @@ pub const Value = union(Tag) {
                     .list = .{
                         .items = result,
                         .items_type = list.items_type,
+                    },
+                };
+            },
+            .tuple => |tuple| {
+                const result = try allocator.alloc(Value, tuple.elements.len);
+
+                for (tuple.elements, result) |in, *out| {
+                    out.* = try in.clone(allocator);
+                }
+
+                return .{
+                    .tuple = .{
+                        .types = tuple.types,
+                        .elements = result,
                     },
                 };
             },

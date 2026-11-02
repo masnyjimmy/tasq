@@ -281,7 +281,7 @@ pub const Expr = struct {
         name_ref: ?cst.Token,
         binary: BinaryExpr,
         unary: UnaryExpr,
-        paren: ?Expr,
+        paren: ParenExpr,
         string: String,
         string_expr: StringExpr,
         list: ListExpr,
@@ -305,7 +305,7 @@ pub const Expr = struct {
         return switch (self.node.kind) {
             .literal => .{ .literal = self.node.childTokenOf(&.{ .true_kw, .false_kw, .number }) },
             .name_ref => .{ .name_ref = self.node.childToken(.ident) },
-            .paren_expr => .{ .paren = if (self.node.childNodeOf(KINDS)) |n| .from(n) else null },
+            .paren_expr => .{ .paren = .from(self.node) },
             .binary_expr => .{ .binary = .from(self.node) },
             .unary_expr => .{ .unary = .from(self.node) },
             .string => .{ .string = .from(self.node) },
@@ -325,6 +325,8 @@ pub const Expr = struct {
         };
     }
 };
+
+pub const ParenExpr = AnyKindIterable(.loose, Expr, Expr.KINDS);
 
 pub const LambdaCall = struct {
     node: *const cst.Node,

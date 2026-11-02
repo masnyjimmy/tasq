@@ -207,6 +207,7 @@ pub const Expr = union(enum) {
     number_lit: f64,
     bool_lit: bool,
     list: List,
+    tuple: TupleExpr,
     ident: ResolvedIdent, // name + what it resolved to
     binary: *BinaryExpr,
     unary: *UnaryExpr,
@@ -222,6 +223,11 @@ pub const Expr = union(enum) {
     @"continue",
     @"break",
     unknown, // poison
+};
+
+pub const TupleExpr = struct {
+    types: []const Type,
+    elements: []const Expr,
 };
 
 pub const SliceExpr = struct {

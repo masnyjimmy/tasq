@@ -8,6 +8,7 @@ const Tag = enum {
     number,
     bool,
     list,
+    tuple,
     noreturn,
     void,
     lambda,
@@ -25,6 +26,7 @@ pub const Type = union(Tag) {
     number,
     bool,
     list: *const Type,
+    tuple: []const Type,
     noreturn,
     void,
     lambda: *const LambdaTemplate,
@@ -46,7 +48,7 @@ pub const Type = union(Tag) {
     ///
     /// No allocation is needed: a type is a chain of wrappers (list, result) ending in a leaf, and
     /// the chain that carries more information is always one of the two inputs.
-    pub fn unify(left: Type, right: Type) ?Type {
+    pub fn unify(arena: std.mem.Allocator, left: Type, right: Type) !?Type {
         switch (left) {
             .noreturn, .unknown => return right,
             else => {},
@@ -61,16 +63,26 @@ pub const Type = union(Tag) {
 
         switch (left) {
             .list => |l| {
-                const inner = unify(l.*, right.list.*) orelse return null;
+                const inner = try unify(arena, l.*, right.list.*) orelse return null;
                 if (same(inner, l.*)) return left;
                 std.debug.assert(same(inner, right.list.*));
                 return right;
             },
             .result => |l| {
-                const inner = unify(l.*, right.result.*) orelse return null;
+                const inner = try unify(arena, l.*, right.result.*) orelse return null;
                 if (same(inner, l.*)) return left;
                 std.debug.assert(same(inner, right.result.*));
                 return right;
+            },
+            .tuple => |t| {
+                if (t.len != right.tuple.len) return null;
+
+                const merged = try arena.alloc(Type, t.len);
+
+                for (t, right.tuple, merged) |l, r, *out| {
+                    out.* = try unify(arena, l, r) orelse return null;
+                }
+                return .{ .tuple = merged };
             },
             .lambda => return if (same(left, right)) left else null,
             else => return left,
@@ -85,6 +97,11 @@ pub const Type = union(Tag) {
         return switch (left) {
             .list => |l| same(l.*, right.list.*),
             .result => |r| same(r.*, right.result.*),
+            .tuple => |t| {
+                if (t.len != right.tuple.len) return false;
+                for (t, right.tuple) |l, r| if (!same(l, r)) return false;
+                return true;
+            },
             // a lambda has no signature, it is its own type: the same syntax node is the same lambda
             .lambda => |l| l.template.node == right.lambda.template.node,
             else => true,
@@ -93,7 +110,27 @@ pub const Type = union(Tag) {
 
     /// Compatibility: could a value of one type be used where the other is expected?
     pub fn eq(left: Type, right: Type) bool {
-        return unify(left, right) != null;
+        switch (left) {
+            .noreturn, .unknown => return true,
+            else => {},
+        }
+        switch (right) {
+            .noreturn, .unknown => return true,
+            else => {},
+        }
+        if (@as(Tag, left) != @as(Tag, right)) return false;
+
+        return switch (left) {
+            .list => |l| eq(l.*, right.list.*),
+            .result => |r| eq(r.*, right.result.*),
+            .tuple => |t| {
+                if (t.len != right.tuple.len) return false;
+                for (t, right.tuple) |l, r| if (!eq(l, r)) return false;
+                return true;
+            },
+            .lambda => same(left, right),
+            else => true,
+        };
     }
 
     pub fn containsUnknown(self: Type) bool {
@@ -101,6 +138,10 @@ pub const Type = union(Tag) {
             .unknown => true,
             .list => |items| items.containsUnknown(),
             .result => |t| t.containsUnknown(),
+            .tuple => |t| for (t) |el| {
+                if (el.containsUnknown())
+                    return true;
+            } else false,
             else => false,
         };
     }
@@ -118,6 +159,14 @@ pub const Type = union(Tag) {
         switch (self) {
             .list => |t| try writer.print("[]{f}", .{t.*}),
             .result => |r| try writer.print("!{f}", .{r.*}),
+            .tuple => |t| {
+                try writer.writeAll("(");
+                for (t, 0..) |el, idx| {
+                    if (idx != 0) try writer.writeAll(", ");
+                    try el.format(writer);
+                }
+                try writer.writeAll(")");
+            },
             inline else => |_, tag| try writer.writeAll(@tagName(tag)),
         }
     }
@@ -197,6 +246,10 @@ pub const TypeMapContext = struct {
             .lambda => |lambda| hasher.update(
                 std.mem.asBytes(&lambda.template.node),
             ),
+            .tuple => |elems| {
+                hasher.update(std.mem.asBytes(&elems.len));
+                for (elems) |elem| updateHasher(hasher, elem);
+            },
             .result => |result| updateHasher(hasher, result.*),
             else => {},
         }

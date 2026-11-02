@@ -120,6 +120,17 @@ fn evalEquality(op: ir.BinaryOp, left: Value, right: Value) Value {
 
                 break :blk true;
             },
+            .tuple => {
+                if (left.tuple.elements.len != right.tuple.elements.len)
+                    break :blk false;
+
+                for (left.tuple.elements, right.tuple.elements) |l, r| {
+                    if (evalEquality(.eq, l, r).bool == false)
+                        break :blk false;
+                }
+
+                break :blk true;
+            },
             .noreturn, .result, .lambda, .unknown => unreachable,
             inline else => |_, tag| {
                 const left_value = @field(left, @tagName(tag));

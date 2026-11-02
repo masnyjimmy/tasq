@@ -467,6 +467,20 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
                 },
             };
         },
+        .tuple => |tuple| {
+            const result = try scope.arena.allocator().alloc(Value, tuple.elements.len);
+
+            for (tuple.elements, result) |*element, *out| {
+                out.* = try self.evaluateExpr(cwd, scope, element);
+            }
+
+            return .{
+                .tuple = .{
+                    .types = tuple.types,
+                    .elements = result,
+                },
+            };
+        },
         .ident => |id| {
             // get resolved
             if (scope.resolve(id.symbol.identity())) |sym| {

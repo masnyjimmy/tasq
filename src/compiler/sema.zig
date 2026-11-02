@@ -691,10 +691,10 @@ pub const Sema = struct {
                 return Error.Incomplete,
             .string => .string,
             .list => .list,
-            .paren => |inner| return if (inner) |e|
-                try self.assertLiteral(e, expected_type)
+            .paren => |inner| if (inner.count() == 1)
+                return self.assertLiteral(inner.assertOne(), expected_type)
             else
-                Error.Incomplete,
+                .tuple,
             else => |tag| {
                 try self.diagnostics.err(
                     expr.node.trimmedSpan(),
@@ -751,6 +751,39 @@ pub const Sema = struct {
                     .list = .{
                         .items = try items.toOwnedSlice(self.arena.allocator()),
                         .items_type = try self.create(Type, expected_type),
+                    },
+                };
+            },
+            .paren => |tuple| {
+                const elements_count = tuple.count();
+
+                if (elements_count != expected_type.tuple.len) {
+                    try self.diagnostics.err(
+                        expr.node.span,
+                        "invalid tuple elements number, got '{}', expected '{}'",
+                        .{ elements_count, expected_type.tuple.len },
+                    );
+                    return Error.Incomplete;
+                }
+
+                const elements = try self.arena.allocator().alloc(
+                    runtime.Value,
+                    elements_count,
+                );
+
+                var it = tuple.iter();
+
+                for (0..elements_count) |idx| {
+                    elements[idx] = try self.assertLiteral(
+                        it.next() orelse unreachable,
+                        expected_type.tuple[idx],
+                    );
+                }
+
+                return .{
+                    .tuple = .{
+                        .types = expected_type.tuple,
+                        .elements = elements,
                     },
                 };
             },
@@ -1309,8 +1342,8 @@ pub const Sema = struct {
     /// Makes `result` carry the most informative type of its own and `target`, and rewrites the
     /// IR to match (see `retypeExpr`). Meant for places where a type is learned from context:
     /// the other branch of an `if`, the parameter of a call, the other items of a list.
-    fn coerce(result: *ExprResult(ir.Expr), target: Type) void {
-        const unified = Type.unify(result.type, target) orelse return;
+    fn coerce(arena: std.mem.Allocator, result: *ExprResult(ir.Expr), target: Type) !void {
+        const unified = try Type.unify(arena, result.type, target) orelse return;
         if (Type.same(unified, result.type)) return;
 
         result.expr = retypeExpr(result.expr, unified);
@@ -1437,7 +1470,7 @@ pub const Sema = struct {
                         continue;
                     }
 
-                    items_type = Type.unify(items_type, result.type) orelse blk: {
+                    items_type = try Type.unify(self.arena.allocator(), items_type, result.type) orelse blk: {
                         // BUG: multiple diagnostics
                         try self.diagnostics.err(
                             it.lastSpan(),
@@ -1504,10 +1537,60 @@ pub const Sema = struct {
                     .type = result.type,
                 };
             },
-            .paren => |inner| if (inner) |node|
-                try self.analyseExprPartial(node, scope)
-            else
-                Error.Incomplete,
+            .paren => |paren| {
+                const count = blk: {
+                    var count: usize = 0;
+                    var it = paren.iter();
+                    while (it.next()) |_|
+                        count += 1;
+
+                    break :blk count;
+                };
+                // just paren expr, not tuple
+                if (count == 1) {
+                    var it = paren.iter();
+                    return try self.analyseExprPartial(it.next().?, scope);
+                }
+
+                const types = try self.arena.allocator().alloc(Type, count);
+                const values = try self.arena.allocator().alloc(ir.Expr, count);
+
+                var is_static = true;
+                var broken = false;
+
+                var it = paren.iter();
+
+                for (0..count) |idx| {
+                    const item = it.next() orelse unreachable;
+                    var result = try self.analyseExprPartial(
+                        item,
+                        scope,
+                    );
+
+                    if (try self.rejectNoreturn(item, &result, "a tuple element", .{})) {
+                        broken = true;
+                    }
+
+                    if (result.is_static == false)
+                        is_static = false;
+
+                    types[idx] = result.type;
+                    values[idx] = result.expr;
+                }
+
+                return .{
+                    .expr = .{
+                        .tuple = .{
+                            .types = types,
+                            .elements = values,
+                        },
+                    },
+                    .type = .{
+                        .tuple = types,
+                    },
+                    .is_static = is_static,
+                };
+            },
             .binary => |binary_expr| {
                 const left_node = binary_expr.left orelse return Error.Incomplete;
                 var left = try self.analyseExpr(left_node, scope);
@@ -1839,7 +1922,7 @@ pub const Sema = struct {
                     const fallback_node = fallback.expr orelse return Error.Incomplete;
                     const fallback_expr = try self.analyseExpr(fallback_node, scope);
 
-                    result_type = Type.unify(result_type, fallback_expr.type) orelse rt: {
+                    result_type = try Type.unify(self.arena.allocator(), result_type, fallback_expr.type) orelse rt: {
                         try self.diagnostics.err(
                             fallback_node.node.trimmedSpan(),
                             "invalid fallback type: a process yields 'string', got '{f}'",
@@ -1963,7 +2046,7 @@ pub const Sema = struct {
         const else_node = if_expr.@"else" orelse return Error.Incomplete;
         var @"else" = try self.analyseExprPartial(else_node, scope);
 
-        const result_type = Type.unify(then.type, @"else".type) orelse {
+        const result_type = try Type.unify(self.arena.allocator(), then.type, @"else".type) orelse {
             try self.diagnostics.err(
                 else_node.node.trimmedSpan(),
                 "'if' branches must have the same type: 'then' is '{f}', 'else' is '{f}'",
@@ -1973,8 +2056,8 @@ pub const Sema = struct {
         };
 
         // `if (c) [1, 2] else []`: both branches end up with the type the two together describe
-        coerce(&then, result_type);
-        coerce(&@"else", result_type);
+        try coerce(self.arena.allocator(), &then, result_type);
+        try coerce(self.arena.allocator(), &@"else", result_type);
 
         return .{
             .expr = .{
@@ -2008,7 +2091,7 @@ pub const Sema = struct {
             if (case_result.is_static == false)
                 is_static = false;
 
-            result_type = Type.unify(result_type, case_result.type) orelse blk: {
+            result_type = try Type.unify(self.arena.allocator(), result_type, case_result.type) orelse blk: {
                 try self.diagnostics.err(
                     case_node.node.trimmedSpan(),
                     "switch branches must have the same type: expected '{f}', got '{f}'",
@@ -2132,7 +2215,7 @@ pub const Sema = struct {
             switch (param) {
                 .value => |target| {
                     // the parameter says what an incomplete argument has to be
-                    coerce(result, target);
+                    try coerce(self.arena.allocator(), result, target);
                     try self.requireComplete(node, result);
                     out.* = result.expr;
                 },
@@ -2153,7 +2236,7 @@ pub const Sema = struct {
                             const instance = try self.getLambdaInstance(template, expected.params);
 
                             // TODO: consider if that's enough, or type compare is required too
-                            if (Type.unify(instance.return_type, expected.return_type) == null) {
+                            if (try Type.unify(self.arena.allocator(), instance.return_type, expected.return_type) == null) {
                                 try self.diagnostics.err(
                                     template.template.body.?.node.trimmedSpan(),
                                     "invalid lambda result type for '{s}': expected '{f}', got '{f}'",
@@ -2188,7 +2271,7 @@ pub const Sema = struct {
                 .result => |inner| {
                     const fb_result = try self.analyseExpr(fb_node, scope);
 
-                    result_type = Type.unify(inner.*, fb_result.type) orelse blk: {
+                    result_type = try Type.unify(self.arena.allocator(), inner.*, fb_result.type) orelse blk: {
                         try self.diagnostics.err(
                             fb_node.node.trimmedSpan(),
                             "invalid fallback type for '{s}': expected '{f}', got '{f}'",
@@ -2477,8 +2560,8 @@ pub const Sema = struct {
 
             // Report the mismatch but still record the argument, so it is not
             // additionally reported as "missing".
-            if (Type.unify(value.type, expected)) |unified| {
-                coerce(&value, unified);
+            if (try Type.unify(self.arena.allocator(), value.type, expected)) |unified| {
+                try coerce(self.arena.allocator(), &value, unified);
             } else {
                 try self.diagnostics.err(
                     value_node.node.trimmedSpan(),
