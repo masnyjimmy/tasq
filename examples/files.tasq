@@ -1,0 +1,17 @@
+parse_repo := |line|
+    with(@split(line, ";")) |parts| (
+        @at(parts, 0) fallback @error("missing repo name"),
+        @at(parts, 1) fallback @error("missing repo url"),
+    )
+
+read_repos := |file|
+    with(@read(file) fallback @error("repos.txt not found")) |text|
+        for(@lines(text)) |line|
+            if (line == "") continue
+            else parse_repo(line)
+
+task print_repos {
+    for(read_repos("repos.txt")) |(name, url)| {
+        @print(`name: {name}, url: {url}`)
+    }
+}

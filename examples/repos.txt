@@ -1,0 +1,2 @@
+some_repo_test; https://veryicerepo.com/
+hello; http://hello-repo.com/

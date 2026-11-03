@@ -1,0 +1,144 @@
+[desc: "for + if: filter and transform in one pass"]
+task normalize_ports() {
+    ports := [22, 0, 443, 70000, 8080, -5]
+
+    valid := [
+        for(ports) |p, _|
+            if(p < 1 or p > 65535)
+                continue
+            else
+                p
+    ]
+    @print("valid ports: {{valid}}")
+}
+
+[desc: "for + switch expr: categorize each item by matching the value directly"]
+task categorize_status() {
+    codes := [200, 404, 301, 500, 999]
+
+    labels := [
+        for(codes) |code, _|
+            switch(code) {
+                200 => "ok",
+                404 => "missing",
+                500 => "server_error",
+                else => "unknown",
+            }
+    ]
+    @print("labels: {{labels}}")
+}
+
+[desc: "for + if with noreturn branch: hard-fail on first negative number"]
+task assert_all_positive() {
+    numbers := [3, -2, 9]
+
+    checked := [
+        for(numbers) |n, i|
+            if(n < 0)
+                @error("negative number at index {{i}}: {{n}}")
+            else
+                n
+    ]
+    @print("checked: {{checked}}")
+}
+
+[desc: "for + if with noreturn branch instead of continue: hard-fail on empty name"]
+task build_flags() {
+    names := ["web", "", "cache"]
+
+    flags := [
+        for(names) |name, _|
+            if(@len(name) == 0)
+                @error("empty name not allowed")
+            else
+                "--name=" + name
+    ]
+    @print("flags: {{@join(flags, " ")}}")
+}
+
+[desc: "for producing index-derived output, idx used read-only for display"]
+task numbered_steps() {
+    steps := ["clone repo", "install deps", "run tests", "deploy"]
+
+    lines := [
+        for(steps) |step, i|
+            "{{i + 1}}. {{step}}"
+    ]
+    @print("{{@join(lines, "\n")}}")
+}
+
+[desc: "for + if chain bucketing values, some skipped via continue, one path fatal"]
+task bucket_durations() {
+    durations := [0, 15, 45, 120, 400]
+
+    labeled := [
+        for(durations) |d, _|
+            if(d < 0)
+                @error("negative duration: {{d}}")
+            else if(d == 0)
+                continue
+            else if(d < 60)
+                "fast:{{d}}"
+            else if(d < 300)
+                "medium:{{d}}"
+            else
+                "slow:{{d}}"
+    ]
+    @print("buckets: {{labeled}}")
+}
+
+[desc: "nested for: continue applies to the innermost loop only"]
+task flatten_matching() {
+    groups := [["a.txt", "b.log", "c.txt"], ["d.md", "e.txt"]]
+    ext := ".txt"
+
+    matched := [
+        for(groups) |gr, _|
+            [
+                for(gr) |file, _|
+                    if(@ends_with(file, ext))
+                        file
+                    else
+                        continue
+            ]
+    ]
+    @print("matched groups: {{matched}}")
+}
+
+[desc: "for + switch + break: stop scanning once first failing status code is found"]
+task find_first_invalid() {
+    codes := [200, 200, 404, 200, 500]
+
+    result := [
+        for(codes) |code, _|
+            switch(code) {
+                400 => break,
+                401 => break,
+                403 => break,
+                404 => break,
+                500 => break,
+                else => code,
+            }
+    ]
+    @print("kept before first failure: {{result}}")
+}
+
+[desc: "nested for + break: break only exits the inner loop, outer keeps going"]
+task first_match_per_group() {
+    groups := [[1, 3, 5, 7], [2, 4, 6], [10, 20]]
+    target := 5
+
+    firsts := [
+        for(groups) |gr, _|
+            [
+                for(gr) |n, _|
+                    if(n == target)
+                        n
+                    else if(n > target)
+                        break
+                    else
+                        continue
+            ]
+    ]
+    @print("firsts: {{firsts}}")
+}

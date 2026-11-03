@@ -1,0 +1,194 @@
+// tasq feature tests
+//
+//   tasq test           run everything
+//   tasq test_ranges    run one group
+//   tasq repos          print the sample repo list
+//
+// Every check prints "ok" or aborts the run with "FAIL <label>".
+
+// ---------------------------------------------------------------- data
+
+nums  := [0, 1, 2, 3, 4]
+names := ["ann", "bob", "cy"]
+pairs := [("one", 1), ("two", 2), ("three", 3)]
+text  := "alpha;1\n\nbeta;2\r\ngamma;3\n"
+
+// Static destructuring: evaluated lazily, once, when either name is first used.
+major, minor := (1, 14)
+
+// ---------------------------------------------------------------- helpers
+
+// Both branches unify to void, so it is called as an expression: `(check(...))`.
+check := |label, ok|
+    if (ok) @print(`  ok    {label}`)
+    else @error(`  FAIL  {label}`)
+
+// One lambda, instantiated for different argument types.
+show := |v| `<{v}>`
+
+parse_repo := |line|
+    with(@split(line, ";")) |parts| (
+        @at(parts, 0) fallback @error("missing repo name"),
+        @at(parts, 1) fallback @error("missing repo url"),
+    )
+
+parse_repos := |src|
+    for(@lines(src)) |line|
+        if (line == "") continue
+        else parse_repo(line)
+
+// ---------------------------------------------------------------- tests
+
+[desc: "Range loops: windows, clamping, list generation"]
+task test_ranges {
+    @print("ranges")
+
+    seen := for(nums, 1..3) |n, i| (n, i)
+    (check("list + 1..3 visits two steps", `{seen}` == "[(1, 1), (2, 2)]"))
+
+    indexed := for(names, 0..) |name, i| `{i}:{name}`
+    (check("for(list, 0..) yields indices", `{indexed}` == "[0:ann, 1:bob, 2:cy]"))
+
+    tail := for(names, 1..) |name, i| `{i}:{name}`
+    (check("for(list, 1..) skips the first", `{tail}` == "[1:bob, 2:cy]"))
+
+    clamped := for(names, -5..2) |_, i| i
+    (check("negative start clamps to 0 with a list", `{clamped}` == "[0, 1]"))
+
+    lockstep := for(nums, names) |n, name| `{n}{name}`
+    (check("lists stop at the shortest", `{lockstep}` == "[0ann, 1bob, 2cy]"))
+
+    squares := for(0..5) |i| i * i
+    (check("generate squares", `{squares}` == "[0, 1, 4, 9, 16]"))
+
+    around := for(-2..3) |i| i
+    (check("negatives are kept without a list", `{around}` == "[-2, -1, 0, 1, 2]"))
+
+    ceiled := for(0.5..2.5) |i| i
+    (check("fractional bounds are ceiled", `{ceiled}` == "[1, 2]"))
+
+    same    := for(3..3) |i| i
+    reverse := for(5..2) |i| i
+    (check("start >= end is empty", `{same}{reverse}` == "[][]"))
+
+    unbounded := for(0..) |i| i
+    (check("no finite end runs zero times", `{unbounded}` == "[]"))
+}
+
+[desc: "Slices on lists and strings (never error)"]
+task test_slices {
+    @print("slices")
+
+    (check("nums[1..3]", `{nums[1..3]}` == "[1, 2]"))
+    (check("open end", `{nums[3..]}` == "[3, 4]"))
+    (check("negative start is clamped", `{nums[-2..2]}` == "[0, 1]"))
+    (check("end is clamped", `{nums[2..100]}` == "[2, 3, 4]"))
+    (check("start >= end is empty", `{nums[4..2]}` == "[]"))
+    (check("start past the end is empty", @len(nums[10..]) == 0))
+    (check("slices chain", `{nums[1..][0..2]}` == "[1, 2]"))
+
+    word := "tasq"
+    (check("string slice", word[1..3] == "as"))
+    (check("empty string slice", word[9..] == ""))
+}
+
+[desc: "@at on lists and strings, with fallback"]
+task test_at {
+    @print("@at")
+
+    first := @at(nums, 0) fallback -1
+    last  := @at(nums, 4) fallback -1
+    (check("first and last element", first == 0 and last == 4))
+
+    past := @at(nums, 5) fallback -1
+    neg  := @at(nums, -1) fallback -1
+    (check("out of range uses the fallback", past == -1 and neg == -1))
+
+    up   := @at(nums, 0.2) fallback -1
+    near := @at(names, -0.5) fallback "none"
+    (check("position is ceiled first", up == 1 and near == "ann"))
+
+    (check("character at index", (@at("tasq", 2) fallback "?") == "s"))
+    (check("string out of range", (@at("tasq", 4) fallback "?") == "?"))
+}
+
+[desc: "Tuples: equality, destructuring, captures"]
+task test_tuples {
+    @print("tuples")
+
+    t := ("str", 5, false)
+
+    s, n, enabled := t
+    
+    (check("destructure three elements", s == "str" and n == 5 and not enabled))
+    (check("interpolation", `{t}` == "(str, 5, false)"))
+    (check("equality is element-wise", t == ("str", 5, false)))
+    (check("inequality", ("a", 1) != ("a", 2)))
+
+    tag, (x, y) := ("point", (3, 4))
+    (check("nested pattern", tag == "point" and x + y == 7))
+
+    _, answer := ("skipped", 42)
+    (check("underscore discards an element", answer == 42))
+
+    (check("static destructuring", major * 100 + minor == 114))
+
+    values := for(pairs) |(name, value)| `{name}={value}`
+    (check("pattern capture in for", `{values}` == "[one=1, two=2, three=3]"))
+
+    numbered := for(pairs, 0..) |(name, _), i| `{i}.{name}`
+    (check("pattern mixed with an index", `{numbered}` == "[0.one, 1.two, 2.three]"))
+}
+
+[desc: "@lines and a small parsing pipeline"]
+task test_lines {
+    @print("lines")
+
+    lines := @lines(text)
+    (check("trailing newline adds no line", @len(lines) == 4))
+    (check("CRLF is handled", `{lines}` == "[alpha;1, , beta;2, gamma;3]"))
+    (check("empty text has no lines", @len(@lines("")) == 0))
+
+    repos := parse_repos(text)
+    (check("blank lines are skipped", @len(repos) == 3))
+    (check("lines parse into tuples", `{repos}` == "[(alpha, 1), (beta, 2), (gamma, 3)]"))
+}
+
+[desc: "break and continue in for expressions"]
+task test_loops {
+    @print("loops")
+
+    evens := for(nums) |n| if (n % 2 == 1) continue else n
+    (check("continue skips elements", `{evens}` == "[0, 2, 4]"))
+
+    upto := for(nums) |n| if (n > 2) break else n
+    (check("break keeps the list so far", `{upto}` == "[0, 1, 2]"))
+
+    port := @parse_number("80x") fallback 8080
+    (check("fallback on a failed built-in", port == 8080))
+}
+
+[desc: "Lambdas and list built-ins"]
+task test_lambdas {
+    @print("lambdas")
+
+    total := @reduce(nums, 0, |acc, n| acc + n)
+    (check("@reduce sums the list", total == 10))
+    (check("@all", @all(nums, |n| n >= 0)))
+    (check("@any", @any(nums, |n| n > 3)))
+    (check("@any is false without a match", not @any(nums, |n| n > 9)))
+    (check("one lambda, two types", show(1) == "<1>" and show("a") == "<a>"))
+}
+
+[desc: "Run every feature test"]
+task test [
+    test_ranges(),
+    test_slices(),
+    test_at(),
+    test_tuples(),
+    test_lines(),
+    test_loops(),
+    test_lambdas(),
+] {
+    @print("\nall tests passed")
+}
