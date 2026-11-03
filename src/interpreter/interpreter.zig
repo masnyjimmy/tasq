@@ -310,23 +310,19 @@ fn main(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Stat
                 while (idx < right) : (idx += 1) {
                     defer for_scope.clearSymbols();
                     for (for_stmt.captures, 0..) |capture, j| {
-                        if (values[j]) |value| {
-                            _ = try self.destructure(
-                                ir.Capture,
-                                cwd,
-                                for_scope,
-                                capture.target,
-                                value.list.items[@intCast(idx)],
-                                null,
-                            );
-                        } else {
-                            try for_scope.define(capture, .{
-                                .name = capture.target.exact.name.?,
-                                .value = .{
-                                    .number = @floatFromInt(idx),
-                                },
-                            }, false);
-                        }
+                        const value: Value = if (values[j]) |value|
+                            value.list.items[@intCast(idx)]
+                        else
+                            .{ .number = @floatFromInt(idx) };
+
+                        _ = try self.destructure(
+                            ir.Capture,
+                            cwd,
+                            for_scope,
+                            capture.target,
+                            value,
+                            null,
+                        );
                     }
 
                     self.runBlock(cwd, for_scope, for_stmt.body.statements) catch |err| switch (err) {
@@ -541,6 +537,7 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
                     target.parent,
                     target,
                 ) orelse unreachable,
+                .capture => std.debug.panic("Capture value not resolved? The flip?", .{}),
                 .argument => unreachable, // should be already resolved by runtime builder,
                 else => unreachable, // group and task cannot be used in expression
             };
@@ -598,23 +595,19 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
                 while (idx < right) : (idx += 1) {
                     defer for_scope.clearSymbols();
                     for (for_expr.captures, 0..) |capture, j| {
-                        if (values[j]) |value| {
-                            _ = try self.destructure(
-                                ir.Capture,
-                                cwd,
-                                for_scope,
-                                capture.target,
-                                value.list.items[@intCast(idx)],
-                                null,
-                            );
-                        } else {
-                            try for_scope.define(capture, .{
-                                .name = capture.target.exact.name.?,
-                                .value = .{
-                                    .number = @floatFromInt(idx),
-                                },
-                            }, false);
-                        }
+                        const value: Value = if (values[j]) |value|
+                            value.list.items[@intCast(idx)]
+                        else
+                            .{ .number = @floatFromInt(idx) };
+
+                        _ = try self.destructure(
+                            ir.Capture,
+                            cwd,
+                            for_scope,
+                            capture.target,
+                            value,
+                            null,
+                        );
                     }
 
                     const item = self.evaluateExpr(cwd, for_scope, &for_expr.body) catch |err| switch (err) {
@@ -829,7 +822,7 @@ fn clampRanges(ranges: []const Range) Range {
 }
 
 fn clampRange(a: Range, b: Range) Range {
-    const left = @max(a.left, b.left);
+    var left = @max(a.left, b.left);
 
     const right = if (a.right == null)
         b.right
@@ -837,6 +830,8 @@ fn clampRange(a: Range, b: Range) Range {
         a.right
     else
         @min(a.right.?, b.right.?);
+
+    if (right) |r| left = @min(left, r);
 
     return .{
         .left = left,

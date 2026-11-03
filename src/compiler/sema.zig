@@ -1107,7 +1107,7 @@ pub const Sema = struct {
                 ptr,
                 capture,
                 capture_type,
-                scope,
+                for_scope,
             );
 
             const result = analysed orelse continue;
