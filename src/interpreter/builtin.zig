@@ -24,6 +24,7 @@ const handlers: [functions_count]Handler = .{
     handlePrint,
     handleParseNumber,
     handleExists,
+    handleRead,
     handleLen,
     handleSplit,
     handleJoin,
@@ -61,6 +62,8 @@ pub fn callFunction(
 }
 
 pub fn makeResult(scope: *Scope, result_type: *const Type, value: ?Value) Error!Value {
+    std.debug.assert(result_type.* != .result);
+
     if (value) |v| {
         const ptr = try scope.arena.allocator().create(Value);
         ptr.* = try v.clone(scope.arena.allocator());
@@ -102,6 +105,21 @@ fn handleExists(self: *Interpreter, cwd: std.Io.Dir, _: *Scope, args: []const Va
         false;
 
     return .{ .bool = result };
+}
+
+fn handleRead(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    const RESULT_TYPE = &@unionInit(Type, "string", {});
+
+    const path = args[0].string;
+
+    const content = cwd.readFileAlloc(
+        self.io,
+        path,
+        scope.arena.allocator(),
+        .limited(1024),
+    ) catch return makeResult(scope, RESULT_TYPE, null);
+
+    return makeResult(scope, RESULT_TYPE, .{ .string = content });
 }
 
 fn handleOs(_: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {

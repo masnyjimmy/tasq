@@ -62,6 +62,16 @@ const fs_functions: []const Spec = &.{
         },
         .return_type = .{ .concrete = Type.bool },
     },
+    .{
+        .name = "read",
+        .args = &.{
+            .{
+                .name = "path",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .result = &.{ .concrete = Type.string } },
+    },
 };
 
 const string_functions: []const Spec = &.{
