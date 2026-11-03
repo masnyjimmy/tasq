@@ -115,7 +115,11 @@ pub const Parser = struct {
             .dcolon => .task_call,
             .ident, .lparen => blk: {
                 if (try self.atBinding()) break :blk .binding;
-                if (try self.peek() == .ident) switch (try self.peekAt(1)) {
+
+                // A call needs its '(' (or '::') glued to the name, with no
+                // trivia in between. Otherwise `x` on one line followed by
+                // `(a, b)` on the next would be read as the call `x(a, b)`.
+                if (try self.peek() == .ident) switch (try self.peekAdjacent()) {
                     .lparen, .dcolon => break :blk .task_call,
                     else => {},
                 };
@@ -773,7 +777,10 @@ pub const Parser = struct {
     fn parsePrimary(self: *Parser, follow: FollowSet) Error!void {
         switch (try self.peek()) {
             .true_kw, .false_kw, .number => try self.advanceAs(.literal),
-            .ident => switch (try self.peekAt(1)) {
+            // A lambda call needs its '(' glued to the name. With a newline
+            // (or any trivia) in between, `i` and a following `(check(..))`
+            // are two separate things, not the call `i(check(..))`.
+            .ident => switch (try self.peekAdjacent()) {
                 .lparen => try self.parseLambdaCall(follow),
                 else => try self.advanceAs(.name_ref),
             },
@@ -1003,8 +1010,13 @@ pub const Parser = struct {
     fn parsePath(self: *Parser, follow: FollowSet) Error!void {
         try self.open();
         if (try self.eatAs(.ident, .name_ref)) {
-            if (try self.eat(.dcolon))
+            // '::' must be glued to the group name, same reasoning as calls:
+            // `name` followed by a statement starting with `::task()` on the
+            // next line must not be merged into one path.
+            if (try self.atImmediate(.dcolon)) {
+                try self.advance();
                 try self.expectAs(.ident, .name_ref, follow);
+            }
         } else {
             try self.expect(.dcolon, follow.with(&.{.ident}));
             try self.expectAs(.ident, .name_ref, follow);
@@ -1218,8 +1230,21 @@ pub const Parser = struct {
         return self.cursor.peek();
     }
 
+    /// True when the next token is `token` AND nothing (whitespace, newline,
+    /// comment) separates it from the previous token. Used for postfix forms
+    /// that would otherwise be ambiguous across lines: slices `x[..]`,
+    /// `name::task` paths.
     fn atImmediate(self: *Parser, token: TokenKind) Error!bool {
         return try self.at(token) and self.pending_trivia.items.len == 0;
+    }
+
+    /// Kind of the raw token directly after the next significant token,
+    /// WITHOUT skipping trivia: a space or newline shows up as its own
+    /// (trivia) kind. Use it to decide whether a name is immediately followed
+    /// by '(' or '::', as in `name(...)`, before the name is consumed.
+    fn peekAdjacent(self: *Parser) Error!TokenKind {
+        try self.skipTrivia();
+        return self.cursor.kindAt(self.cursor.pos + 1);
     }
 
     fn peekAt(self: *Parser, offset: usize) Error!TokenKind {
