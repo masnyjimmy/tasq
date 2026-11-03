@@ -362,6 +362,7 @@ pub const Collector = struct {
             .continue_kw,
             .break_kw,
             .fallback_kw,
+            .with_kw,
             => .keyword,
 
             // constants

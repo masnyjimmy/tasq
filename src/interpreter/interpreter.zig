@@ -782,6 +782,35 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
 
             return result.clone(scope.arena.allocator());
         },
+        .with => |with| {
+            const with_scope = try Scope.create(
+                scope,
+                self.allocator,
+                with.scope,
+            );
+            defer with_scope.destroy();
+
+            for (with.subjects, with.captures) |*sub, cap| {
+                const value = try self.evaluateExpr(
+                    cwd,
+                    scope,
+                    sub,
+                );
+
+                _ = try self.destructure(
+                    ir.Capture,
+                    cwd,
+                    with_scope,
+                    cap.target,
+                    value,
+                    null,
+                );
+            }
+
+            const result = try self.evaluateExpr(cwd, with_scope, &with.expr);
+
+            return try result.clone(scope.arena.allocator());
+        },
         .@"continue" => Error.Continue,
         .@"break" => Error.Break,
         .unknown => unreachable,

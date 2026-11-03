@@ -2052,6 +2052,22 @@ pub const Sema = struct {
                     .type = result_type,
                 };
             },
+            .with => |with_expr| {
+                const result = try self.analyseWithExpr(
+                    with_expr,
+                    scope,
+                );
+
+                const ptr = try self.create(ir.WithExpr, result.expr);
+
+                return .{
+                    .expr = .{
+                        .with = ptr,
+                    },
+                    .type = result.type,
+                    .is_static = result.is_static,
+                };
+            },
             inline .@"continue", .@"break" => |token, tag| {
                 if (self.loop_depth == 0) {
                     try self.diagnostics.err(
@@ -2067,6 +2083,70 @@ pub const Sema = struct {
                     .is_static = true,
                 };
             },
+        };
+    }
+
+    fn analyseWithExpr(self: *Sema, with_expr: ast.WithExpr, scope: *Scope) Error!ExprResult(ir.WithExpr) {
+        const allocator = self.arena.allocator();
+
+        const in_subjects = try with_expr.subjects.collect(allocator);
+        const in_captures = try with_expr.captures.collect(allocator);
+
+        if (in_subjects.len != in_captures.len) {
+            try self.diagnostics.err(
+                with_expr.node.trimmedSpan(),
+                "'with' needs exacly one capture per subject: got {} capture(s) for {} subject(s)",
+                .{ in_captures.len, in_subjects.len },
+            );
+        }
+        const valid_pairs_count = @min(in_subjects.len, in_captures.len);
+
+        var subjects = try allocator.alloc(ir.Expr, valid_pairs_count);
+        var captures = try allocator.alloc(ir.Capture, valid_pairs_count);
+
+        var is_static = true;
+
+        const with_scope = try self.createScope(scope, with_expr.node);
+
+        for (in_subjects[0..valid_pairs_count], in_captures[0..valid_pairs_count], 0..) |sub, cap, idx| {
+            const capture: ast.Target = cap.unwrap() orelse continue;
+            const subject = sub.unwrap() orelse continue;
+
+            const result = try self.analyseExprPartial(subject, scope);
+
+            captures[idx] = .{
+                .target = try self.destructureType(
+                    ir.Capture,
+                    "capture",
+                    &captures[idx],
+                    capture,
+                    result.type,
+                    with_scope,
+                ),
+                .type = result.type,
+            };
+
+            if (result.is_static == false)
+                is_static = false;
+
+            subjects[idx] = result.expr;
+        }
+
+        const result = try self.analyseExprPartial(
+            with_expr.expr orelse return Error.Incomplete,
+            with_scope,
+        );
+
+        return .{
+            .expr = .{
+                .scope = with_scope,
+                .subjects = subjects,
+                .captures = captures,
+                .expr = result.expr,
+                .type = result.type,
+            },
+            .type = result.type,
+            .is_static = is_static,
         };
     }
 

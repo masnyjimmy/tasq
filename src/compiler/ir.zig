@@ -232,9 +232,18 @@ pub const Expr = union(enum) {
     lambda_call: *LambdaCall,
     process: *ProcessExpr,
     slice: *SliceExpr,
+    with: *WithExpr,
     @"continue",
     @"break",
     unknown, // poison
+};
+
+pub const WithExpr = struct {
+    scope: *Scope,
+    subjects: []const Expr,
+    captures: []const Capture,
+    expr: Expr,
+    type: Type,
 };
 
 pub const TupleExpr = struct {

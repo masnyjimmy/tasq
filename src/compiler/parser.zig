@@ -811,12 +811,35 @@ pub const Parser = struct {
             .if_kw => try self.parseIfExpr(follow),
             .continue_kw => try self.advanceAs(.@"continue"),
             .break_kw => try self.advanceAs(.@"break"),
+            .with_kw => try self.parseWithExpr(follow),
             else => |tag| try self.unexpectedNode(
                 follow,
                 "expected an expression, found '{t}'",
                 .{tag},
             ),
         }
+    }
+
+    fn parseWithExpr(self: *Parser, follow: FollowSet) Error!void {
+        try self.open();
+
+        try self.expect(.with_kw, follow);
+
+        try self.open();
+        try self.parseSequence(
+            .lparen,
+            .rparen,
+            .comma,
+            follow,
+            parseExpr,
+        );
+        try self.close(.subjects);
+
+        try self.parseCaptures(follow);
+
+        try self.parseExpr(follow);
+
+        try self.close(.with);
     }
 
     fn parseRange(self: *Parser, follow: FollowSet) Error!void {

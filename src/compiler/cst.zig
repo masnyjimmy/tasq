@@ -72,6 +72,8 @@ pub const NodeKind = enum {
     name,
     path,
 
+    with,
+
     error_tree,
 };
 

@@ -271,7 +271,8 @@ pub const Expr = struct {
         .binary_expr, .unary_expr,  .builtin_call,
         .@"if",       .@"for",      .@"switch",
         .lambda,      .lambda_call, .process_expr,
-        .slice,       .@"continue", .@"break",
+        .slice,       .with,        .@"continue",
+        .@"break",
     };
 
     node: *const cst.Node,
@@ -295,6 +296,7 @@ pub const Expr = struct {
         slice: SliceExpr,
         @"continue": cst.Token,
         @"break": cst.Token,
+        with: WithExpr,
     };
 
     pub fn from(node: *const cst.Node) Expr {
@@ -321,7 +323,30 @@ pub const Expr = struct {
             .slice => .{ .slice = .from(self.node) },
             .@"continue" => .{ .@"continue" = self.node.childToken(.continue_kw) orelse unreachable },
             .@"break" => .{ .@"break" = self.node.childToken(.break_kw) orelse unreachable },
+            .with => .{ .with = .from(self.node) },
             else => unreachable,
+        };
+    }
+};
+
+pub const WithExpr = struct {
+    node: *const cst.Node,
+    subjects: Subjects,
+    captures: Captures,
+    expr: ?Expr,
+
+    pub fn from(node: *const cst.Node) WithExpr {
+        var it = node.iter();
+
+        const subjects = expectNode(&it, Subjects, .subjects) orelse unreachable;
+        const captures = expectNode(&it, Captures, .captures) orelse unreachable;
+        const expr = expectAnyNode(&it, Expr, Expr.KINDS);
+
+        return .{
+            .node = node,
+            .subjects = subjects,
+            .captures = captures,
+            .expr = expr,
         };
     }
 };

@@ -28,6 +28,7 @@ const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "continue", .continue_kw },
     .{ "break", .break_kw },
     .{ "fallback", .fallback_kw },
+    .{ "with", .with_kw },
 });
 
 // ── Lexer ─────────────────────────────────────────────────────────────────────
