@@ -137,7 +137,7 @@ pub const ProcessStmt = struct {
 };
 
 pub const Capture = struct {
-    name: []const u8,
+    target: Target(Capture),
     type: Type,
 };
 
@@ -172,12 +172,24 @@ pub const IfStmt = struct {
 };
 
 pub const Decl = struct {
-    name: ?[]const u8,
+    targets: Target(Decl),
     value: Expr,
     type: Type,
     scope: *Scope,
     is_static: bool, // inferred by sema
 };
+
+pub fn Target(comptime T: type) type {
+    return union(enum) {
+        pub const Leaf = struct {
+            parent: *T,
+            name: ?[]const u8,
+            type: Type,
+        };
+        exact: *Leaf,
+        destructure: []const @This(),
+    };
+}
 
 pub const TaskCall = struct {
     pub const Arg = union(enum) {

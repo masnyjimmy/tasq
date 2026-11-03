@@ -9,7 +9,8 @@ const Token = @import("Token.zig");
 const TokenKind = Token.Kind;
 
 const SET_DECL_START: FollowSet = .set(&.{.ident});
-const DECL_START: FollowSet = .set(&.{ .ident, .set_kw, .task_kw, .group_kw });
+const DECL_START: FollowSet = .set(&.{ .ident, .lparen, .set_kw, .task_kw, .group_kw });
+const TARGET_START: FollowSet = .set(&.{ .ident, .lparen });
 const ATTR_START: FollowSet = .set(&.{.ident});
 const META_START: FollowSet = .set(&.{
     .null_kw, .false_kw,   .true_kw, .number,
@@ -65,16 +66,12 @@ pub const Parser = struct {
     pub fn parseFile(self: *Parser) Error!*cst.Node {
         try self.open();
 
-        // DECL_START is threaded as the follow set through every
-        // declaration-level call below. Containment (no skip loop can
-        // cross a close) plus this follow set is enough on its own — no
-        // global push/pop stack needed anymore.
         while (!try self.atHardStop()) {
             try self.parseAttributes(DECL_START);
 
             switch (try self.peek()) {
                 .set_kw => try self.parseSet(DECL_START),
-                .ident => try self.parseBinding(DECL_START, false),
+                .ident, .lparen => try self.parseBinding(DECL_START),
                 .task_kw => try self.parseTask(DECL_START),
                 .group_kw => try self.parseGroup(DECL_START),
                 else => |tag| try self.unexpectedNode(
@@ -85,6 +82,47 @@ pub const Parser = struct {
             }
         }
         return self.finish(.source_file);
+    }
+
+    fn atBinding(self: *Parser) Error!bool {
+        try self.skipTrivia();
+        const cursor = self.cursor;
+        var pos = cursor.pos;
+
+        while (true) {
+            switch (cursor.kindAt(pos)) {
+                .ident => pos += 1,
+                .lparen => pos = cursor.afterGroup(pos),
+                else => return false,
+            }
+            pos = cursor.skipTriviaAt(pos);
+
+            switch (cursor.kindAt(pos)) {
+                .comma => pos = cursor.skipTriviaAt(pos + 1),
+                .colon_eq => return true,
+                else => return false,
+            }
+        }
+    }
+
+    const StmtKind = enum { binding, task_call, process, @"if", @"switch", @"for", expr };
+    fn classifyStmt(self: *Parser) Error!StmtKind {
+        return switch (try self.peek()) {
+            .dollar => .process,
+            .if_kw => .@"if",
+            .switch_kw => .@"switch",
+            .for_kw => .@"for",
+            .dcolon => .task_call,
+            .ident, .lparen => blk: {
+                if (try self.atBinding()) break :blk .binding;
+                if (try self.peek() == .ident) switch (try self.peekAt(1)) {
+                    .lparen, .dcolon => break :blk .task_call,
+                    else => {},
+                };
+                break :blk .expr;
+            },
+            else => .expr,
+        };
     }
 
     fn parseAttributes(self: *Parser, follow: FollowSet) Error!void {
@@ -178,14 +216,14 @@ pub const Parser = struct {
     fn parseGroupBody(self: *Parser, follow: FollowSet) Error!void {
         try self.open();
 
-        const decl_start = comptime FollowSet.set(&.{ .ident, .task_kw });
+        const decl_start = comptime FollowSet.set(&.{ .ident, .lparen, .task_kw });
         try self.expect(.lbrace, follow.withSet(decl_start));
 
         while (!try self.atHardStop()) {
-            try self.parseAttributes(follow.with(&.{ .ident, .task_kw }));
+            try self.parseAttributes(follow.withSet(decl_start));
 
             switch (try self.peek()) {
-                .ident => try self.parseBinding(decl_start, false),
+                .ident, .lparen => try self.parseBinding(decl_start),
                 .task_kw => try self.parseTask(decl_start),
                 else => |tag| try self.unexpectedNode(
                     decl_start,
@@ -199,19 +237,45 @@ pub const Parser = struct {
         try self.close(.group_body);
     }
 
-    fn parseBinding(self: *Parser, follow: FollowSet, comptime allow_discard: bool) Error!void {
+    fn parseBinding(self: *Parser, follow: FollowSet) Error!void {
         try self.precedeTarget(.attributes);
 
-        if (!allow_discard or try self.eat(.underscore) == false)
-            try self.expectAs(
-                .ident,
-                .name,
-                follow.with(&.{.colon_eq}),
-            );
+        try self.parseBindingTarget(follow);
         try self.expect(.colon_eq, follow.withSet(EXPR_START));
         try self.parseExpr(follow);
 
         try self.close(.binding);
+    }
+
+    fn parseBindingTarget(self: *Parser, follow: FollowSet) Error!void {
+        const inner = follow.with(&.{ .comma, .colon_eq });
+
+        try self.parseTarget(inner);
+
+        if (try self.at(.comma)) {
+            try self.precedeLast();
+            while (try self.eat(.comma))
+                try self.parseTarget(inner);
+            try self.close(.target);
+        }
+    }
+
+    fn parseTarget(self: *Parser, follow: FollowSet) Error!void {
+        try self.open();
+
+        if (try self.at(.lparen)) {
+            try self.parseSequence(
+                .lparen,
+                .rparen,
+                .comma,
+                follow.withSet(TARGET_START),
+                parseTarget,
+            );
+        } else {
+            try self.expectAs(.ident, .name, follow);
+        }
+
+        try self.close(.target);
     }
 
     fn parseSet(self: *Parser, follow: FollowSet) Error!void {
@@ -364,37 +428,48 @@ pub const Parser = struct {
     }
 
     fn parseStatement(self: *Parser, follow: FollowSet) Error!void {
-        switch (try self.peek()) {
-            .underscore, .ident => switch (try self.peekAt(1)) {
-                .colon_eq => try self.parseBinding(follow, true),
-                .dcolon, .lparen => try self.parseTaskCall(follow),
-                else => {
-                    try self.open();
-                    try self.parseExpr(follow);
-                    try self.close(.expr_stmt);
-                },
-            },
-            .dollar => try self.parseProcess(follow, .stmt),
-            .if_kw => try self.parseIfStmt(follow),
-            .switch_kw => try self.parseSwitch(.stmt, follow),
-            .for_kw => try self.parseFor(.stmt, follow),
-            .dcolon => {
-                try self.open();
-
-                {
-                    try self.open();
-                    try self.expect(.dcolon, follow.with(&.{ .ident, .lparen }));
-                    try self.expectAs(.ident, .name_ref, follow.with(&.{.lparen}));
-                    try self.close(.path);
-                }
-                try self.parseTaskCallArgs(follow);
-                try self.close(.task_call);
-            },
-            else => {
+        switch (try self.classifyStmt()) {
+            .binding => try self.parseBinding(follow),
+            .task_call => try self.parseTaskCall(follow),
+            .process => try self.parseProcess(follow, .stmt),
+            .@"if" => try self.parseIfStmt(follow),
+            .@"switch" => try self.parseSwitch(.stmt, follow),
+            .@"for" => try self.parseFor(.stmt, follow),
+            .expr => {
                 try self.open();
                 try self.parseExpr(follow);
                 try self.close(.expr_stmt);
             },
+            // .underscore, .ident => switch (try self.peekAt(1)) {
+            //     .colon_eq => try self.parseBinding(follow, true),
+            //     .dcolon, .lparen => try self.parseTaskCall(follow),
+            //     else => {
+            //         try self.open();
+            //         try self.parseExpr(follow);
+            //         try self.close(.expr_stmt);
+            //     },
+            // },
+            // .dollar => try self.parseProcess(follow, .stmt),
+            // .if_kw => try self.parseIfStmt(follow),
+            // .switch_kw => try self.parseSwitch(.stmt, follow),
+            // .for_kw => try self.parseFor(.stmt, follow),
+            // .dcolon => {
+            //     try self.open();
+
+            //     {
+            //         try self.open();
+            //         try self.expect(.dcolon, follow.with(&.{ .ident, .lparen }));
+            //         try self.expectAs(.ident, .name_ref, follow.with(&.{.lparen}));
+            //         try self.close(.path);
+            //     }
+            //     try self.parseTaskCallArgs(follow);
+            //     try self.close(.task_call);
+            // },
+            // else => {
+            //     try self.open();
+            //     try self.parseExpr(follow);
+            //     try self.close(.expr_stmt);
+            // },
         }
     }
 
@@ -590,19 +665,17 @@ pub const Parser = struct {
     fn parseCaptures(self: *Parser, follow: FollowSet) Error!void {
         try self.open();
 
-        const inner = follow.with(&.{ .comma, .pipe, .ident });
+        const inner = follow.withSet(TARGET_START).with(&.{ .comma, .pipe });
 
         try self.expect(.pipe, inner);
 
         while (!try self.at(.pipe) and !try self.atHardStop()) {
             const before = self.cursor.pos;
 
-            if (try self.eat(.underscore) == false) {
-                try self.expectAs(.ident, .name, inner);
-            }
+            try self.parseTarget(inner);
 
             if (try self.eat(.comma)) continue;
-            if (try self.at(.pipe) or try self.atHardStop()) break; // fixed: was eat(.pipe), double-consumed the closer
+            if (try self.at(.pipe) or try self.atHardStop()) break;
 
             try self.expect(.comma, inner);
             if (self.cursor.pos == before) break;

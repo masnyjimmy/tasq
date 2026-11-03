@@ -220,7 +220,7 @@ pub fn runBlock(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, statements: 
 fn main(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statement) Error!void {
     switch (stmt.*) {
         .decl => |decl| {
-            _ = try self.handleDecl(cwd, scope, decl);
+            _ = try self.handleDecl(cwd, scope, decl, null);
         },
         .process => |proc_expr| {
             const process = try self.resolveString(cwd, scope, proc_expr.command);
@@ -311,13 +311,17 @@ fn main(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Stat
                     defer for_scope.clearSymbols();
                     for (for_stmt.captures, 0..) |capture, j| {
                         if (values[j]) |value| {
-                            try for_scope.define(capture, .{
-                                .name = capture.name,
-                                .value = value.list.items[@intCast(idx)],
-                            }, false);
+                            _ = try self.destructure(
+                                ir.Capture,
+                                cwd,
+                                for_scope,
+                                capture.target,
+                                value.list.items[@intCast(idx)],
+                                null,
+                            );
                         } else {
                             try for_scope.define(capture, .{
-                                .name = capture.name,
+                                .name = capture.target.exact.name.?,
                                 .value = .{
                                     .number = @floatFromInt(idx),
                                 },
@@ -361,19 +365,62 @@ fn handleTaskCall(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, task_call:
     try self.runTask(scope, task, values, task_call.same_group);
 }
 
-fn handleDecl(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, decl: *const ir.Decl) Error!Value {
+fn handleDecl(
+    self: *Interpreter,
+    cwd: std.Io.Dir,
+    scope: *Scope,
+    decl: *const ir.Decl,
+    needed: ?*ir.Target(ir.Decl).Leaf,
+) Error!?Value {
     const decl_scope = scope.findByStatic(decl.scope) orelse unreachable;
 
     const value = try self.evaluateExpr(cwd, decl_scope, &decl.value);
 
-    if (decl.name) |name| {
-        try decl_scope.define(decl, .{
-            .name = name,
-            .value = value,
-        }, false);
-    }
+    return try self.destructure(
+        ir.Decl,
+        cwd,
+        scope,
+        decl.targets,
+        value,
+        needed,
+    );
+}
 
-    return value;
+pub fn destructure(
+    self: *Interpreter,
+    comptime T: type,
+    cwd: std.Io.Dir,
+    scope: *Scope,
+    targets: ir.Target(T),
+    value: Value,
+    needed: ?*ir.Target(T).Leaf,
+) Error!?Value {
+    switch (targets) {
+        .exact => |target| {
+            if (target.name) |name| {
+                try scope.define(target, .{
+                    .name = name,
+                    .value = value,
+                }, false);
+            }
+
+            if (target == needed)
+                return value;
+
+            return null;
+        },
+        .destructure => |ts| {
+            const values = value.tuple.elements;
+            var needed_value: ?Value = null;
+
+            for (ts, values) |t, v| {
+                if (try self.destructure(T, cwd, scope, t, v, needed)) |ev|
+                    needed_value = ev;
+            }
+
+            return needed_value;
+        },
+    }
 }
 
 const ProcessOptions = struct {
@@ -488,7 +535,12 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
             }
             // resolve if not already (lazy resolution)
             return switch (id.symbol.origin) {
-                .binding => |decl| try self.handleDecl(cwd, scope, decl),
+                .decl => |target| try self.handleDecl(
+                    cwd,
+                    scope,
+                    target.parent,
+                    target,
+                ) orelse unreachable,
                 .argument => unreachable, // should be already resolved by runtime builder,
                 else => unreachable, // group and task cannot be used in expression
             };
@@ -547,13 +599,17 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
                     defer for_scope.clearSymbols();
                     for (for_expr.captures, 0..) |capture, j| {
                         if (values[j]) |value| {
-                            try for_scope.define(capture, .{
-                                .name = capture.name,
-                                .value = value.list.items[@intCast(idx)],
-                            }, false);
+                            _ = try self.destructure(
+                                ir.Capture,
+                                cwd,
+                                for_scope,
+                                capture.target,
+                                value.list.items[@intCast(idx)],
+                                null,
+                            );
                         } else {
                             try for_scope.define(capture, .{
-                                .name = capture.name,
+                                .name = capture.target.exact.name.?,
                                 .value = .{
                                     .number = @floatFromInt(idx),
                                 },
@@ -646,13 +702,13 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
             for (lambda_call.args, lambda.params) |*arg, *param| {
                 const value = try self.evaluateExpr(cwd, scope, arg);
 
-                try frame.define(
-                    param,
-                    .{
-                        .name = param.name,
-                        .value = value,
-                    },
-                    false,
+                _ = try self.destructure(
+                    ir.Capture,
+                    cwd,
+                    frame,
+                    param.target,
+                    value,
+                    null,
                 );
             }
 

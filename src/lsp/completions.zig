@@ -439,17 +439,15 @@ pub fn getSymbolsCompletions(allocator: std.mem.Allocator, scope: *const Scope, 
             const item: Completion = .{
                 .label = symbol.name,
                 .kind = switch (symbol.origin) {
-                    .argument, .capture, .binding => .Variable,
+                    .argument, .capture, .decl => .Variable,
                     .group => .Module,
                     .task => .Function,
                 },
                 .new_text = symbol.name,
-                .detail = switch (symbol.origin) {
-                    .argument => |arg| try std.fmt.allocPrint(allocator, "{f}", .{arg.type.typeOf()}),
-                    .binding => |binding| try std.fmt.allocPrint(allocator, "{f}", .{binding.type}),
-                    .capture => |capture| try std.fmt.allocPrint(allocator, "{f}", .{capture.type}),
-                    else => null,
-                },
+                .detail = if (symbol.origin.valueType()) |typeOf|
+                    try allocator.print("{f}", .{typeOf})
+                else
+                    null,
                 .snippet = switch (symbol.origin) {
                     .group => |group| try std.fmt.allocPrint(allocator, "{s}::${{1}}", .{group.name.?}),
                     else => null,

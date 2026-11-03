@@ -330,7 +330,7 @@ pub const Collector = struct {
 
                             const tt: TokenType = switch (symbol.origin) {
                                 .argument, .capture => .parameter,
-                                .binding => .variable,
+                                .decl => .variable,
                                 else => unreachable,
                             };
 

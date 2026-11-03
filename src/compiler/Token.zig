@@ -68,7 +68,6 @@ pub const Kind = enum {
     gt_eq, // >=
     pipe, // |
     at, // @
-    underscore, // _
     dollar, // $
     percent, // %
 

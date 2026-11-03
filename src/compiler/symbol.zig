@@ -5,35 +5,35 @@ const Diagnostics = @import("Diagnostics.zig");
 const Span = @import("Span.zig");
 const @"type" = @import("type.zig");
 
-pub const Origin = union(enum) {
-    capture: *ir.Capture,
-    binding: *ir.Decl,
-    argument: *ir.Argument,
-    task: *ir.Task,
-    group: *ir.Group,
-
-    pub fn valueType(self: *const Origin) ?@"type".Type {
-        return switch (self.*) {
-            .capture => |c| c.type,
-            .binding => |b| b.type,
-            .argument => |a| a.type.typeOf(),
-            else => null,
-        };
-    }
-
-    pub fn assertValueType(self: *const Origin) @"type".Type {
-        return self.valueType() orelse unreachable;
-    }
-    pub const Identity = *const anyopaque;
-
-    pub fn identity(self: *const Origin) Identity {
-        return switch (self.*) {
-            inline else => |ptr| ptr,
-        };
-    }
-};
-
 pub const Symbol = struct {
+    pub const Origin = union(enum) {
+        decl: *ir.Target(ir.Decl).Leaf,
+        capture: *ir.Target(ir.Capture).Leaf,
+        argument: *ir.Argument,
+        task: *ir.Task,
+        group: *ir.Group,
+
+        pub fn valueType(self: *const Origin) ?@"type".Type {
+            return switch (self.*) {
+                .decl => |t| t.type,
+                .capture => |c| c.type,
+                .argument => |a| a.type.typeOf(),
+                else => null,
+            };
+        }
+
+        pub fn assertValueType(self: *const Origin) @"type".Type {
+            return self.valueType() orelse unreachable;
+        }
+        pub const Identity = *const anyopaque;
+
+        pub fn identity(self: *const Origin) Identity {
+            return switch (self.*) {
+                inline else => |ptr| ptr,
+            };
+        }
+    };
+
     name: []const u8,
     span: Span,
     origin: Origin,
@@ -46,7 +46,7 @@ pub const Symbol = struct {
 
     pub fn typeOf(self: *const Symbol) Type {
         return switch (self.origin) {
-            .capture, .binding, .argument => .variable,
+            .decl, .capture, .argument => .variable,
             .task => .task,
             .group => .group,
         };

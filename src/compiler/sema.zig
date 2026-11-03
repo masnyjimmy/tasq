@@ -810,43 +810,108 @@ pub const Sema = struct {
             );
         }
 
-        const name: ?[]const u8 = blk: {
-            const name = binding.name.string() orelse return Error.Incomplete;
-            if (std.mem.eql(u8, name, "_")) {
-                break :blk null;
-            }
-
-            break :blk name;
-        };
-
-        const value_node = binding.value orelse return Error.Incomplete;
-
         // `analyseExpr` is the strict entry point: a value whose type is only partly known
         // (`list := []`) cannot be bound, there is nothing to give it its element type
-        var value = try self.analyseExpr(value_node, scope);
+        var value = try self.analyseExpr(
+            binding.value orelse return Error.Incomplete,
+            scope,
+        );
 
         // the binding is still defined (with an `unknown` type), so its uses do not cascade
-        _ = try self.rejectNoreturn(value_node, &value, "the value of a binding", .{});
+        _ = try self.rejectNoreturn(binding.value.?, &value, "the value of a binding", .{});
 
         const ptr = try self.create(ir.Decl, .{
-            .name = name,
+            .targets = undefined,
             .value = value.expr,
             .type = value.type,
             .scope = scope,
             .is_static = value.is_static,
         });
 
-        if (name) |n| {
-            try self.defineSymbol(scope, .{
-                .name = n,
-                .span = binding.node.trimmedSpan(),
-                .origin = .{
-                    .binding = ptr,
-                },
-            });
-        }
+        ptr.targets = try self.destructureType(
+            ir.Decl,
+            "decl",
+            ptr,
+            binding.target,
+            value.type,
+            scope,
+        );
 
         return ptr;
+    }
+
+    fn destructureType(
+        self: *Sema,
+        comptime T: type,
+        comptime symbol_type: []const u8,
+        parent: *T,
+        target: ast.Target,
+        t: Type,
+        scope: *Scope,
+    ) Error!ir.Target(T) {
+        switch (target.classify()) {
+            .name => |name| {
+                const ident_text = name.string().?;
+
+                const ident_name = if (std.mem.eql(u8, ident_text, "_"))
+                    null
+                else
+                    ident_text;
+
+                const ptr = try self.create(ir.Target(T).Leaf, .{
+                    .parent = parent,
+                    .name = ident_name,
+                    .type = t,
+                });
+
+                if (ident_name) |symbol_name| {
+                    try self.defineSymbol(scope, .{
+                        .name = symbol_name,
+                        .span = target.node.span,
+                        .origin = @unionInit(
+                            Symbol.Origin,
+                            symbol_type,
+                            ptr,
+                        ),
+                    });
+                }
+
+                return .{ .exact = ptr };
+            },
+            .targets => |targets| {
+                if (t != .tuple) {
+                    try self.diagnostics.err(
+                        targets.node.span,
+                        "'{f}' cannot be destructured",
+                        .{t},
+                    );
+                }
+                const targets_count = targets.count();
+
+                const result = try self.arena.allocator().alloc(ir.Target(T), targets_count);
+                var it = targets.iter();
+
+                for (result, 0..) |*out, idx| {
+                    const sub = it.next().?.unwrap() orelse continue;
+
+                    const sub_type: Type = switch (t) {
+                        .tuple => |tuple| tuple[idx],
+                        else => .unknown,
+                    };
+
+                    out.* = try self.destructureType(
+                        T,
+                        symbol_type,
+                        parent,
+                        sub,
+                        sub_type,
+                        scope,
+                    );
+                }
+
+                return .{ .destructure = result };
+            },
+        }
     }
 
     fn analyseStatements(self: *Sema, stmts: ast.Statements, scope: *Scope) Error![]ir.Statement {
@@ -1022,8 +1087,7 @@ pub const Sema = struct {
         const for_scope = try self.createScope(scope, for_node.node);
 
         for (in_subjects[0..valid_pairs_count], in_captures[0..valid_pairs_count]) |s, c| {
-            const capture = c.unwrap() orelse continue;
-            const capture_name = capture.string() orelse continue;
+            const capture: ast.Target = c.unwrap() orelse continue;
 
             const analysed: ?ForSubjectResult = if (s.unwrap()) |subject|
                 try self.analyseForSubject(subject, scope)
@@ -1033,17 +1097,18 @@ pub const Sema = struct {
             const capture_type: Type = if (analysed) |a| a.type else .unknown;
 
             const ptr = try self.create(ir.Capture, .{
-                .name = capture_name,
+                .target = undefined,
                 .type = capture_type,
             });
 
-            try self.defineSymbol(for_scope, .{
-                .name = capture_name,
-                .span = capture.node.trimmedSpan(),
-                .origin = .{
-                    .capture = ptr,
-                },
-            });
+            ptr.target = try self.destructureType(
+                ir.Capture,
+                "capture",
+                ptr,
+                capture,
+                capture_type,
+                scope,
+            );
 
             const result = analysed orelse continue;
 
@@ -1234,16 +1299,20 @@ pub const Sema = struct {
         for (types, captures) |arg, *out| {
             const r_param = it.next() orelse unreachable; // should be checked already
             const param = r_param.unwrap() orelse continue;
+
             out.* = .{
-                .name = param.string().?,
+                .target = undefined,
                 .type = arg,
             };
 
-            try lambda_scope.define(self.arena.allocator(), .{
-                .name = out.name,
-                .span = template.template.node.trimmedSpan(),
-                .origin = .{ .capture = out },
-            });
+            out.target = try self.destructureType(
+                ir.Capture,
+                "capture",
+                out,
+                param,
+                arg,
+                lambda_scope,
+            );
         }
 
         const body = try self.analyseExpr(
@@ -1726,23 +1795,21 @@ pub const Sema = struct {
 
                 while (it.next()) |r_param| switch (r_param) {
                     .value => |param| {
-                        const param_name = param.string() orelse continue;
-
                         const capture = try self.create(
                             ir.Capture,
                             .{
-                                .name = param_name,
+                                .target = undefined,
                                 .type = .unknown,
                             },
                         );
 
-                        try self.defineSymbol(
+                        capture.target = try self.destructureType(
+                            ir.Capture,
+                            "capture",
+                            capture,
+                            param,
+                            .unknown,
                             template_scope,
-                            .{
-                                .name = param_name,
-                                .span = param.node.trimmedSpan(),
-                                .origin = .{ .capture = capture },
-                            },
                         );
                     },
                     else => continue,

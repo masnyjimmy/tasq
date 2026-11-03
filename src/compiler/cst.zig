@@ -26,6 +26,8 @@ pub const NodeKind = enum {
     process_expr,
 
     binding,
+    target,
+
     task_call,
     task_call_args,
     task_call_arg,

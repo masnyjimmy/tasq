@@ -652,7 +652,7 @@ pub const ForSubjects = AnyKindIterable(.strict, ForSubject, ForSubject.KINDS);
 
 pub const Subjects = AnyKindIterable(.strict, Expr, Expr.KINDS);
 
-pub const Captures = KindIterable(.strict, Name, .name);
+pub const Captures = KindIterable(.strict, Target, .target);
 
 //============================================================
 // declarations — binding, task, group members
@@ -730,21 +730,44 @@ pub const SetDecl = struct {
 pub const BindingDecl = struct {
     node: *const cst.Node,
     attributes: ?Attributes,
-    name: Name,
+    target: Target,
     value: ?Expr,
 
     pub fn from(node: *const cst.Node) BindingDecl {
         var it = node.iter();
         const attributes = eatNode(&it, Attributes, .attributes);
-        const name = expectNode(&it, Name, .name) orelse unreachable;
+        const target = expectNode(&it, Target, .target) orelse unreachable;
         const value = expectAnyNode(&it, Expr, Expr.KINDS);
 
         return .{
             .node = node,
             .attributes = attributes,
-            .name = name,
+            .target = target,
             .value = value,
         };
+    }
+};
+
+pub const Target = struct {
+    node: *const cst.Node,
+
+    pub const Kind = union(enum) {
+        name: Name,
+        targets: KindIterable(.strict, Target, .target),
+    };
+
+    pub fn from(node: *const cst.Node) Target {
+        return .{ .node = node };
+    }
+
+    pub fn classify(self: *const Target) Kind {
+        var it = self.node.iter();
+
+        if (eatNode(&it, Name, .name)) |name| {
+            return .{ .name = name };
+        }
+
+        return .{ .targets = .from(self.node) };
     }
 };
 

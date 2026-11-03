@@ -42,6 +42,29 @@ pub const Cursor = struct {
         }
     }
 
+    pub fn afterGroup(self: *Cursor, pos: usize) usize {
+        std.debug.assert(self.events[pos] == .open);
+        var d: usize = 0;
+        var i = pos;
+        while (i < self.events.len) : (i += 1) {
+            switch (self.events[i]) {
+                .open => d += 1,
+                .close => {
+                    d -= 1;
+                    if (d == 0) return i + 1;
+                },
+                .token => {},
+            }
+        }
+        return i;
+    }
+
+    pub fn skipTriviaAt(self: *Cursor, pos: usize) usize {
+        var p = pos;
+        while (self.kindAt(p).isTrivia()) p += 1;
+        return p;
+    }
+
     pub fn atEnd(self: *Cursor) bool {
         return self.peek() == .eof;
     }
@@ -121,6 +144,7 @@ pub const TreeReader = struct {
         const Open = struct {
             delim: Delim,
             token: Token,
+            close_idx: usize,
         };
         const Close = struct {
             delim: Delim,
@@ -180,10 +204,13 @@ pub const TreeReader = struct {
 
         try self.events.append(
             allocator,
-            .{ .open = .{
-                .token = open,
-                .delim = delim,
-            } },
+            .{
+                .open = .{
+                    .token = open,
+                    .delim = delim,
+                    .close_idx = undefined,
+                },
+            },
         );
 
         try self.unclosed_indices.append(allocator, idx);
@@ -202,11 +229,15 @@ pub const TreeReader = struct {
 
         const idx = self.unclosed_indices.pop() orelse unreachable;
 
+        const close_idx = self.events.items.len;
+
         try self.events.append(allocator, .{ .close = .{
             .delim = unclosed.delim,
             .token = token,
             .open_idx = idx,
         } });
+
+        self.events.items[idx].open.close_idx = close_idx;
     }
 
     fn currentUnclosed(self: *TreeReader) ?Event.Open {
@@ -266,11 +297,13 @@ pub const TreeReader = struct {
             const open = self.events.items[idx].open;
 
             try self.diagnostics.err(open.token.span, "unclosed '{t}'", .{open.token.kind});
+            const close_idx = self.events.items.len;
             try self.events.append(allocator, .{ .close = .{
                 .delim = open.delim,
                 .token = null,
                 .open_idx = idx,
             } });
+            self.events.items[idx].open.close_idx = close_idx;
         }
     }
 };

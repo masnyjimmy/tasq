@@ -187,13 +187,13 @@ fn callLambda(
     defer lambda_scope.destroy();
 
     for (lambda.params, args) |*param, arg| {
-        try lambda_scope.define(
-            param,
-            .{
-                .name = param.name,
-                .value = arg,
-            },
-            false,
+        _ = try self.destructure(
+            ir.Capture,
+            cwd,
+            lambda_scope,
+            param.target,
+            arg,
+            null,
         );
     }
 

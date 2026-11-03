@@ -13,7 +13,7 @@ pub const Symbol = struct {
     value: Value,
 };
 
-const Identity = static_symbol.Origin.Identity;
+const Identity = static_symbol.Symbol.Origin.Identity;
 
 const SymbolMap = std.hash_map.AutoHashMapUnmanaged(Identity, Symbol);
 
