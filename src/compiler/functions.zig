@@ -207,6 +207,16 @@ const string_functions: []const Spec = &.{
         },
         .return_type = .{ .result = &.{ .concrete = Type.string } },
     },
+    .{
+        .name = "lines",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = .{ .list = &.string } },
+    },
 };
 
 const collections_functions: []const Spec = &.{

@@ -35,6 +35,7 @@ const handlers: [functions_count]Handler = .{
     handleEndsWith,
     handleReplaceString,
     handleAtString,
+    handleLines,
     handleLen,
     handleReplaceList,
     handleAny,
@@ -456,6 +457,33 @@ fn handleAtString(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const V
     const idx: usize = @intCast(pos);
 
     return makeResult(scope, &.string, .{ .string = str[idx .. idx + 1] });
+}
+
+fn handleLines(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    const str = args[0].string;
+
+    var items: std.ArrayList(Value) = .empty;
+    errdefer items.deinit(scope.arena.allocator());
+
+    var rest = str;
+    while (rest.len > 0) {
+        const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+
+        var line = rest[0..end];
+        if (line.len > 0 and line[line.len - 1] == '\r')
+            line = line[0 .. line.len - 1];
+
+        try items.append(scope.arena.allocator(), .{ .string = line });
+
+        rest = if (end < rest.len) rest[end + 1 ..] else rest[end..];
+    }
+
+    return .{
+        .list = .{
+            .items_type = &.string,
+            .items = try items.toOwnedSlice(scope.arena.allocator()),
+        },
+    };
 }
 
 fn handleReplaceList(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
