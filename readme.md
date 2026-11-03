@@ -22,6 +22,8 @@
    - [4.6 Break and Continue](#46-break-and-continue)
    - [4.7 Fallback](#47-fallback)
    - [4.8 Lambdas](#48-lambdas)
+   - [4.9 Ranges and Slices](#49-ranges-and-slices)
+   - [4.10 Tuples and Destructuring](#410-tuples-and-destructuring)
 5. [Built-in Functions](#5-built-in-functions)
 6. [Process Calls](#6-process-calls)
    - [6.1 Statements and Expressions](#61-statements-and-expressions)
@@ -90,6 +92,7 @@ tasq uses three distinct type systems, each serving a different context. They ar
 | `number` | Integer or floating-point value | `42`, `3.14` |
 | `string` | UTF-8 text | `"hello"`, `` `hello {name}` `` (see [§4.2](#42-strings-and-interpolation)) |
 | `[]T` | Homogeneous ordered list of `T` | `[1, 2, 3]`, `[[1, 2], [3, 4]]` |
+| `(T, U, ...)` | Fixed-size, heterogeneous tuple (see [§4.10](#410-tuples-and-destructuring)) | `("one", 1)`, `("a", 2, false)` |
 | `lambda` | A single-expression function (see [§4.8](#48-lambdas)) | `\|a, b\| a > b` |
 
 The types `void`, `noreturn` and `!T` also exist at runtime but have no literal form; see [§2.2](#22-special-types).
@@ -100,9 +103,11 @@ The types `void`, `noreturn` and `!T` also exist at runtime but have no literal 
 - Binding types are **inferred** from the assigned expression. Bindings never carry a type annotation.
 - `[]T` may be **nested** (e.g. `[][]number`). All elements must share the same type.
 - A list literal must **not be empty** where its element type cannot be determined from context.
+- **Whole-number contexts.** Wherever a `number` is used in a place where a fractional value has no meaning (range bounds and slice bounds ([§4.9](#49-ranges-and-slices)), the position argument of `@at` ([§5](#5-built-in-functions)), and any similar place), it is first **rounded up to the next whole number** (ceiling): `1.2` becomes `2`, `2.0` stays `2`, `-1.5` becomes `-1`. This is not a type conversion and never raises an error; the value is still a `number`.
+- A **tuple** has at least two elements, and each element has its own type. Its type is the ordered list of its element types, so `(string, number)` and `(number, string)` are different types. An element may be a `bool`, `char`, `number`, `string`, list or tuple; it cannot be a `lambda`, `void`, `noreturn` or `!T`. Tuples may be nested and may be list elements (all elements of such a list must then have the identical tuple type). A tuple is created with a literal and taken apart by destructuring ([§4.10](#410-tuples-and-destructuring)).
 - A `lambda` is a **template**: `|<params>| <expr>` has no fixed signature, and its parameter and result types are inferred from each use ([§4.8](#48-lambdas)). A lambda can be bound, aliased, passed to other lambdas and passed to built-ins that take a lambda ([§5](#5-built-in-functions)).
   - Every lambda literal has its own type, so two different lambdas cannot be mixed where a single type is required (for example as the elements of one list).
-  - A lambda cannot return a lambda, and cannot be a task or group argument ([§2.4](#24-argument-types)).
+  - A lambda cannot return a lambda, cannot be stored in a tuple, and cannot be a task or group argument ([§2.4](#24-argument-types)).
 
 ### 2.2 Special Types
 
@@ -112,13 +117,13 @@ These types have **no literal** and can only be produced by certain built-ins or
 |------|---------|-------------|
 | `void` | "No meaningful value" | Built-ins such as `@print` |
 | `noreturn` | The expression never yields a value; it always diverges | `@error(...)`, `break`, `continue` |
-| `!T` | A fallible result: either a `T` or an error | `@env`, `@which`, `@parse_number` |
+| `!T` | A fallible result: either a `T` or an error | `@env`, `@which`, `@parse_number`, `@at` |
 
 **`void`** is a real value that behaves as an ordinary concrete type. It can be assigned to a binding, and two `void` branches unify with each other, but a `void` branch does **not** unify with a differently typed branch (a `void` branch paired with a `string` branch is a type error).
 
 **`noreturn`** can never be assigned to a binding.
 
-**`!T`** can be used in exactly one way: by applying `fallback` ([§4.7](#47-fallback)) directly to the built-in call that produced it, yielding a plain `T`. It cannot be bound, passed to a process call or task call, stored in a list, or used in any other expression context.
+**`!T`** can be used in exactly one way: by applying `fallback` ([§4.7](#47-fallback)) directly to the built-in call that produced it, yielding a plain `T`. It cannot be bound, passed to a process call or task call, stored in a list or tuple, or used in any other expression context.
 
 **Unifying branches.** `if` ([§4.3](#43-if-expression)), `switch` ([§4.4](#44-switch-expression)), `for` ([§4.5](#45-for-expression)) and `fallback` ([§4.7](#47-fallback)) combine several branches into one result type:
 
@@ -142,6 +147,7 @@ Meta types are used **only** in attribute values and setting values. They are al
 
 - A meta `[]T` may be empty because the expected element type is always known from the consuming setting or attribute.
 - A tuple's size is fixed by the number of types listed, and each position must match its declared type exactly. Element types may be any meta type, including lists and other tuples. The tuple *type* lists types, e.g. `(string,number)`; the tuple *literal* lists values, e.g. `("some_string", 25)`.
+- Meta tuples are compile-time literals used only in attribute and setting values. They are unrelated to **runtime tuples** ([§4.10](#410-tuples-and-destructuring)), which are ordinary values built from expressions.
 - A setting's type may be a **union** `T | U`, meaning either type is accepted. This is currently used only by the `dotenv` setting ([§7](#7-settings)).
 
 ### 2.4 Argument Types
@@ -158,6 +164,7 @@ Argument types are used in task and group parameter declarations. They are a res
 
 - Only positional types may be passed by position; every other type must be identified by name ([§8.3](#83-argument-ordering), [§11.3](#113-task-arguments)).
 - `flag` is the only type with an **implicit default value**, and it takes no value on the command line.
+- Tuples and lambdas are not argument types.
 
 ---
 
@@ -169,13 +176,20 @@ A binding declares an **immutable, named value** with `:=`:
 name := <expression>
 ```
 
+A binding whose value is a tuple may instead **destructure** it into several names at once ([§4.10](#410-tuples-and-destructuring)):
+
+```
+a, b := <tuple expression>
+label, (x, y) := <nested tuple expression>
+```
+
 **Rules:**
 
 - A binding cannot be reassigned. Its type is inferred from the right-hand side.
 - Bindings may be declared at file root, in a group body, or in a task body.
 - Within one scope, binding names must be unique.
 - Inside a task body, task arguments behave as immutable bindings of their runtime type.
-- A binding named `_` is never defined; it only discards its value ([§8.4](#84-task-body)).
+- A binding named `_` is never defined; it only discards its value ([§8.4](#84-task-body)). Inside a destructuring pattern, `_` discards just that element.
 
 **Evaluation:**
 
@@ -189,6 +203,7 @@ Consequences:
 
 - A static binding whose expression would diverge (e.g. calls `@error(...)`) only does so if something references it. An unused static binding is never evaluated.
 - A static binding containing a process expression ([§6](#6-process-calls)) runs its command only on first reference, and only once. This makes it a convenient place to store a value such as a tool version that several tasks need.
+- A **destructuring** static binding is one unit: referencing **any** of its names evaluates the whole right-hand side once, and every name of that binding then has its cached value.
 
 **Examples:**
 
@@ -202,6 +217,9 @@ matrix    := [[1, 2], [3, 4]]
 
 // Evaluated lazily, once, on first use
 zig_version := $`zig --version` fallback "unknown"
+
+// Destructuring at root: evaluated lazily, once, when `major` or `minor` is first referenced
+major, minor := (1, 14)
 
 task example {
     // Task scope bindings
@@ -223,16 +241,19 @@ Expressions produce a typed value. They are used in bindings, task call argument
 |----------|-----------|----------|--------|
 | Arithmetic | `+` `-` `*` `/` `%` | `number` | `number` |
 | Comparison | `>` `<` `>=` `<=` | `number` | `bool` |
-| Equality | `==` `!=` | any matching type | `bool` |
+| Equality | `==` `!=` | any matching type (tuples compare element-wise, [§4.10](#410-tuples-and-destructuring)) | `bool` |
 | Boolean | `and` `or` | `bool` | `bool` |
 | Boolean negation | `!` | `bool` | `bool` |
 | Unary minus | `-<expr>` | `number` | `number` |
 | List spread | `[...list, item, ...]` | list `[]T`, items `T` | `[]T` |
+| Range | `a..b`, `a..` | `number` | not a value; only valid as a `for` subject or a slice index ([§4.9](#49-ranges-and-slices)) |
+| Slice | `value[a..b]` | `[]T` or `string`, and a range | same type as `value` ([§4.9](#49-ranges-and-slices)) |
 
 **Rules:**
 
 - There is **no implicit type coercion**; operands must match the expected types exactly.
 - Precedence follows mathematical convention (`*`, `/`, `%` before `+`, `-`). Boolean operators bind more loosely than comparisons.
+- The slice postfix `[...]` binds tighter than every operator. The range operator `..` binds more loosely than every arithmetic operator, so `a + 1..b * 2` means `(a + 1)..(b * 2)`.
 
 **List spread:**
 
@@ -287,6 +308,8 @@ url      := `http://{host}:{base_port + 1}`
 $`echo "Running on {@os()} with {worker_count} workers"`
 $`mkdir -p {output_dir}/{@env("BUILD_ID") fallback "local"}`
 ```
+
+Lists and tuples are converted by converting each element and joining them with `, `; a list is wrapped in `[` `]` and a tuple in `(` `)`, e.g. `[1, 2, 3]` and `(str, 5, false)`. Strings inside them are written without quotes.
 
 Because `{` starts an interpolation in these literals, a literal brace must be escaped (`\{`, `\}`), for example in shell code:
 
@@ -355,15 +378,15 @@ The statement form is described in [§8.6](#86-switch-statement).
 
 ### 4.5 For Expression
 
-A `for` expression maps, filters or otherwise processes one or more lists in lock-step and produces a **new list**. It is not wrapped in brackets:
+A `for` expression maps, filters or otherwise processes one or more lists (or ranges) in lock-step and produces a **new list**. It is not wrapped in brackets:
 
 ```
 for(<subjects>) |<captures>| <expr>
 ```
 
-- `<subjects>` are one or more comma-separated list expressions, iterated in lock-step. Iteration runs only for the length of the **shortest** subject; no error is raised.
-- `<captures>` binds one identifier to the current element of each subject, in order. Use `_` for an element you don't need. The number of captures **must equal** the number of subjects.
-- `<expr>` is evaluated once per iteration, and its result becomes the corresponding element of the produced list. The result type is `[]T`, where `T` is the type of `<expr>`.
+- `<subjects>` are one or more comma-separated subjects, each a list expression or a range ([§4.9](#49-ranges-and-slices)). They are iterated in lock-step over a shared window of indices: the **intersection** of the subjects' index intervals, where a list covers `0..@len(list)` and a range covers its own bounds. With only list subjects this is the length of the **shortest** subject; no error is raised. The full rules are in [§4.9](#49-ranges-and-slices).
+- `<captures>` binds one capture to each subject, in order. A capture is an identifier (the current element of a list subject, or the current index of a range subject), `_` for a value you don't need, or a destructuring pattern `(a, b)` when the elements are tuples ([§4.10](#410-tuples-and-destructuring)). The number of captures **must equal** the number of subjects.
+- `<expr>` is evaluated once per iteration, and its result becomes the corresponding element of the produced list. The result type is `[]T`, where `T` is the type of `<expr>`. If there are no iterations the result is an empty `[]T`.
 - `<expr>` may be an `if` or `switch` expression containing `break` or `continue` branches ([§4.6](#46-break-and-continue)); these are `noreturn` and unify with the surviving branches ([§2.2](#22-special-types)).
 
 ```
@@ -371,6 +394,8 @@ input   := [1, 2, 3]
 doubled := for(input) |i| i * 2
 
 @print(`{doubled}`) // "[2, 4, 6]"
+
+squares := for(0..5) |i| i * i  // [0, 1, 4, 9, 16]
 ```
 
 The statement form is described in [§8.7](#87-for-statement).
@@ -407,7 +432,7 @@ positives := for(numbers) |n| if (n < 0) continue else n
 <process_expression> fallback <expression>
 ```
 
-**After a built-in call.** Built-ins that can fail return `!T` ([§2.2](#22-special-types)), which is unusable until unwrapped, so `fallback` is **mandatory** for `@env`, `@which` and `@parse_number`. Using `fallback` after a built-in that cannot fail (e.g. `@len`) is a compile-time error.
+**After a built-in call.** Built-ins that can fail return `!T` ([§2.2](#22-special-types)), which is unusable until unwrapped, so `fallback` is **mandatory** for `@env`, `@which`, `@parse_number` and `@at`. Using `fallback` after a built-in that cannot fail (e.g. `@len`) is a compile-time error.
 
 **After a process expression.** A process expression aborts when its command exits non-zero ([§6.2](#62-failure-handling)), so `fallback` is **optional** there. On a non-zero exit, the fallback value replaces the process's output entirely. `fallback` cannot be combined with `nofail` (compile-time error).
 
@@ -430,6 +455,9 @@ port := @parse_number(@env("PORT") fallback "8080") fallback @error("PORT must b
 
 // Require a tool to be installed
 zig := @which("zig") fallback @error("zig is not installed")
+
+// Element access with a default
+first := @at(names, 0) fallback "none"
 
 // Process expression with a default
 version := $`git describe --tags` fallback "dev"
@@ -493,7 +521,7 @@ task test {
 }
 ```
 
-Parameters follow the no-shadowing rule of bindings: a parameter cannot share a name with an already visible name (compile-time error).
+Parameters follow the no-shadowing rule of bindings: a parameter cannot share a name with an already visible name (compile-time error). Lambda parameters are plain names; they cannot be destructuring patterns.
 
 **Lambdas as values.** A lambda can be bound, aliased and passed around:
 
@@ -512,7 +540,169 @@ It can also be passed to the built-ins that take a lambda ([§5](#5-built-in-fun
 - **No recursion.** A lambda cannot call itself, directly or through other lambdas (compile-time error).
 - **A lambda cannot return a lambda.** `|a| |b| a + b` is a compile-time error (`lambda cannot return a lambda`).
 - A lambda body is an expression, so it cannot contain task calls or statements. Use a task for actions.
-- A lambda cannot be a task or group argument ([§2.4](#24-argument-types)).
+- A lambda cannot be a task or group argument ([§2.4](#24-argument-types)) or a tuple element ([§2.1](#21-runtime-types)).
+
+### 4.9 Ranges and Slices
+
+A **range** is a pair of `number` bounds written with `..`:
+
+```
+range := <expr> '..' [<expr>]       // a..b    or    a..
+```
+
+- The **left** bound is required. The **right** bound may be omitted, which means "no upper end" (infinity).
+- Bounds are `number` expressions, evaluated once, left to right. They are rounded up to whole numbers ([§2.1](#21-runtime-types)), and may be negative.
+- A range is **half-open**: `a..b` covers the whole numbers `a, a+1, ..., b-1`. If `a >= b` the range is empty; this is never an error.
+- A range is **not a value**. It cannot be bound, passed, stored, compared or interpolated; `r := 1..3` is a compile-time error. It is valid in exactly two places, and must be written directly there:
+
+| Place | Written as | Meaning |
+|-------|------------|---------|
+| Subject of a `for` ([§4.5](#45-for-expression), [§8.7](#87-for-statement)) | `for(1..3) \|i\| ...` | **Range loop** |
+| Index of an expression, as a postfix | `value[1..3]` | **Slice** |
+
+#### Range loops
+
+Every `for` subject contributes an interval of indices, and the loop runs over the **intersection** of all of them:
+
+| Subject | Interval | Capture receives |
+|---------|----------|------------------|
+| List `[]T` | `0..@len(list)` | The element at the current index |
+| Range `a..b` | `a..b` | The current index, as a `number` |
+| Range `a..` | `a..` (no upper end) | The current index, as a `number` |
+
+- The loop's **window** starts at the largest start and ends at the smallest end of all intervals, and iterates one index at a time. List elements are always read at their **absolute index**, which is what makes `for(list, 0..) |item, i|` bind `i` to the element's index.
+- Because a list's interval starts at `0`, a range bound below `0` is **clamped to `0` whenever at least one subject is a list**. When **no** subject is a list, negative bounds are kept, which is useful for generating lists.
+- If the window has **no finite end** (every subject is a range without a right bound), the loop runs **zero times**. A range loop can never be infinite.
+- If the window's start is not below its end, the loop runs zero times. This is never an error.
+- With only list subjects the window is `0..@len(shortest)`, which is the lock-step rule of earlier versions.
+
+```
+list := [0, 1, 2, 3, 4]
+
+for(list, 1..3) |item, idx| {
+    @print(`item: {item}, idx: {idx}`)
+}
+// item: 1, idx: 1
+// item: 2, idx: 2
+
+names := ["a", "b", "c"]
+
+for(names, 0..) |name, i| @print(`{i}: {name}`)
+// 0: a
+// 1: b
+// 2: c
+
+for(names, 1..) |name, i| @print(`{i}: {name}`)
+// 1: b
+// 2: c
+
+for(names, -5..2) |name, i| @print(`{i}: {name}`)
+// 0: a
+// 1: b   (start -5 is clamped to 0 because a list is present; the range ends at 2)
+
+squares := for(0..5) |i| i * i   // [0, 1, 4, 9, 16]
+around  := for(-2..3) |i| i      // [-2, -1, 0, 1, 2]  (no list, so negatives are kept)
+nothing := for(0..) |i| i        // []                 (no finite end: zero iterations)
+```
+
+#### Slices
+
+A slice `value[range]` copies part of a list or string. It follows the same index rules as a range loop, with the sliced value acting as the only list:
+
+```
+list := [0, 1, 2, 3, 4]
+@print(`slice: {list[1..3]}`)   // slice: [1, 2]
+```
+
+- `value` is a list `[]T` or a `string`. The result has the same type as `value`: a list of `T`, or a string.
+- The slice covers the indices `a..b` of `value`, clamped to `0..@len(value)`. An omitted right bound means the end of `value`.
+- **A slice never errors.** Out-of-range bounds are clamped, and when nothing is left the result is an empty list or an empty string.
+- For a string, an index is a character, the same unit that `@len` counts.
+- A range is the **only** thing allowed inside the brackets. `list[1]` is a compile-time error; use `@at` ([§5](#5-built-in-functions)) to read a single element.
+- The opening `[` of a slice must be on the **same line** as the end of `value`, otherwise it would be read as the start of an attribute list ([§12](#12-attributes)).
+- Slices can be chained: `list[1..][0..2]` slices the result of the first slice.
+
+```
+list := [0, 1, 2, 3, 4]
+
+list[3..]       // [3, 4]
+list[-2..2]     // [0, 1]       negative start clamped to 0
+list[2..100]    // [2, 3, 4]    end clamped to the length
+list[4..2]      // []           start is not below end
+list[10..]      // []
+
+name := "tasq"
+name[1..3]      // "as"
+```
+
+### 4.10 Tuples and Destructuring
+
+A **tuple** groups a fixed number of values that may have different types.
+
+```
+pair   := ("str", 5)            // type (string, number)
+triple := ("str", 5, false)     // type (string, number, bool)
+nested := ("p", (1, 2))         // type (string, (number, number))
+```
+
+- A tuple literal is a comma-separated list of **two or more** expressions in parentheses. A parenthesized single expression is plain grouping, so there are no 0- or 1-element tuples.
+- The element rules are in [§2.1](#21-runtime-types). Tuples are immutable, and there is **no field access** other than destructuring.
+- `==` and `!=` compare two tuples of the same type element by element. Tuples of different types cannot be compared (compile-time error).
+- In interpolation a tuple is shown in parentheses, e.g. `(str, 5, false)` ([§4.2](#42-strings-and-interpolation)).
+- Tuples cannot be task or group arguments ([§2.4](#24-argument-types)).
+
+#### Destructuring
+
+Destructuring binds the elements of a tuple to separate names. A **pattern** is a name, `_`, or a parenthesized comma-separated list of two or more patterns:
+
+```
+pattern := name | '_' | '(' pattern ',' pattern { ',' pattern } ')'
+```
+
+It is allowed in two places:
+
+| Place | Syntax | Notes |
+|-------|--------|-------|
+| Binding | `a, b := <tuple expr>` | The outermost pattern is written **without** parentheses. Nested patterns use parentheses: `label, (x, y) := <tuple expr>`. |
+| `for` capture | `for(<subjects>) \|(a, b)\| ...` | A subject whose elements are tuples is captured with a parenthesized pattern. Plain captures may be mixed in: `\|(a, b), i\|`. |
+
+**Rules:**
+
+- The pattern's shape must match the tuple's type **exactly**: the same number of elements at every level (compile-time error otherwise), and the right-hand side must be a tuple.
+- `_` discards one element. It is never defined and may appear any number of times.
+- The names a pattern introduces are ordinary bindings: they are immutable, must be unique within their scope and follow the no-shadowing rule of [§3](#3-bindings). A name bound by a `for` capture is visible only in that loop's body.
+- Destructuring bindings are valid at file root, in a group body and in a task body. Evaluation is as in [§3](#3-bindings): task-local bindings run eagerly in statement order, and static bindings run **lazily and once**, when **any** of their names is first referenced.
+- Destructuring is not available for lambda parameters or task and group arguments.
+
+```
+tuple_list := [
+    ("one", 1),
+    ("two", 2),
+    ("three", 3),
+    ("four", 4)
+]
+
+tuple := ("str", 5, false)
+
+// Static destructuring: evaluated lazily, once, when `major` or `minor` is first used
+major, minor := (1, 14)
+
+task test {
+    for(tuple_list) |(name, value)| {
+        @print(`name: {name}, value: {value}`)
+    }
+
+    // Capture a tuple element together with the index
+    for(tuple_list, 0..) |(name, _), i| {
+        @print(`{i}: {name}`)
+    }
+
+    str, num, enabled := tuple
+
+    // Nested pattern
+    label, (x, y) := ("point", (3, 4))
+}
+```
 
 ---
 
@@ -548,6 +738,7 @@ Built-in functions are called with an `@` prefix and may appear in any expressio
 | Signature | Returns | Description |
 |-----------|---------|-------------|
 | `@len(str: string)` | `number` | Number of characters in `str`. |
+| `@at(str: string, pos: number)` | `!string` | The character at index `pos` of `str`, as a `string`. `pos` is rounded up to a whole number first ([§2.1](#21-runtime-types)); errors if the result is less than `0` or not less than `@len(str)`. |
 | `@split(str: string, sep: string)` | `[]string` | Splits `str` wherever `sep` occurs. |
 | `@join(list: []string, sep: string)` | `string` | Joins the elements of `list`, separated by `sep`. |
 | `@lower(str: string)` | `string` | `str` in lowercase. |
@@ -562,6 +753,7 @@ Built-in functions are called with an `@` prefix and may appear in any expressio
 | Signature | Returns | Description |
 |-----------|---------|-------------|
 | `@len(list: []T)` | `number` | Number of elements in `list`. |
+| `@at(list: []T, pos: number)` | `!T` | The element at index `pos` of `list`. `pos` is rounded up to a whole number first ([§2.1](#21-runtime-types)); errors if the result is less than `0` or not less than `@len(list)`. |
 | `@replace(list: []T, old: T, new: T)` | `[]T` | Copy of `list` with every element equal to `old` replaced by `new`. |
 | `@all(list: []T, predicate: \|T\| -> bool)` | `bool` | `true` if `predicate` is `true` for every element (vacuously `true` for an empty list). |
 | `@any(list: []T, predicate: \|T\| -> bool)` | `bool` | `true` if `predicate` is `true` for at least one element. |
@@ -569,9 +761,10 @@ Built-in functions are called with an `@` prefix and may appear in any expressio
 
 **Notes:**
 
-- **Overloads.** `@len` and `@replace` each have a string and a list form. The overload is chosen at compile time from the argument types.
+- **Overloads.** `@len`, `@at` and `@replace` each have a string and a list form. The overload is chosen at compile time from the argument types.
 - **Lambda arguments.** `@all`, `@any` and `@reduce` take a lambda ([§4.8](#48-lambdas)), written inline or given by name (`@any(xs, big)` with `big := |n| n > 10`). The notation `|T| -> bool` means "a lambda taking one `T` and returning `bool`". The overload is chosen from the function name, the types of the non-lambda arguments and the lambda's **number of parameters**; the lambda's parameter types then come from that overload, and its body must produce the result type the overload expects (e.g. `bool` for `@any`).
-- **Fallible built-ins.** `@env`, `@which` and `@parse_number` return `!T` and can only be used with `fallback` ([§4.7](#47-fallback)).
+- **Fallible built-ins.** `@env`, `@which`, `@parse_number` and `@at` return `!T` and can only be used with `fallback` ([§4.7](#47-fallback)).
+- **Element access.** `@at` reads a single element or character. To take a part of a list or string, use a slice ([§4.9](#49-ranges-and-slices)), which never errors.
 
 > Additional built-in functions will be added in future versions.
 
@@ -795,7 +988,7 @@ A task body may contain any combination of:
 
 | Element | Syntax |
 |---------|--------|
-| Binding declaration | `name := <expr>` |
+| Binding declaration | `name := <expr>`, or a destructuring binding `a, (b, _) := <tuple expr>` ([§4.10](#410-tuples-and-destructuring)) |
 | Process statement | `` $`command` `` / `` $[attributes]`command` `` ([§6](#6-process-calls)) |
 | If statement | `if / else if / else` ([§8.5](#85-if-statement)) |
 | Switch statement | `switch(...) { ... }` ([§8.6](#86-switch-statement)) |
@@ -874,14 +1067,14 @@ switch(color) {
 
 ### 8.7 For Statement
 
-`for` as a **statement** iterates over one or more lists in lock-step, running a block for each element. Unlike the `for` expression ([§4.5](#45-for-expression)), it produces no value.
+`for` as a **statement** iterates over one or more lists or ranges in lock-step, running a block for each step. Unlike the `for` expression ([§4.5](#45-for-expression)), it produces no value.
 
 ```
 for(<subjects>) |<captures>| <stmt_block>
 ```
 
-- `<subjects>` are one or more comma-separated list expressions, iterated in lock-step. Iteration runs only for the length of the **shortest** subject; there is no out-of-bounds access and no error. The extra elements of longer subjects are never visited.
-- `<captures>` binds one identifier to the current element of each subject, in order. Use `_` to ignore a subject's element. The number of captures **must equal** the number of subjects.
+- `<subjects>` are one or more comma-separated subjects, each a list expression or a range ([§4.9](#49-ranges-and-slices)). They are iterated in lock-step over a shared window of indices: the **intersection** of the subjects' index intervals, where a list covers `0..@len(list)` and a range covers its own bounds. With only list subjects, iteration runs only for the length of the **shortest** subject; there is no out-of-bounds access and no error. The extra elements of longer subjects are never visited. A window with no finite end (only unbounded ranges) runs zero times. The full rules are in [§4.9](#49-ranges-and-slices).
+- `<captures>` binds one capture to each subject, in order. A capture is an identifier (the current element of a list subject, or the current index of a range subject), `_` to ignore the value, or a destructuring pattern `(a, b)` when the elements are tuples ([§4.10](#410-tuples-and-destructuring)). The number of captures **must equal** the number of subjects.
 - `<stmt_block>` is a `{ }` block or a single statement ([§8.4](#84-task-body)).
 - `break` and `continue` ([§4.6](#46-break-and-continue)) may be used inside, including from a nested `if` or `switch`.
 
@@ -902,6 +1095,29 @@ ys := ["a", "b", "c"]
 
 for(xs, ys) |x, y| @print(`{x}{y}`)
 // output: 1a, 2b, 3c  (3 iterations: bounded by the shortest subject, ys)
+```
+
+Ranges and iteration index:
+
+```
+list := [0, 1, 2, 3, 4]
+
+for(list, 1..3) |item, idx| {
+    @print(`item: {item}, idx: {idx}`)
+}
+// item: 1, idx: 1
+// item: 2, idx: 2
+
+for(list, 0..) |item, i| @print(`{i}: {item}`)   // index of every element
+for(0..3) |i| @print(`{i}`)                      // 0, 1, 2
+```
+
+Tuple elements:
+
+```
+pairs := [("one", 1), ("two", 2)]
+
+for(pairs) |(name, value)| @print(`{name} = {value}`)
 ```
 
 ### 8.8 Task Dependencies
@@ -1101,7 +1317,7 @@ tasq --check
 **What it does not do:**
 
 - It executes nothing. No task body runs, no process call is spawned (statement or expression), and no binding is evaluated.
-- Because nothing runs, it cannot detect **runtime** failures: a command exiting non-zero, an `@error(...)` being reached, a missing environment variable, an unparsable `@parse_number` input, and so on.
+- Because nothing runs, it cannot detect **runtime** failures: a command exiting non-zero, an `@error(...)` being reached, a missing environment variable, an unparsable `@parse_number` input, an `@at` position out of bounds, and so on.
 - Lambdas are analysed only where they are used ([§4.8](#48-lambdas)), so a lambda that is never used is not checked.
 
 **Exit status.** `tasq --check` exits with a non-zero status when at least one error diagnostic is reported, so it can be used in scripts and CI.
@@ -1359,10 +1575,22 @@ task show {
 | `"text"` | `string` | No | Basic string |
 | `` `text {expr}` `` | `string` | Yes (`{ }`) | Interpolated string |
 | `'c'` | `char` | No | Single character |
+| `("a", 1)` | tuple | No | Two or more elements of any value type ([§4.10](#410-tuples-and-destructuring)) |
 | `\|a, b\| expr` | lambda | No | Single-expression function; types inferred per use ([§4.8](#48-lambdas)) |
 | `` $`command {expr}` `` | process call | Yes (`{ }`) | Statement or expression ([§6.1](#61-statements-and-expressions)) |
 
 Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` `` `\0` `\xNN` `\u{NNNN...}` `\{` `\}`
+
+### Ranges, Slices and Tuples
+
+| Form | Meaning | See |
+|------|---------|-----|
+| `for(1..3) \|i\| ...` | Range loop over indices `1, 2` | [§4.9](#49-ranges-and-slices) |
+| `for(list, 0..) \|item, i\| ...` | Loop with the element's index | [§4.9](#49-ranges-and-slices) |
+| `list[1..3]`, `str[1..]` | Slice (never errors) | [§4.9](#49-ranges-and-slices) |
+| `@at(list, 0) fallback x` | Single element or character (errors out of range) | [§5](#5-built-in-functions) |
+| `a, b := tuple` | Destructuring binding | [§4.10](#410-tuples-and-destructuring) |
+| `for(tuples) \|(a, b)\| ...` | Destructuring capture | [§4.10](#410-tuples-and-destructuring) |
 
 ### Scope Resolution
 
@@ -1386,6 +1614,8 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 | Looking for | See |
 |-------------|-----|
 | Operators, precedence | [§4.1](#41-operators) |
+| Ranges, range loops, slices | [§4.9](#49-ranges-and-slices) |
+| Tuples, destructuring | [§4.10](#410-tuples-and-destructuring) |
 | Process call defaults (echo, stdout, stdin, failure) | [§6.1](#61-statements-and-expressions) |
 | Built-in function list | [§5](#5-built-in-functions) |
 | Which attributes go where | [§12](#12-attributes) |
@@ -1397,7 +1627,8 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 
 Reserved for future versions; not currently part of the language:
 
-- **Iteration index in `for`.** The extra trailing capture that used to bind the 0-based index has been removed. A dedicated way to obtain the iteration index is being designed; until then there is none.
+- **Unbounded range loops.** A `for` window with no finite end (for example `for(0..)`) currently runs zero times, so range loops can never be infinite ([§4.9](#49-ranges-and-slices)). Other semantics may be defined later.
+- **Precise string units.** `@len`, `@at` and string slices count "characters". The exact unit (Unicode code point, character or glyph) is to be decided and defined precisely ([§4.9](#49-ranges-and-slices), [§5](#5-built-in-functions)).
 - **Additional built-in functions**: type conversion utilities and other helpers.
 - **Additional settings**: further interpreter configuration options.
 - **Additional argument validation attributes.**
@@ -1406,4 +1637,4 @@ Reserved for future versions; not currently part of the language:
 - **Configurable stdin for process expressions.** They currently read an empty stdin.
 - **Definition-time checking of lambdas.** Today a lambda body is analysed only when used, so an unused lambda is never checked (and `tasq --check` does not check it either). Planned: check every lambda where it is defined (unknown names, errors independent of parameter types) and require that a body only uses names declared before the lambda.
 - **Lambda diagnostics with instantiation traces.** Errors inside a lambda body should also point at the call that instantiated it and at the lambda's definition.
-- **Returning lambdas (closures).** A lambda cannot return a lambda today, because lambda values do not capture their environment.
+- **Returning lambdas (closures).** A lambda cannot return a lambda today, because lambda values do not capture their environment. For the same reason a lambda cannot be stored in a tuple.
