@@ -79,13 +79,20 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
-    // const exe_check = b.addExecutable(.{
-    //     .name = "tasq",
-    //     .root_module = exe_mod,
-    // });
+    //----- test step ------
+    const test_step = b.step("test", "Run unit tests");
 
-    // const check = b.step("check", "Check if foo compiles");
-    // check.dependOn(&exe_check.step);
+    const test_modules = [_]*std.Build.Module{
+        interpreter_mod,
+    };
+
+    for (test_modules) |mod| {
+        const mod_test = b.addTest(.{
+            .root_module = mod,
+        });
+        const run_mod_test = b.addRunArtifact(mod_test);
+        test_step.dependOn(&run_mod_test.step);
+    }
 
     //----- run step -----
 
