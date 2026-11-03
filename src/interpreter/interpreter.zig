@@ -758,19 +758,31 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
         .slice => |slice| {
             const operand = try self.evaluateExpr(cwd, scope, &slice.operand);
 
+            const length = switch (operand) {
+                .list => |list| list.items.len,
+                .string => |str| str.len,
+                else => unreachable,
+            };
+
             const range = clampRange(
                 try self.evaluateRange(cwd, scope, &slice.range),
                 .{
                     .left = 0,
-                    .right = @intCast(operand.list.items.len),
+                    .right = @intCast(length),
                 },
             );
 
-            const result: Value = .{
-                .list = .{
-                    .items_type = operand.list.items_type,
-                    .items = operand.list.items[@intCast(range.left)..@intCast(range.right.?)],
+            const result: Value = switch (operand) {
+                .list => |list| .{
+                    .list = .{
+                        .items_type = list.items_type,
+                        .items = list.items[@intCast(range.left)..@intCast(range.right.?)],
+                    },
                 },
+                .string => |str| .{
+                    .string = str[@intCast(range.left)..@intCast(range.right.?)],
+                },
+                else => unreachable,
             };
 
             return result.clone(scope.arena.allocator());

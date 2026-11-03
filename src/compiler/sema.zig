@@ -2029,11 +2029,11 @@ pub const Sema = struct {
                 _ = try self.rejectNoreturn(operand_node, &operand, "the operand of a slice", .{});
 
                 const result_type: Type = switch (operand.type) {
-                    .list, .unknown => operand.type,
+                    .list, .string, .unknown => operand.type,
                     else => |t| err: {
                         try self.diagnostics.err(
                             operand_node.node.trimmedSpan(),
-                            "cannot slice a value of type '{f}': only lists can be sliced",
+                            "cannot slice a value of type '{f}': only lists and strings can be sliced",
                             .{t},
                         );
                         break :err .unknown;
