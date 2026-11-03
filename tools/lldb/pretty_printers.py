@@ -215,19 +215,55 @@ class zig_String_SynthProvider:
     def get_child_index(self, name): return -1
     def get_child_at_index(self, index): return None
 
+# Optionals are emitted as a struct with a "is there a value" flag and the payload.
+# The field names differ between backends / zig versions:
+#   llvm backend (older):   { data: T, some: bool }
+#   newer / other layouts:  { payload: T, ... } or { has_value: bool, ?: T }
+# so look the fields up by every name we know about and fall back to the shape of the struct.
+zig_optional_flag_names = ('some', 'has_value', 'is_some', 'present')
+zig_optional_payload_names = ('data', 'payload', '?', 'value')
+
+def zig_Optional_parts(value):
+    # returns (is_some, payload); payload is None when there is nothing to show
+    flag = None
+    payload = None
+    for name in zig_optional_flag_names:
+        candidate = value.GetChildMemberWithName(name)
+        if candidate.IsValid():
+            flag = candidate
+            break
+    for name in zig_optional_payload_names:
+        candidate = value.GetChildMemberWithName(name)
+        if candidate.IsValid() and (flag is None or candidate.name != flag.name):
+            payload = candidate
+            break
+    if flag is None or payload is None:
+        # structural fallback: the flag is the `bool` field, the payload is the other one
+        children = list(value.children)
+        if flag is None:
+            flag = next((child for child in children if child.type.name == 'bool' and (payload is None or child.name != payload.name)), None)
+        if payload is None:
+            payload = next((child for child in children if flag is None or child.name != flag.name), None)
+    if payload is None: return flag is not None and flag.unsigned != 0, None
+    # if no flag could be found at all, trust the payload rather than claiming `null`
+    if flag is None: return True, payload
+    return flag.unsigned != 0, payload
+
 class zig_Optional_SynthProvider:
     def __init__(self, value, _=None): self.value = value
     def update(self):
+        self.child = None
         try:
-            self.child = self.value.GetChildMemberWithName('some').unsigned == 1 and self.value.GetChildMemberWithName('data').Clone('child')
+            is_some, payload = zig_Optional_parts(self.value)
+            if is_some and payload is not None: self.child = payload.Clone('child')
         except: pass
-    def has_children(self): return bool(self.child)
-    def num_children(self): return int(self.child)
-    def get_child_index(self, name): return 0 if self.child and (name == 'child' or name == '?') else -1
-    def get_child_at_index(self, index): return self.child if self.child and index == 0 else None
+    def has_children(self): return self.child is not None
+    def num_children(self): return 0 if self.child is None else 1
+    def get_child_index(self, name): return 0 if self.child is not None and (name == 'child' or name == '?') else -1
+    def get_child_at_index(self, index): return self.child if self.child is not None and index == 0 else None
 def zig_Optional_SummaryProvider(value, _=None):
     child = value.GetChildMemberWithName('child')
-    return child or 'null'
+    return child if child.IsValid() else 'null'
 
 class zig_ErrorUnion_SynthProvider:
     def __init__(self, value, _=None): self.value = value
