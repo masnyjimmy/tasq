@@ -1,80 +1,52 @@
 const std = @import("std");
 
 const ir = @import("ir.zig");
-
-const @"type" = @import("type.zig");
-const Type = @"type".Type;
+const Type = @import("type.zig").Type;
 
 pub const Error = error{
     TypeMismatch,
 };
 
-pub fn binaryResultType(op: ir.BinaryOp, left: Type, right: Type) Error!BinaryResult {
-    // std.debug.assert(left != .noreturn and right != .noreturn);
+pub fn binaryResultType(op: ir.BinaryOp, left: Type, right: Type) Error!Type {
+    //TODO: consider how to handle this
+    if (left == .noreturn or right == .noreturn) unreachable;
 
-    switch (left) {
-        inline .noreturn, .unknown => |_, tag| return .{
-            .result_type = @unionInit(Type, @tagName(tag), {}),
-        },
-        else => {},
-    }
-    switch (right) {
-        inline .noreturn, .unknown => |_, tag| return .{
-            .result_type = @unionInit(Type, @tagName(tag), {}),
-        },
-        else => {},
+    // Equality is the only operation that accepts structured types (lists, tuples, results),
+    // so it goes through `Type.eq`, which already treats `unknown` as a wildcard at any depth
+    // (`[]number == []unknown` is fine).
+    if (op == .eq or op == .neq) {
+        return if (Type.eq(left, right)) .bool else error.TypeMismatch;
     }
 
-    if (op == .add and left == .string and right == .string) {
-        return .{ .result_type = .string };
-    }
+    // Everything else works on scalars only, so both sides must agree on one operand type.
+    const operand = commonOperand(left, right) orelse return error.TypeMismatch;
 
     return switch (op) {
-        .add, .sub, .mul, .div, .mod => if (commonNumeric(left, right)) |cmn|
-            .{
-                .result_type = cmn,
-                .coerce_to = cmn,
-            }
-        else
-            Error.TypeMismatch,
-        .gt, .gt_eq, .lt, .lt_eq => if (commonNumeric(left, right)) |_|
-            .{ .result_type = .bool }
-        else
-            Error.TypeMismatch,
-        .eq, .neq => if (Type.eq(left, right))
-            .{ .result_type = .bool }
-        else if (commonNumeric(left, right)) |cmn|
-            .{ .result_type = .bool, .coerce_to = cmn }
-        else
-            Error.TypeMismatch,
-        .and_op, .or_op => if (left == .bool and right == .bool)
-            .{ .result_type = .bool }
-        else
-            Error.TypeMismatch,
+        // `unknown + unknown` stays unknown: it could still turn out to be a string or a number.
+        .add => switch (operand) {
+            .number, .string, .unknown => operand,
+            else => error.TypeMismatch,
+        },
+        // Only numbers are valid here, so the result is known even if both sides are unknown.
+        .sub, .mul, .div, .mod => switch (operand) {
+            .number, .unknown => .number,
+            else => error.TypeMismatch,
+        },
+        // Strings compare lexically.
+        .gt, .gt_eq, .lt, .lt_eq => switch (operand) {
+            .number, .string, .unknown => .bool,
+            else => error.TypeMismatch,
+        },
+        .and_op, .or_op => switch (operand) {
+            .bool, .unknown => .bool,
+            else => error.TypeMismatch,
+        },
+        .eq, .neq => unreachable, // handled above
     };
 }
 
-pub const BinaryResult = struct {
-    result_type: Type,
-    coerce_to: ?Type = null,
-};
-
-pub fn typesComparableForEquality(left: Type, right: Type) bool {
-    if (Type.eq(left, right)) return true;
-    if (commonNumeric(left, right) != null) return true;
-    return false;
-}
-
-pub fn commonNumeric(a: Type, b: Type) ?Type {
-    const ra = numericRank(a) orelse return null;
-    const rb = numericRank(b) orelse return null;
-
-    return if (ra >= rb) a else b;
-}
-
-fn numericRank(t: Type) ?u8 {
-    return switch (t) {
-        .number => 0,
-        else => null,
-    };
+fn commonOperand(left: Type, right: Type) ?Type {
+    if (left == .unknown) return right;
+    if (right == .unknown) return left;
+    return if (Type.same(left, right)) left else null;
 }

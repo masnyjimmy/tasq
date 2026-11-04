@@ -2,7 +2,6 @@ const std = @import("std");
 
 const compiler = @import("compiler");
 const Type = compiler.Type;
-const ArgType = compiler.ArgType;
 const Value = compiler.Value;
 const ir = compiler.ir;
 const binary = compiler.binary;
@@ -10,25 +9,19 @@ const binary = compiler.binary;
 pub const Error = binary.Error;
 
 pub fn evalBinary(allocator: std.mem.Allocator, op: ir.BinaryOp, left: Value, right: Value) !Value {
-    // string coersion
+    // The type check is the single source of truth for what is allowed; everything below
+    // can rely on it and only asserts.
+    const result_type = try binary.binaryResultType(op, left.typeOf(), right.typeOf());
 
-    const binary_result = try binary.binaryResultType(op, left.typeOf(), right.typeOf());
-
-    if (op == .add and binary_result.result_type == .string) {
-        return try evalConcat(allocator, left, right);
-    }
-
-    const l, const r = blk: {
-        if (binary_result.coerce_to) |to|
-            break :blk .{ coerce(left, to), coerce(right, to) };
-
-        break :blk .{ left, right };
-    };
     return switch (op) {
-        .add, .sub, .mul, .div, .mod => evalArithmetic(op, l, r),
-        .gt, .gt_eq, .lt, .lt_eq => evalOrdering(op, l, r),
-        .eq, .neq => evalEquality(op, l, r),
-        .and_op, .or_op => evalLogical(op, l, r),
+        .add => if (result_type == .string)
+            try evalConcat(allocator, left, right)
+        else
+            evalArithmetic(op, left, right),
+        .sub, .mul, .div, .mod => evalArithmetic(op, left, right),
+        .gt, .gt_eq, .lt, .lt_eq => evalOrdering(op, left, right),
+        .eq, .neq => evalEquality(op, left, right),
+        .and_op, .or_op => evalLogical(op, left, right),
     };
 }
 
@@ -41,105 +34,54 @@ fn evalConcat(allocator: std.mem.Allocator, left: Value, right: Value) !Value {
 }
 
 fn evalArithmetic(op: ir.BinaryOp, left: Value, right: Value) Value {
-    const T = blk: {
-        const left_type = left.typeOf();
-        const right_type = right.typeOf();
-        std.debug.assert(Type.eq(left_type, right_type));
+    std.debug.assert(left == .number and right == .number);
 
-        break :blk left_type;
+    const l = left.number;
+    const r = right.number;
+
+    const result = switch (op) {
+        .add => l + r,
+        .sub => l - r,
+        .mul => l * r,
+        .div => l / r,
+        .mod => @rem(l, r),
+        else => unreachable,
     };
 
-    switch (T) {
-        inline .number => |_, tag| {
-            const left_value = @field(left, @tagName(tag));
-            const right_value = @field(right, @tagName(tag));
-
-            const result = switch (op) {
-                .add => left_value + right_value,
-                .sub => left_value - right_value,
-                .div => left_value / right_value,
-                .mul => left_value * right_value,
-                .mod => @rem(left_value, right_value),
-                else => unreachable,
-            };
-
-            return @unionInit(Value, @tagName(tag), result);
-        },
-        else => unreachable,
-    }
+    return .{ .number = result };
 }
 
 fn evalOrdering(op: ir.BinaryOp, left: Value, right: Value) Value {
-    const T = blk: {
-        const left_type = left.typeOf();
-
-        std.debug.assert(left_type.eq(right.typeOf()));
-
-        break :blk left_type;
-    };
-
-    switch (T) {
-        inline .number => |_, tag| {
-            const left_value = @field(left, @tagName(tag));
-            const right_value = @field(right, @tagName(tag));
-
-            const result = switch (op) {
-                .gt => left_value > right_value,
-                .gt_eq => left_value >= right_value,
-                .lt => left_value < right_value,
-                .lt_eq => left_value <= right_value,
+    const result = switch (left) {
+        .number => |l| blk: {
+            const r = right.number;
+            break :blk switch (op) {
+                .gt => l > r,
+                .gt_eq => l >= r,
+                .lt => l < r,
+                .lt_eq => l <= r,
                 else => unreachable,
             };
-
-            return .{ .bool = result };
+        },
+        // Lexical, byte-wise comparison.
+        .string => |l| blk: {
+            const order = std.mem.order(u8, l, right.string);
+            break :blk switch (op) {
+                .gt => order == .gt,
+                .gt_eq => order != .lt,
+                .lt => order == .lt,
+                .lt_eq => order != .gt,
+                else => unreachable,
+            };
         },
         else => unreachable,
-    }
+    };
+
+    return .{ .bool = result };
 }
 
 fn evalEquality(op: ir.BinaryOp, left: Value, right: Value) Value {
-    const T = blk: {
-        const left_type = left.typeOf();
-
-        std.debug.assert(left_type.eq(right.typeOf()));
-
-        break :blk left_type;
-    };
-
-    const equal = blk: {
-        break :blk switch (T) {
-            .string => std.mem.eql(u8, left.string, right.string),
-            .list => {
-                if (left.list.items.len != right.list.items.len)
-                    break :blk false;
-
-                for (left.list.items, right.list.items) |l, r| {
-                    if (evalEquality(.eq, l, r).bool == false)
-                        break :blk false;
-                }
-
-                break :blk true;
-            },
-            .tuple => {
-                if (left.tuple.elements.len != right.tuple.elements.len)
-                    break :blk false;
-
-                for (left.tuple.elements, right.tuple.elements) |l, r| {
-                    if (evalEquality(.eq, l, r).bool == false)
-                        break :blk false;
-                }
-
-                break :blk true;
-            },
-            .noreturn, .result, .lambda, .unknown => unreachable,
-            inline else => |_, tag| {
-                const left_value = @field(left, @tagName(tag));
-                const right_value = @field(right, @tagName(tag));
-
-                break :blk left_value == right_value;
-            },
-        };
-    };
+    const equal = valuesEqual(left, right);
 
     const result = switch (op) {
         .eq => equal,
@@ -148,6 +90,42 @@ fn evalEquality(op: ir.BinaryOp, left: Value, right: Value) Value {
     };
 
     return .{ .bool = result };
+}
+
+fn valuesEqual(left: Value, right: Value) bool {
+    const T = left.typeOf();
+
+    // `eq`, not `same`: `[]unknown` (an empty list literal) must be comparable with `[]number`.
+    std.debug.assert(T.eq(right.typeOf()));
+
+    switch (T) {
+        .string => return std.mem.eql(u8, left.string, right.string),
+        .list => {
+            if (left.list.items.len != right.list.items.len) return false;
+
+            for (left.list.items, right.list.items) |l, r| {
+                if (!valuesEqual(l, r)) return false;
+            }
+
+            return true;
+        },
+        .tuple => {
+            if (left.tuple.elements.len != right.tuple.elements.len) return false;
+
+            for (left.tuple.elements, right.tuple.elements) |l, r| {
+                if (!valuesEqual(l, r)) return false;
+            }
+
+            return true;
+        },
+        .noreturn, .result, .lambda, .unknown => unreachable,
+        inline else => |_, tag| {
+            const left_value = @field(left, @tagName(tag));
+            const right_value = @field(right, @tagName(tag));
+
+            return left_value == right_value;
+        },
+    }
 }
 
 fn evalLogical(op: ir.BinaryOp, left: Value, right: Value) Value {
@@ -160,11 +138,4 @@ fn evalLogical(op: ir.BinaryOp, left: Value, right: Value) Value {
     };
 
     return .{ .bool = result };
-}
-
-fn coerce(v: Value, target: std.meta.Tag(Type)) Value {
-    const v_type = v.typeOf();
-    if (v_type == target) return v;
-
-    unreachable; //TODO: implement later if other numeric types added,
 }

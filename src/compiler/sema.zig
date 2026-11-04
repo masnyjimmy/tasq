@@ -1707,7 +1707,7 @@ pub const Sema = struct {
                     .left = left.expr,
                     .right = right.expr,
                     .op = op,
-                    .type = binary_result.result_type,
+                    .type = binary_result,
                 });
 
                 return .{
@@ -1715,7 +1715,7 @@ pub const Sema = struct {
                         .binary = ptr,
                     },
                     .is_static = left.is_static and right.is_static,
-                    .type = binary_result.result_type,
+                    .type = binary_result,
                 };
             },
             .unary => |unary_expr| {
