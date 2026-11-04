@@ -207,7 +207,7 @@ Consequences:
 
 **Examples:**
 
-```
+```tasq
 // Root scope bindings
 base_port := 8080
 host      := "localhost"

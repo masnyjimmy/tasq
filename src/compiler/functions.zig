@@ -84,6 +84,46 @@ const fs_functions: []const Spec = &.{
             .concrete = .{ .list = &.string },
         },
     },
+    .{
+        .name = "basename",
+        .args = &.{
+            .{
+                .name = "path",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.string },
+    },
+    .{
+        .name = "join_path",
+        .args = &.{
+            .{
+                .name = "a",
+                .type = .{ .concrete = .{ .list = &.string } },
+            },
+        },
+        .return_type = .{ .concrete = Type.string },
+    },
+    .{
+        .name = "is_file",
+        .args = &.{
+            .{
+                .name = "path",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.bool },
+    },
+    .{
+        .name = "is_dir",
+        .args = &.{
+            .{
+                .name = "path",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .concrete = Type.bool },
+    },
 };
 
 const string_functions: []const Spec = &.{
@@ -471,6 +511,8 @@ pub const definitions = Functions(
 );
 
 fn Functions(comptime specs: []const Spec) type {
+    @setEvalBranchQuota(3_000);
+
     const FnIdent = blk: {
         const EnumTag = enums.FitUnsigned(specs.len);
 
@@ -497,7 +539,6 @@ fn Functions(comptime specs: []const Spec) type {
 
     // For each spec (by original index), which unique-name index (i.e. FnId) it maps to.
     const spec_to_id: [specs.len]FnIdent = blk: {
-        @setEvalBranchQuota(2_000);
         var unique_names: [specs.len][]const u8 = undefined;
         var unique_count: usize = 0;
         var ids: [specs.len]FnIdent = undefined;

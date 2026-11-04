@@ -372,7 +372,7 @@ pub fn getKeywordCompletions(comptime loop: bool) []const Completion {
 // Builtins
 
 pub fn getBuiltinCompletions() []const Completion {
-    @setEvalBranchQuota(100_000);
+    @setEvalBranchQuota(150_000);
     const functions = compiler.functions;
 
     const result = comptime blk: {

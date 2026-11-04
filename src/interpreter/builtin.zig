@@ -27,6 +27,10 @@ const handlers: [functions_count]Handler = .{
     handleExists,
     handleRead,
     handleGlob,
+    handleBasename,
+    handleJoinPath,
+    handleIsFile,
+    handleIsDir,
     handleLen,
     handleSplit,
     handleJoin,
@@ -163,6 +167,49 @@ fn handleGlob(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const 
             .items = try result.toOwnedSlice(scope.arena.allocator()),
         },
     };
+}
+
+fn handleBasename(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    const path = args[0].string;
+    return .{ .string = std.fs.path.basename(path) };
+}
+fn handleJoinPath(self: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    const paths = args[0].list;
+
+    const temp_buffer: [][]const u8 = try self.allocator.alloc([]const u8, paths.items.len);
+    defer self.allocator.free(temp_buffer);
+
+    for (paths.items, temp_buffer) |in, *out| {
+        out.* = in.string;
+    }
+
+    return .{
+        .string = try std.fs.path.join(scope.arena.allocator(), temp_buffer),
+    };
+}
+
+fn handleIsFile(self: *Interpreter, cwd: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    const path = args[0].string;
+
+    const stat = cwd.statFile(
+        self.io,
+        path,
+        .{},
+    ) catch return .{ .bool = false };
+
+    return .{ .bool = stat.kind == .file };
+}
+
+fn handleIsDir(self: *Interpreter, cwd: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    const path = args[0].string;
+
+    const stat = cwd.statFile(
+        self.io,
+        path,
+        .{},
+    ) catch return .{ .bool = false };
+
+    return .{ .bool = stat.kind == .directory };
 }
 
 fn handleOs(_: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
