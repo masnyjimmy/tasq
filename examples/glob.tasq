@@ -1,0 +1,71 @@
+
+
+tests := [
+    ("*.zig", ["build.zig", "main.zig"]),
+    ("*.md", ["README.md"]),
+    ("*.rs", []),
+    ("src/*.zig", ["src/lib.zig", "src/main.zig"]),
+    ("src/*/*.zig", ["src/util/paths.zig", "src/util/strings.zig"]),
+    ("**/*.zig", [
+        "build.zig",
+        "main.zig",
+        "src/lib.zig",
+        "src/main.zig",
+        "src/util/paths.zig",
+        "src/util/strings.zig",
+        "test/main_test.zig"
+    ]),
+    ("**/*.md", [
+        "README.md",
+        "docs/guide/advanced.md",
+        "docs/guide/intro.md",
+        "docs/index.md"
+    ]),
+    ("src/**/*.zig", [
+        "src/lib.zig",
+        "src/main.zig",
+        "src/util/paths.zig",
+        "src/util/strings.zig"
+    ]),
+    ("src/data/?.txt", ["src/data/a.txt", "src/data/b.txt"]),
+    ("src/data/file?.txt", ["src/data/file1.txt", "src/data/file2.txt"]),
+    ("src/data/file*.txt", [
+        "src/data/file1.txt",
+        "src/data/file10.txt",
+        "src/data/file2.txt"
+    ]),
+    ("src/data/[ab].txt", ["src/data/a.txt", "src/data/b.txt"]),
+    ("src/data/[a-c].*", ["src/data/a.txt", "src/data/b.txt", "src/data/c.csv"]),
+    ("src/data/[!ab].*", ["src/data/c.csv"]),
+    ("src/data/*.{txt,csv}", [
+        "src/data/a.txt",
+        "src/data/b.txt",
+        "src/data/c.csv",
+        "src/data/file1.txt",
+        "src/data/file10.txt",
+        "src/data/file2.txt"
+    ]),
+    ("{src,test}/*.zig", ["src/lib.zig", "src/main.zig", "test/main_test.zig"]),
+    (".*", [".hidden",".config"]),
+    (".config/*.toml", [".config/settings.toml"]),
+    ("**/*.toml", []),
+    ("test/fixtures/*.txt", ["test/fixtures/weird name.txt"]),
+    ("test/fixtures/weird*", ["test/fixtures/weird name.txt"]),
+    ("nope/*.zig", [])
+]
+
+sort := |a,b| a < b
+
+check := |pattern, expected|
+    with(@glob(pattern)) |result|
+    if(@sort(result, sort) == @sort(expected,sort))
+        @print(`OK "{pattern}"`)
+    else
+        @print(`FAIL "{pattern}" = {result}, expected: {expected}`)
+
+[cwd: "./private/glob/"]
+task test {
+    for(tests) |(pattern, expected)| {
+        (check(pattern, expected))
+    }
+}
