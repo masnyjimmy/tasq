@@ -72,6 +72,18 @@ const fs_functions: []const Spec = &.{
         },
         .return_type = .{ .result = &.{ .concrete = Type.string } },
     },
+    .{
+        .name = "glob",
+        .args = &.{
+            .{
+                .name = "pattern",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{
+            .concrete = .{ .list = &.string },
+        },
+    },
 };
 
 const string_functions: []const Spec = &.{

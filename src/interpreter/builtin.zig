@@ -12,6 +12,7 @@ const Value = compiler.Value;
 const Scope = @import("Scope.zig");
 
 const Interpreter = @import("interpreter.zig");
+const glob = @import("glob.zig");
 
 const functions_count = functions.definitions.items.len;
 
@@ -25,6 +26,7 @@ const handlers: [functions_count]Handler = .{
     handleParseNumber,
     handleExists,
     handleRead,
+    handleGlob,
     handleLen,
     handleSplit,
     handleJoin,
@@ -126,6 +128,41 @@ fn handleRead(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const 
     ) catch return makeResult(scope, RESULT_TYPE, null);
 
     return makeResult(scope, RESULT_TYPE, .{ .string = content });
+}
+
+fn handleGlob(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    const pattern = args[0].string;
+
+    var it = glob.iterate(
+        self.allocator,
+        cwd,
+        self.io,
+        pattern,
+    ) catch |err| return switch (err) {
+        glob.Error.InvalidGlob => .{
+            .list = .{
+                .items_type = &.string,
+                .items = &.{},
+            },
+        },
+        else => @errorCast(err),
+    };
+    defer it.deinit();
+
+    var result: std.ArrayList(Value) = .empty;
+
+    while (try it.next()) |match| {
+        try result.append(scope.arena.allocator(), .{
+            .string = try scope.arena.allocator().dupe(u8, match),
+        });
+    }
+
+    return .{
+        .list = .{
+            .items_type = &.string,
+            .items = try result.toOwnedSlice(scope.arena.allocator()),
+        },
+    };
 }
 
 fn handleOs(_: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
