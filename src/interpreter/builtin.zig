@@ -36,12 +36,17 @@ const handlers: [functions_count]Handler = .{
     handleReplaceString,
     handleAtString,
     handleLines,
+    handleTrim,
+    handleTrimStart,
+    handleTrimEnd,
     handleLen,
     handleReplaceList,
     handleAny,
     handleAll,
     handleReduce,
     handleAtList,
+    handleUnique,
+    handleSort,
     handleEnv,
     handleOs,
     handleStatusCode,
@@ -300,6 +305,89 @@ fn handleAtList(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Val
     return makeResult(scope, list.items_type, list.items[@intCast(pos)]);
 }
 
+fn handleUnique(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    const list = args[0].list;
+
+    var set: std.HashMapUnmanaged(Value, bool, Value.MapContext, 80) = .empty;
+
+    var result: std.ArrayList(Value) = .empty;
+
+    for (list.items) |item| {
+        const gop = try set.getOrPut(scope.arena.allocator(), item);
+
+        if (gop.found_existing)
+            continue;
+
+        try result.append(scope.arena.allocator(), item);
+    }
+
+    return .{
+        .list = .{
+            .items_type = list.items_type,
+            .items = result.items,
+        },
+    };
+}
+
+fn handleSort(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    const list = args[0].list;
+    const cmp_fn = args[1].lambda.instance;
+
+    const result: []Value = try scope.arena.allocator().alloc(Value, list.items.len);
+
+    for (list.items, result) |in, *out| {
+        out.* = try in.clone(scope.arena.allocator());
+    }
+
+    const Context = struct {
+        i: *Interpreter,
+        c: std.Io.Dir,
+        s: *Scope,
+        f: *const ir.LambdaInstance,
+        err: ?Error = null,
+
+        fn lessThan(s: *@This(), a: Value, b: Value) bool {
+            if (s.err == null) {
+                const out = callLambda(
+                    s.i,
+                    s.c,
+                    s.s,
+                    s.f,
+                    &.{
+                        a, b,
+                    },
+                ) catch |err| {
+                    s.err = err;
+                    unreachable;
+                    // return false;
+                };
+                return out.bool;
+            }
+
+            return false;
+        }
+    };
+
+    var ctx: Context = .{
+        .i = self,
+        .c = cwd,
+        .s = scope,
+        .f = cmp_fn,
+    };
+    //TODO: just replace it which custom sort implementation instead of this wire thing
+    std.mem.sort(Value, result, &ctx, Context.lessThan);
+
+    if (ctx.err) |err|
+        return err;
+
+    return .{
+        .list = .{
+            .items_type = list.items_type,
+            .items = result,
+        },
+    };
+}
+
 fn handleLen(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
     const length = switch (args[0]) {
         .string => |str| str.len,
@@ -311,10 +399,27 @@ fn handleLen(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Err
         .number = @floatFromInt(length),
     };
 }
-
+// when sep is "" split on chars
 fn handleSplit(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const str = args[0].string;
     const sep = args[1].string;
+
+    if (sep.len == 0) {
+        const result: []Value = try scope.arena.allocator().alloc(Value, str.len);
+
+        for (result, 0..) |*out, idx| {
+            out.* = .{
+                .string = str[idx .. idx + 1],
+            };
+        }
+
+        return .{
+            .list = .{
+                .items_type = &.string,
+                .items = result,
+            },
+        };
+    }
 
     const list_size = std.mem.count(u8, str, sep) + 1;
 
@@ -347,10 +452,14 @@ fn handleJoin(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value
         var total: usize = 0;
 
         for (strings.items) |item| {
-            total = item.string.len;
+            total += item.string.len;
         }
 
-        break :blk total + ((strings.items.len - 1) * sep.len);
+        if (strings.items.len > 1) {
+            total += (strings.items.len - 1) * sep.len;
+        }
+
+        break :blk total;
     };
 
     const string = try scope.arena.allocator().alloc(u8, string_size);
@@ -486,6 +595,38 @@ fn handleLines(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Valu
     };
 }
 
+fn handleTrim(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    const str = args[0].string;
+    const set = args[1].string;
+
+    const result = std.mem.trim(u8, str, set);
+
+    return .{
+        .string = result,
+    };
+}
+
+fn handleTrimStart(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    const str = args[0].string;
+    const set = args[1].string;
+
+    const result = std.mem.trimStart(u8, str, set);
+
+    return .{
+        .string = result,
+    };
+}
+
+fn handleTrimEnd(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    const str = args[0].string;
+    const set = args[1].string;
+
+    const result = std.mem.trimEnd(u8, str, set);
+
+    return .{
+        .string = result,
+    };
+}
 fn handleReplaceList(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
     const list = args[0].list;
     const old = args[1];

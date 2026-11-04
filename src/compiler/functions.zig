@@ -217,6 +217,48 @@ const string_functions: []const Spec = &.{
         },
         .return_type = .{ .concrete = .{ .list = &.string } },
     },
+    .{
+        .name = "trim",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = .string },
+            },
+            .{
+                .name = "set",
+                .type = .{ .concrete = .string },
+            },
+        },
+        .return_type = .{ .concrete = .string },
+    },
+    .{
+        .name = "trim_start",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = .string },
+            },
+            .{
+                .name = "set",
+                .type = .{ .concrete = .string },
+            },
+        },
+        .return_type = .{ .concrete = .string },
+    },
+    .{
+        .name = "trim_end",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = .string },
+            },
+            .{
+                .name = "set",
+                .type = .{ .concrete = .string },
+            },
+        },
+        .return_type = .{ .concrete = .string },
+    },
 };
 
 const collections_functions: []const Spec = &.{
@@ -342,6 +384,36 @@ const collections_functions: []const Spec = &.{
         },
         .return_type = .{ .result = &.{ .generic = "T" } },
     },
+    .{
+        .name = "unique",
+        .args = &.{
+            .{
+                .name = "list",
+                .type = .{ .list = &.{ .generic = "T" } },
+            },
+        },
+        .return_type = .{ .list = &.{ .generic = "T" } },
+    },
+    .{
+        .name = "sort",
+        .args = &.{
+            .{
+                .name = "list",
+                .type = .{ .list = &.{ .generic = "T" } },
+            },
+            .{
+                .name = "cmp_fn",
+                .type = .{ .lambda = &.{
+                    .params = &.{
+                        .{ .generic = "T" },
+                        .{ .generic = "T" },
+                    },
+                    .return_type = .{ .concrete = .bool },
+                } },
+            },
+        },
+        .return_type = .{ .list = &.{ .generic = "T" } },
+    },
 };
 
 const misc_functions: []const Spec = &.{
@@ -451,7 +523,7 @@ fn Functions(comptime specs: []const Spec) type {
 
         for (specs, 0..) |spec, idx| {
             defs[idx] = def: {
-                @setEvalBranchQuota(2_000);
+                @setEvalBranchQuota(3_000); // it may need to be adjusted if functions are added
                 var out = ct.copyFields(Definition, spec);
                 out.id = @fromBackingInt(@intCast(idx));
                 out.ident = spec_to_id[idx];
