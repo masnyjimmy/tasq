@@ -240,7 +240,7 @@ Expressions produce a typed value. They are used in bindings, task call argument
 | Category | Operators | Operands | Result |
 |----------|-----------|----------|--------|
 | Arithmetic | `+` `-` `*` `/` `%` | `number` | `number` |
-| Comparison | `>` `<` `>=` `<=` | `number` | `bool` |
+| Comparison | `>` `<` `>=` `<=` | two `number`s or two `string`s ([see below](#string-comparison)) | `bool` |
 | Equality | `==` `!=` | any matching type (tuples compare element-wise, [§4.10](#410-tuples-and-destructuring)) | `bool` |
 | Boolean | `and` `or` | `bool` | `bool` |
 | Boolean negation | `!` | `bool` | `bool` |
@@ -254,6 +254,17 @@ Expressions produce a typed value. They are used in bindings, task call argument
 - There is **no implicit type coercion**; operands must match the expected types exactly.
 - Precedence follows mathematical convention (`*`, `/`, `%` before `+`, `-`). Boolean operators bind more loosely than comparisons.
 - The slice postfix `[...]` binds tighter than every operator. The range operator `..` binds more loosely than every arithmetic operator, so `a + 1..b * 2` means `(a + 1)..(b * 2)`.
+
+#### String comparison
+
+`>` `<` `>=` `<=` also work on two `string` operands, which are compared **lexicographically** (for UTF-8 text this is the same as comparing code points). Both operands must have the same type; comparing a `number` with a `string` is a compile-time error, as there is no implicit coercion. `==` and `!=` compare strings for equality as for any other type.
+
+```
+"apple" < "banana"   // true
+"abc" < "abd"        // true
+"ab" < "abc"         // true  (a prefix is smaller than the longer string)
+"b" >= "a"           // true
+```
 
 **List spread:**
 
@@ -720,6 +731,12 @@ Built-in functions are called with an `@` prefix and may appear in any expressio
 | `@os()` | `string` | The current platform: `"windows"`, `"linux"` or `"macos"`. |
 | `@status_code()` | `number` | Exit status of the most recently executed process. Every process call, statement or expression, updates it, including a process expression evaluated as part of a lazily evaluated static binding ([§3](#3-bindings)). After a process that failed without aborting (`nofail`, or a taken `fallback`) it holds that non-zero status. Errors if no process has run yet in the current task. |
 
+**File system**
+
+| Signature | Returns | Description |
+|-----------|---------|-------------|
+| `@glob(pattern: string)` | `[]string` | Lists, recursively, the files and directories that match the glob `pattern`. A relative `pattern` is matched relative to the working directory in effect for the task, the same one its process calls run in ([§7](#7-settings)). The result is **not sorted** and its order is unspecified; use `@sort` for a deterministic order. An invalid pattern currently results in an empty list rather than an error ([§14](#14-planned-features)). |
+
 **Output and control**
 
 | Signature | Returns | Description |
@@ -741,12 +758,16 @@ Built-in functions are called with an `@` prefix and may appear in any expressio
 | `@at(str: string, pos: number)` | `!string` | The character at index `pos` of `str`, as a `string`. `pos` is rounded up to a whole number first ([§2.1](#21-runtime-types)); errors if the result is less than `0` or not less than `@len(str)`. |
 | `@split(str: string, sep: string)` | `[]string` | Splits `str` wherever `sep` occurs. |
 | `@join(list: []string, sep: string)` | `string` | Joins the elements of `list`, separated by `sep`. |
+| `@lines(str: string)` | `[]string` | Cuts `str` into lines and returns them as a list. Lines end at `\n` or `\r\n`; the line terminators are not part of the returned lines. A final terminator does not produce an extra empty line, and an empty `str` yields an empty list. |
 | `@lower(str: string)` | `string` | `str` in lowercase. |
 | `@upper(str: string)` | `string` | `str` in uppercase. |
 | `@contains(str: string, sub: string)` | `bool` | `true` if `str` contains `sub`. |
 | `@starts_with(str: string, prefix: string)` | `bool` | `true` if `str` begins with `prefix`. |
 | `@ends_with(str: string, postfix: string)` | `bool` | `true` if `str` ends with `postfix`. |
 | `@replace(str: string, old: string, new: string)` | `string` | Copy of `str` with every occurrence of `old` replaced by `new`. |
+| `@trim(str: string, set: string)` | `string` | Copy of `str` with all leading and trailing characters that occur in `set` removed. `set` is treated as a set of characters, not as a sequence. |
+| `@trim_start(str: string, set: string)` | `string` | Like `@trim`, but removes only leading characters. |
+| `@trim_end(str: string, set: string)` | `string` | Like `@trim`, but removes only trailing characters. |
 
 **Lists**
 
@@ -755,6 +776,8 @@ Built-in functions are called with an `@` prefix and may appear in any expressio
 | `@len(list: []T)` | `number` | Number of elements in `list`. |
 | `@at(list: []T, pos: number)` | `!T` | The element at index `pos` of `list`. `pos` is rounded up to a whole number first ([§2.1](#21-runtime-types)); errors if the result is less than `0` or not less than `@len(list)`. |
 | `@replace(list: []T, old: T, new: T)` | `[]T` | Copy of `list` with every element equal to `old` replaced by `new`. |
+| `@unique(list: []T)` | `[]T` | Copy of `list` without duplicates. Elements are compared with `==`; the first occurrence of each element is kept and the original order is preserved. |
+| `@sort(list: []T, less: \|T, T\| -> bool)` | `[]T` | Copy of `list` sorted using `less`. `less(a, b)` returns `true` when `a` must be ordered before `b`. `list` itself is unchanged. |
 | `@all(list: []T, predicate: \|T\| -> bool)` | `bool` | `true` if `predicate` is `true` for every element (vacuously `true` for an empty list). |
 | `@any(list: []T, predicate: \|T\| -> bool)` | `bool` | `true` if `predicate` is `true` for at least one element. |
 | `@reduce(list: []T, init: T, combine: \|T, T\| -> T)` | `T` | Folds `list` into a single value: starting from `init`, calls `combine(accumulator, element)` for each element in order and returns the final accumulator. |
@@ -762,9 +785,31 @@ Built-in functions are called with an `@` prefix and may appear in any expressio
 **Notes:**
 
 - **Overloads.** `@len`, `@at` and `@replace` each have a string and a list form. The overload is chosen at compile time from the argument types.
-- **Lambda arguments.** `@all`, `@any` and `@reduce` take a lambda ([§4.8](#48-lambdas)), written inline or given by name (`@any(xs, big)` with `big := |n| n > 10`). The notation `|T| -> bool` means "a lambda taking one `T` and returning `bool`". The overload is chosen from the function name, the types of the non-lambda arguments and the lambda's **number of parameters**; the lambda's parameter types then come from that overload, and its body must produce the result type the overload expects (e.g. `bool` for `@any`).
+- **Lambda arguments.** `@sort`, `@all`, `@any` and `@reduce` take a lambda ([§4.8](#48-lambdas)), written inline or given by name (`@any(xs, big)` with `big := |n| n > 10`). The notation `|T| -> bool` means "a lambda taking one `T` and returning `bool`". The overload is chosen from the function name, the types of the non-lambda arguments and the lambda's **number of parameters**; the lambda's parameter types then come from that overload, and its body must produce the result type the overload expects (e.g. `bool` for `@any`).
+- **Sort order.** The lambda given to `@sort` is a "less than" function: it should be a strict ordering (`less(a, a)` is `false`, and `less(a, b)` and `less(b, a)` are never both `true`). The order of the result for a lambda that violates this is unspecified.
 - **Fallible built-ins.** `@env`, `@which`, `@parse_number` and `@at` return `!T` and can only be used with `fallback` ([§4.7](#47-fallback)).
 - **Element access.** `@at` reads a single element or character. To take a part of a list or string, use a slice ([§4.9](#49-ranges-and-slices)), which never errors.
+
+**Examples:**
+
+```
+task demo {
+    // Every file and directory matching the pattern, in a deterministic order
+    for(@sort(@glob("src/**/*.zig"), |a, b| a < b)) |path| @print(path)
+
+    // Process output split into lines, each one trimmed
+    for(@lines($`git status --short`)) |line| @print(@trim(line, " "))
+
+    @print(@trim("--name--", "-"))                    // name
+    @print(@trim_start("--name--", "-"))              // name--
+    @print(@trim_end("--name--", "-"))                // --name
+
+    @print(`{@unique([1, 2, 1, 3, 2])}`)              // [1, 2, 3]
+    @print(`{@sort([3, 1, 2], |a, b| a < b)}`)        // [1, 2, 3]
+    @print(`{@sort([3, 1, 2], |a, b| a > b)}`)        // [3, 2, 1]
+    @print(`{@sort(["b", "c", "a"], |a, b| a < b)}`)  // [a, b, c]
+}
+```
 
 > Additional built-in functions will be added in future versions.
 
@@ -1630,6 +1675,7 @@ Reserved for future versions; not currently part of the language:
 - **Unbounded range loops.** A `for` window with no finite end (for example `for(0..)`) currently runs zero times, so range loops can never be infinite ([§4.9](#49-ranges-and-slices)). Other semantics may be defined later.
 - **Precise string units.** `@len`, `@at` and string slices count "characters". The exact unit (Unicode code point, character or glyph) is to be decided and defined precisely ([§4.9](#49-ranges-and-slices), [§5](#5-built-in-functions)).
 - **Additional built-in functions**: type conversion utilities and other helpers.
+- **Glob errors.** An invalid pattern passed to `@glob` currently results in an empty list ([§5](#5-built-in-functions)). Reporting it as an error may be defined later.
 - **Additional settings**: further interpreter configuration options.
 - **Additional argument validation attributes.**
 - **Isolated `@status_code()` for static bindings.** Today a lazily evaluated static binding that runs a process updates `@status_code()` like any other process; this may change so that evaluating a static binding leaves it untouched.
