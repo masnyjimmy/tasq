@@ -490,7 +490,7 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
         .bool_lit => |lit| .{ .bool = lit },
         .number_lit => |lit| .{ .number = lit },
         .string => |str| .{ .string = try self.resolveString(cwd, scope, str) },
-        .list => |list| {
+        .list => |*list| {
             var result: std.ArrayList(Value) = try .initCapacity(scope.arena.allocator(), list.items.len);
             errdefer result.deinit(scope.arena.allocator());
 
