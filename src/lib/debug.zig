@@ -334,3 +334,7 @@ pub fn dump(
 }
 
 pub var WANTS_COLOR: bool = true;
+
+pub fn todo(comptime message: []const u8) noreturn {
+    std.debug.panic("TODO: {s}\n", .{message});
+}

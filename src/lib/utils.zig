@@ -3,7 +3,7 @@ const std = @import("std");
 pub fn EnumSize(comptime E: type) usize {
     comptime {
         const a = std.EnumArray(E, i32).initFill(5);
-        @compileLog(a.get(@enumFromInt(0)));
+        @compileLog(a.get(@fromBackingInt(@intCast(0))));
     }
     return @typeInfo(E).@"enum".fields.len;
 }
