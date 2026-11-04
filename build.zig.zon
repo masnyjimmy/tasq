@@ -10,6 +10,10 @@
             .url = "git+https://github.com/zigtools/lsp-kit#3e1058db66079911fdde82f833fdce6856e0a706",
             .hash = "lsp_kit-0.1.0-bi_PL9o2DADHS1PDra3MGz1MXnsboN_ewNvrc419z7Fb",
         },
+        .libglob = .{
+            .url = "https://github.com/xcaeser/libglob/archive/v0.3.0.tar.gz",
+            .hash = "libglob-0.3.0-mm_32r07AAC56Mo-zfb7GxNMTv3Q-WNyahxrIIVCf9Fv",
+        },
     },
     .paths = .{""},
     .fingerprint = 0x8fa97201d2ec7744,

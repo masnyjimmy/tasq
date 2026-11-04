@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // dependencies
+    //============= dependencies ===============//
     const conzole_mod = b.dependency("conzole", .{
         .target = target,
         .optimize = optimize,
@@ -14,6 +14,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     }).module("lsp");
+
+    const glob_mod = b.dependency("libglob", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("libglob");
+
+    //============= modules ===============//
 
     const lib_mod = b.createModule(.{
         .root_source_file = b.path("src/lib/root.zig"),
@@ -37,6 +44,7 @@ pub fn build(b: *std.Build) void {
     interpreter_mod.addImport("conzole", conzole_mod);
     interpreter_mod.addImport("compiler", compiler_mod);
     interpreter_mod.addImport("lib", lib_mod);
+    interpreter_mod.addImport("libglob", glob_mod);
 
     const lsp_mod = b.createModule(.{
         .root_source_file = b.path("src/lsp/root.zig"),
