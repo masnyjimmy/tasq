@@ -836,12 +836,18 @@ pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []cons
     const file = try compileRunfile(ctx, source_filepath);
 
     const task = file.findTask(.parse(task_id)) orelse {
-        try ctx.printer.printStyled(ctx.allocator, style.err, "Task '{s}' not found\n", .{task_id});
+        try ctx.printer.printStyled(
+            ctx.allocator,
+            style.err,
+            "Task '{s}' not found\n",
+            .{task_id},
+        );
         return TaskError.TaskNotFound;
     };
 
     var interpreter: inter.Interpreter = try .init(
         ctx.allocator,
+        ctx.invokation_dir,
         ctx.io,
         ctx.printer,
         &file.options,

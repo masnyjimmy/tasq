@@ -30,6 +30,7 @@ const style = struct {
 };
 
 allocator: std.mem.Allocator,
+invokation_dir: []const u8,
 io: std.Io,
 printer: *Printer,
 options: *const ir.Options,
@@ -38,6 +39,7 @@ cwd: std.Io.Dir,
 
 pub fn init(
     allocator: std.mem.Allocator,
+    invokation_dir: []const u8,
     io: std.Io,
     printer: *Printer,
     options: *const ir.Options,
@@ -53,6 +55,7 @@ pub fn init(
 
     return .{
         .allocator = allocator,
+        .invokation_dir = invokation_dir,
         .io = io,
         .printer = printer,
         .options = options,

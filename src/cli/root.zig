@@ -25,12 +25,20 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
 
     var diag: conzole.command.Diagnostic = undefined;
 
+    const invokation_dir = try std.Io.Dir.cwd().realPathFileAlloc(
+        io,
+        ".",
+        allocator,
+    );
+    defer allocator.free(invokation_dir);
+
     const cmd = try command.buildCommand(allocator);
     defer cmd.destroy();
 
     cmd.execute(allocator, args[1..], &diag, .{
         .allocator = allocator,
         .io = io,
+        .invokation_dir = invokation_dir,
         .environ = environ,
         .printer = &printer,
         .workspace = &workspace,
