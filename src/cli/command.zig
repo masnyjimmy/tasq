@@ -2,7 +2,7 @@ const std = @import("std");
 const lib = @import("lib");
 const conzole = @import("conzole");
 
-const AppContext = @import("context.zig");
+const AppContext = @import("Context.zig");
 
 const Command = conzole.CommandWithContext(AppContext);
 

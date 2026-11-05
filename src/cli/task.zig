@@ -18,7 +18,7 @@ const Style = conzole.terminal.Style;
 
 const lib = @import("lib");
 
-const Context = @import("context.zig");
+const Context = @import("Context.zig");
 
 pub const TaskError = error{
     TaskNotFound,
