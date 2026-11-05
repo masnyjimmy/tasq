@@ -485,6 +485,21 @@ const misc_functions: []const Spec = &.{
         .return_type = .{ .concrete = Type.string },
     },
     .{
+        .name = "cwd",
+        .args = &.{},
+        .return_type = .{ .concrete = Type.string },
+    },
+    .{
+        .name = "arch",
+        .args = &.{},
+        .return_type = .{ .concrete = Type.string },
+    },
+    .{
+        .name = "invokation_dir",
+        .args = &.{},
+        .return_type = .{ .concrete = Type.string },
+    },
+    .{
         .name = "status_code",
         .args = &.{},
         .return_type = .{ .concrete = Type.number },
@@ -511,7 +526,7 @@ pub const definitions = Functions(
 );
 
 fn Functions(comptime specs: []const Spec) type {
-    @setEvalBranchQuota(3_000);
+    @setEvalBranchQuota(5_000); // it may need to be adjusted if functions are added
 
     const FnIdent = blk: {
         const EnumTag = enums.FitUnsigned(specs.len);
@@ -576,7 +591,6 @@ fn Functions(comptime specs: []const Spec) type {
 
         for (specs, 0..) |spec, idx| {
             defs[idx] = def: {
-                @setEvalBranchQuota(3_000); // it may need to be adjusted if functions are added
                 var out = ct.copyFields(Definition, spec);
                 out.id = @fromBackingInt(@intCast(idx));
                 out.ident = spec_to_id[idx];
@@ -587,8 +601,6 @@ fn Functions(comptime specs: []const Spec) type {
         break :blk defs;
     };
 
-    // FIX: heavy comptime meta programming, need this
-    @setEvalBranchQuota(5_000);
     const name_map = enums.generateEnumNameMap(FnIdent);
 
     return struct {

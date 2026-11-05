@@ -55,6 +55,9 @@ const handlers: [functions_count]Handler = .{
     handleSort,
     handleEnv,
     handleOs,
+    handleCwd,
+    handleArch,
+    handleInvokactionDir,
     handleStatusCode,
     handleWhich,
 };
@@ -215,6 +218,32 @@ fn handleIsDir(self: *Interpreter, cwd: std.Io.Dir, _: *Scope, args: []const Val
 fn handleOs(_: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
     return .{
         .string = @tagName(platform.tag),
+    };
+}
+
+fn handleCwd(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, _: []const Value) Error!Value {
+    var buffer: [1024]u8 = undefined;
+
+    const size = try cwd.realPath(self.io, &buffer);
+
+    return .{
+        .string = try scope.arena.allocator().dupe(u8, buffer[0..size]),
+    };
+}
+
+fn handleArch(_: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+    const builtin = @import("builtin");
+
+    const arch = builtin.target.cpu.arch.family();
+
+    return .{
+        .string = @tagName(arch),
+    };
+}
+
+fn handleInvokactionDir(self: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+    return .{
+        .string = self.invokation_dir,
     };
 }
 

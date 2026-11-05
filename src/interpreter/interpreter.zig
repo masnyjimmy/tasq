@@ -18,11 +18,11 @@ const builtin = @import("builtin.zig");
 
 pub const Interpreter = @This();
 
-pub const Error = std.Io.Writer.Error || std.Io.Reader.Error || binary_mod.Error || std.mem.Allocator.Error || std.process.SpawnError || error{
+pub const Error = error{
     Abort,
     Break,
     Continue,
-};
+} || std.Io.Writer.Error || std.Io.Reader.Error || binary_mod.Error || std.mem.Allocator.Error || std.process.SpawnError || std.Io.Dir.RealPathError;
 
 const style = struct {
     const echo: Style = .{ .bold = true, .fg = .bright_white };
