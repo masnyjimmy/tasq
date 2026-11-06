@@ -32,6 +32,14 @@
                 "language": "tasq",
                 "scopeName": "source.tasq",
                 "path": "./syntaxes/tasq.tmLanguage.json"
+            },
+            {
+                "scopeName": "markdown.tasq.codeblock",
+                "path": "./syntaxes/codeblock.json",
+                "injectTo": ["text.html.markdown"],
+                "embeddedLanguages": {
+                    "meta.embedded.block.tasq": "tasq"
+                }
             }
         ],
         "semanticTokenTypes": [
