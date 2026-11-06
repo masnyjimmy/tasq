@@ -105,13 +105,23 @@ pub const Parser = struct {
         }
     }
 
-    const StmtKind = enum { binding, task_call, process, @"if", @"switch", @"for", expr };
+    const StmtKind = enum {
+        binding,
+        task_call,
+        process,
+        @"if",
+        @"switch",
+        @"for",
+        in,
+        expr,
+    };
     fn classifyStmt(self: *Parser) Error!StmtKind {
         return switch (try self.peek()) {
             .dollar => .process,
             .if_kw => .@"if",
             .switch_kw => .@"switch",
             .for_kw => .@"for",
+            .in_kw => .in,
             .dcolon => .task_call,
             .ident, .lparen => blk: {
                 if (try self.atBinding()) break :blk .binding;
@@ -439,6 +449,7 @@ pub const Parser = struct {
             .@"if" => try self.parseIfStmt(follow),
             .@"switch" => try self.parseSwitch(.stmt, follow),
             .@"for" => try self.parseFor(.stmt, follow),
+            .in => try self.parseIn(.stmt, follow),
             .expr => {
                 try self.open();
                 try self.parseExpr(follow);
@@ -689,6 +700,16 @@ pub const Parser = struct {
         try self.close(.captures);
     }
 
+    fn parseIn(self: *Parser, comptime body_type: BodyType, follow: FollowSet) Error!void {
+        try self.open();
+
+        try self.expect(.in_kw, follow.withSet(EXPR_START));
+        try self.parseExpr(follow.withSet(body_type.bodyStart()));
+        try body_type.parse(self, follow);
+
+        try self.close(.in);
+    }
+
     const BodyType = enum {
         expr,
         stmt,
@@ -819,6 +840,7 @@ pub const Parser = struct {
             .continue_kw => try self.advanceAs(.@"continue"),
             .break_kw => try self.advanceAs(.@"break"),
             .with_kw => try self.parseWithExpr(follow),
+            .in_kw => try self.parseIn(.expr, follow),
             else => |tag| try self.unexpectedNode(
                 follow,
                 "expected an expression, found '{t}'",

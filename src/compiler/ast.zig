@@ -271,8 +271,8 @@ pub const Expr = struct {
         .binary_expr, .unary_expr,  .builtin_call,
         .@"if",       .@"for",      .@"switch",
         .lambda,      .lambda_call, .process_expr,
-        .slice,       .with,        .@"continue",
-        .@"break",
+        .slice,       .with,        .in,
+        .@"continue", .@"break",
     };
 
     node: *const cst.Node,
@@ -294,9 +294,10 @@ pub const Expr = struct {
         lambda: Lambda,
         lambda_call: LambdaCall,
         slice: SliceExpr,
+        with: WithExpr,
+        in: InExpr,
         @"continue": cst.Token,
         @"break": cst.Token,
-        with: WithExpr,
     };
 
     pub fn from(node: *const cst.Node) Expr {
@@ -321,10 +322,30 @@ pub const Expr = struct {
             .lambda_call => .{ .lambda_call = .from(self.node) },
             .process_expr => .{ .process = .from(self.node) },
             .slice => .{ .slice = .from(self.node) },
+            .with => .{ .with = .from(self.node) },
+            .in => .{ .in = .from(self.node) },
             .@"continue" => .{ .@"continue" = self.node.childToken(.continue_kw) orelse unreachable },
             .@"break" => .{ .@"break" = self.node.childToken(.break_kw) orelse unreachable },
-            .with => .{ .with = .from(self.node) },
             else => unreachable,
+        };
+    }
+};
+
+pub const InExpr = struct {
+    node: *const cst.Node,
+    subject: ?Expr,
+    body: ?Expr,
+
+    pub fn from(node: *const cst.Node) InExpr {
+        var it = node.iter();
+
+        const subject = expectAnyNode(&it, Expr, Expr.KINDS);
+        const body = expectAnyNode(&it, Expr, Expr.KINDS);
+
+        return .{
+            .node = node,
+            .subject = subject,
+            .body = body,
         };
     }
 };
@@ -1003,9 +1024,9 @@ pub const Statements = AnyKindIterable(.loose, Statement, Statement.KINDS);
 
 pub const Statement = struct {
     const KINDS: []const cst.NodeKind = &.{
-        .binding,   .process_stmt, .task_call,
-        .@"for",    .@"if",        .@"switch",
-        .expr_stmt,
+        .binding, .process_stmt, .task_call,
+        .@"for",  .@"if",        .@"switch",
+        .in,      .expr_stmt,
     };
     node: *const cst.Node,
 
@@ -1016,6 +1037,7 @@ pub const Statement = struct {
         @"for": ForStmt,
         @"if": IfStmt,
         @"switch": SwitchStmt,
+        in: InStmt,
         expr: ?Expr,
     };
 
@@ -1031,10 +1053,30 @@ pub const Statement = struct {
             .@"for" => .{ .@"for" = .from(self.node) },
             .@"if" => .{ .@"if" = .from(self.node) },
             .@"switch" => .{ .@"switch" = .from(self.node) },
+            .in => .{ .in = .from(self.node) },
             .expr_stmt => .{
                 .expr = if (self.node.childNodeOf(Expr.KINDS)) |n| .from(n) else null,
             },
             else => unreachable,
+        };
+    }
+};
+
+pub const InStmt = struct {
+    node: *const cst.Node,
+    subject: ?Expr,
+    body: Statements,
+
+    pub fn from(node: *const cst.Node) InStmt {
+        var it = node.iter();
+
+        const subject = expectAnyNode(&it, Expr, Expr.KINDS);
+        const body = expectNode(&it, Statements, .stmt_block) orelse unreachable;
+
+        return .{
+            .node = node,
+            .subject = subject,
+            .body = body,
         };
     }
 };

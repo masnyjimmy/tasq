@@ -970,6 +970,9 @@ pub const Sema = struct {
             .@"switch" => |switch_stmt| .{
                 .switch_stmt = try self.analyseSwitchStmt(switch_stmt, scope),
             },
+            .in => |in_stmt| .{
+                .in_stmt = try self.analyseInStmt(in_stmt, scope),
+            },
             .expr => |inner| {
                 const expr = inner orelse return Error.Incomplete;
                 const result = try self.analyseExpr(expr, scope);
@@ -986,6 +989,32 @@ pub const Sema = struct {
 
                 return .{ .expr = result.expr };
             },
+        };
+    }
+
+    fn analyseInStmt(self: *Sema, in_stmt: ast.InStmt, scope: *Scope) Error!ir.InStmt {
+        const subject = try self.analyseExpr(
+            in_stmt.subject orelse return Error.Incomplete,
+            scope,
+        );
+
+        const body = try self.analyseBlock(
+            in_stmt.node,
+            in_stmt.body,
+            scope,
+        );
+
+        if (subject.type != .string and subject.type != .unknown) {
+            try self.diagnostics.err(
+                in_stmt.subject.?.node.span,
+                "invalid in subject, expected '{f}', got '{f}'",
+                .{ @as(Type, .string), subject.type },
+            );
+        }
+
+        return .{
+            .subject = subject.expr,
+            .body = body,
         };
     }
 
@@ -2068,6 +2097,17 @@ pub const Sema = struct {
                     .is_static = result.is_static,
                 };
             },
+            .in => |in_expr| {
+                const result = try self.analyseInExpr(in_expr, scope);
+
+                const ptr = try self.create(ir.InExpr, result.expr);
+
+                return .{
+                    .expr = .{ .in = ptr },
+                    .is_static = result.is_static,
+                    .type = result.type,
+                };
+            },
             inline .@"continue", .@"break" => |token, tag| {
                 if (self.loop_depth == 0) {
                     try self.diagnostics.err(
@@ -2083,6 +2123,37 @@ pub const Sema = struct {
                     .is_static = true,
                 };
             },
+        };
+    }
+
+    fn analyseInExpr(self: *Sema, in_expr: ast.InExpr, scope: *Scope) Error!ExprResult(ir.InExpr) {
+        var subject = try self.analyseExpr(
+            in_expr.subject orelse return Error.Incomplete,
+            scope,
+        );
+        var body = try self.analyseExprPartial(
+            in_expr.body orelse return Error.Incomplete,
+            scope,
+        );
+        _ = try self.rejectNoreturn(in_expr.subject.?, &subject, "in path expression", .{});
+        _ = try self.rejectNoreturn(in_expr.body.?, &body, "in body", .{});
+
+        if (subject.type != .string and subject.type != .unknown) {
+            try self.diagnostics.err(
+                in_expr.subject.?.node.span,
+                "invalid in subject, expected '{f}', got '{f}'",
+                .{ @as(Type, .string), subject.type },
+            );
+        }
+
+        return .{
+            .expr = .{
+                .subject = subject.expr,
+                .body = body.expr,
+                .type = body.type,
+            },
+            .is_static = subject.is_static and body.is_static,
+            .type = body.type,
         };
     }
 

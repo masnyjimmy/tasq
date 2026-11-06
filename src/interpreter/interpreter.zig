@@ -341,6 +341,31 @@ fn main(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Stat
         .task_call => |*task_call| {
             try self.handleTaskCall(cwd, scope, task_call);
         },
+        .in_stmt => |*in_stmt| {
+            const subject = try self.evaluateExpr(
+                cwd,
+                scope,
+                &in_stmt.subject,
+            );
+
+            const path = subject.string;
+
+            const in_dir = try cwd.openDir(
+                self.io,
+                path,
+                .{},
+            );
+            defer in_dir.close(self.io);
+
+            var in_scope = try Scope.create(scope, self.allocator, in_stmt.body.scope);
+            defer in_scope.destroy();
+
+            try self.runBlock(
+                in_dir,
+                in_scope,
+                in_stmt.body.statements,
+            );
+        },
         .expr => |*expr| {
             _ = try self.evaluateExpr(cwd, scope, expr);
         },
@@ -818,6 +843,24 @@ pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *c
             const result = try self.evaluateExpr(cwd, with_scope, &with.expr);
 
             return try result.clone(scope.arena.allocator());
+        },
+        .in => |in| {
+            const subject = try self.evaluateExpr(
+                cwd,
+                scope,
+                &in.subject,
+            );
+
+            const path = subject.string;
+
+            const in_dir = try cwd.openDir(
+                self.io,
+                path,
+                .{},
+            );
+            defer in_dir.close(self.io);
+
+            return try self.evaluateExpr(in_dir, scope, &in.body);
         },
         .@"continue" => Error.Continue,
         .@"break" => Error.Break,

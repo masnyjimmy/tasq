@@ -127,7 +127,13 @@ pub const Statement = union(enum) {
     for_stmt: ForStmt,
     switch_stmt: SwitchStmt,
     if_stmt: IfStmt,
+    in_stmt: InStmt,
     expr: Expr, // else
+};
+
+pub const InStmt = struct {
+    subject: Expr,
+    body: StatementBlock,
 };
 
 pub const ProcessStmt = struct {
@@ -233,9 +239,16 @@ pub const Expr = union(enum) {
     process: *ProcessExpr,
     slice: *SliceExpr,
     with: *WithExpr,
+    in: *InExpr,
     @"continue",
     @"break",
     unknown, // poison
+};
+
+pub const InExpr = struct {
+    subject: Expr,
+    body: Expr,
+    type: Type,
 };
 
 pub const WithExpr = struct {

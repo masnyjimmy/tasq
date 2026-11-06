@@ -27,6 +27,7 @@ pub const Kind = enum {
     break_kw,
     fallback_kw,
     with_kw,
+    in_kw,
 
     // Type keywords
     string_type,

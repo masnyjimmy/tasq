@@ -65,6 +65,7 @@ pub const NodeKind = enum {
     switch_case,
     switch_case_pattern,
     @"for",
+    in,
     subjects,
     captures,
     @"continue",
