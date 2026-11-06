@@ -12,55 +12,11 @@ const Value = compiler.Value;
 const Scope = @import("Scope.zig");
 
 const Interpreter = @import("interpreter.zig");
-const glob = @import("glob.zig");
+const globs = @import("glob.zig");
 
 const functions_count = functions.definitions.items.len;
 
 pub const Error = Interpreter.Error;
-
-const Handler = *const fn (*Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value;
-
-const handlers: [functions_count]Handler = .{
-    handleError,
-    handlePrint,
-    handleParseNumber,
-    handleExists,
-    handleRead,
-    handleGlob,
-    handleBasename,
-    handleJoinPath,
-    handleIsFile,
-    handleIsDir,
-    handleLen,
-    handleSplit,
-    handleJoin,
-    handleLower,
-    handleUpper,
-    handleContains,
-    handleStartsWith,
-    handleEndsWith,
-    handleReplaceString,
-    handleAtString,
-    handleLines,
-    handleTrim,
-    handleTrimStart,
-    handleTrimEnd,
-    handleLen,
-    handleReplaceList,
-    handleAny,
-    handleAll,
-    handleReduce,
-    handleAtList,
-    handleUnique,
-    handleSort,
-    handleEnv,
-    handleOs,
-    handleCwd,
-    handleArch,
-    handleInvokactionDir,
-    handleStatusCode,
-    handleWhich,
-};
 
 pub fn callFunction(
     interpreter: *Interpreter,
@@ -69,11 +25,15 @@ pub fn callFunction(
     id: functions.definitions.Id,
     args: []const Value,
 ) Error!Value {
-    const index = @backingInt(id);
+    switch (id) {
+        inline else => |tag| {
+            const name = @tagName(tag);
 
-    const handler = handlers[index];
+            const handler: *const handlers.Signature = &@field(handlers, name);
 
-    return try handler(interpreter, cwd, scope, args);
+            return handler(interpreter, cwd, scope, args);
+        },
+    }
 }
 
 pub fn makeResult(scope: *Scope, result_type: *const Type, value: ?Value) Error!Value {
@@ -97,212 +57,6 @@ pub fn makeResult(scope: *Scope, result_type: *const Type, value: ?Value) Error!
             .value = null,
         },
     };
-}
-
-fn handleEnv(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const key = args[0].string;
-
-    return if (scope.environ.get(key)) |value| makeResult(
-        scope,
-        &.string,
-        .{ .string = value },
-    ) else makeResult(scope, &.string, null);
-}
-
-fn handleExists(self: *Interpreter, cwd: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
-    const path = args[0].string;
-
-    const access_result = cwd.access(self.io, path, .{ .read = true });
-
-    const result: bool = if (access_result) |_|
-        true
-    else |_|
-        false;
-
-    return .{ .bool = result };
-}
-
-fn handleRead(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const RESULT_TYPE = &@unionInit(Type, "string", {});
-
-    const path = args[0].string;
-
-    const content = cwd.readFileAlloc(
-        self.io,
-        path,
-        scope.arena.allocator(),
-        .limited(1024),
-    ) catch return makeResult(scope, RESULT_TYPE, null);
-
-    return makeResult(scope, RESULT_TYPE, .{ .string = content });
-}
-
-fn handleGlob(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const pattern = args[0].string;
-
-    var it = glob.iterate(
-        self.allocator,
-        cwd,
-        self.io,
-        pattern,
-    ) catch |err| return switch (err) {
-        glob.Error.InvalidGlob => .{
-            .list = .{
-                .items_type = &.string,
-                .items = &.{},
-            },
-        },
-        else => @errorCast(err),
-    };
-    defer it.deinit();
-
-    var result: std.ArrayList(Value) = .empty;
-
-    while (try it.next()) |match| {
-        try result.append(scope.arena.allocator(), .{
-            .string = try scope.arena.allocator().dupe(u8, match),
-        });
-    }
-
-    return .{
-        .list = .{
-            .items_type = &.string,
-            .items = try result.toOwnedSlice(scope.arena.allocator()),
-        },
-    };
-}
-
-fn handleBasename(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
-    const path = args[0].string;
-    return .{ .string = std.fs.path.basename(path) };
-}
-fn handleJoinPath(self: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const paths = args[0].list;
-
-    const temp_buffer: [][]const u8 = try self.allocator.alloc([]const u8, paths.items.len);
-    defer self.allocator.free(temp_buffer);
-
-    for (paths.items, temp_buffer) |in, *out| {
-        out.* = in.string;
-    }
-
-    return .{
-        .string = try std.fs.path.join(scope.arena.allocator(), temp_buffer),
-    };
-}
-
-fn handleIsFile(self: *Interpreter, cwd: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
-    const path = args[0].string;
-
-    const stat = cwd.statFile(
-        self.io,
-        path,
-        .{},
-    ) catch return .{ .bool = false };
-
-    return .{ .bool = stat.kind == .file };
-}
-
-fn handleIsDir(self: *Interpreter, cwd: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
-    const path = args[0].string;
-
-    const stat = cwd.statFile(
-        self.io,
-        path,
-        .{},
-    ) catch return .{ .bool = false };
-
-    return .{ .bool = stat.kind == .directory };
-}
-
-fn handleOs(_: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
-    return .{
-        .string = @tagName(platform.tag),
-    };
-}
-
-fn handleCwd(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, _: []const Value) Error!Value {
-    var buffer: [1024]u8 = undefined;
-
-    const size = try cwd.realPath(self.io, &buffer);
-
-    return .{
-        .string = try scope.arena.allocator().dupe(u8, buffer[0..size]),
-    };
-}
-
-fn handleArch(_: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
-    const builtin = @import("builtin");
-
-    const arch = builtin.target.cpu.arch.family();
-
-    return .{
-        .string = @tagName(arch),
-    };
-}
-
-fn handleInvokactionDir(self: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
-    return .{
-        .string = self.invokation_dir,
-    };
-}
-
-fn handleStatusCode(self: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
-    return .{ .number = @floatFromInt(self.status_code) };
-}
-
-fn handleWhich(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const name = args[0].string;
-
-    const result = try program.which(
-        self.allocator,
-        cwd,
-        self.io,
-        &scope.environ,
-        name,
-    );
-
-    // move path to scope memory,
-    const value: ?Value = blk: {
-        if (result) |path| {
-            defer self.allocator.free(path);
-            break :blk .{
-                .string = try scope.arena.allocator().dupe(u8, path),
-            };
-        }
-        break :blk null;
-    };
-
-    return makeResult(
-        scope,
-        &.string,
-        value,
-    );
-}
-
-fn handleError(self: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
-    const message = args[0].string;
-
-    try self.printer.printStyled(
-        self.allocator,
-        .{ .fg = .bright_red },
-        "{s}\n",
-        .{message},
-    );
-
-    return Error.Abort;
-}
-
-fn handlePrint(self: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
-    const message = args[0].string;
-
-    try self.printer.print(
-        self.allocator,
-        "{s}\n",
-        .{message},
-    );
-
-    return .void;
 }
 
 fn callLambda(
@@ -341,433 +95,651 @@ fn callLambda(
     );
 }
 
-fn handleAny(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const list = args[0].list;
+const handlers = struct {
+    const Signature = fn (*Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value;
 
-    const test_fn = args[1].lambda.instance;
+    fn env(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const key = args[0].string;
 
-    for (list.items) |item| {
-        const result = try callLambda(
-            self,
-            cwd,
+        return if (scope.environ.get(key)) |value| makeResult(
             scope,
-            test_fn,
-            &.{
-                item,
+            &.string,
+            .{ .string = value },
+        ) else makeResult(scope, &.string, null);
+    }
+
+    fn exists(self: *Interpreter, dir: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+        const path = args[0].string;
+
+        const access_result = dir.access(self.io, path, .{ .read = true });
+
+        const result: bool = if (access_result) |_|
+            true
+        else |_|
+            false;
+
+        return .{ .bool = result };
+    }
+
+    fn read(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const RESULT_TYPE = &@unionInit(Type, "string", {});
+
+        const path = args[0].string;
+
+        const content = dir.readFileAlloc(
+            self.io,
+            path,
+            scope.arena.allocator(),
+            .limited(1024),
+        ) catch return makeResult(scope, RESULT_TYPE, null);
+
+        return makeResult(scope, RESULT_TYPE, .{ .string = content });
+    }
+
+    fn glob(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const pattern = args[0].string;
+
+        var it = globs.iterate(
+            self.allocator,
+            dir,
+            self.io,
+            pattern,
+        ) catch |err| return switch (err) {
+            globs.Error.InvalidGlob => .{
+                .list = .{
+                    .items_type = &.string,
+                    .items = &.{},
+                },
             },
-        );
+            else => @errorCast(err),
+        };
+        defer it.deinit();
 
-        if (result.eql(.{ .bool = true }))
-            return .{ .bool = true };
-    }
+        var result: std.ArrayList(Value) = .empty;
 
-    return .{ .bool = false };
-}
-
-fn handleAll(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const list = args[0].list;
-
-    const test_fn = args[1].lambda.instance;
-
-    for (list.items) |item| {
-        const result = try callLambda(
-            self,
-            cwd,
-            scope,
-            test_fn,
-            &.{item},
-        );
-
-        if (result.eql(.{ .bool = false }))
-            return .{ .bool = false };
-    }
-
-    return .{ .bool = true };
-}
-
-fn handleReduce(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const list = args[0].list;
-    var value = args[1];
-    const func = args[2].lambda.instance;
-
-    for (list.items) |item| {
-        value = try callLambda(
-            self,
-            cwd,
-            scope,
-            func,
-            &.{ value, item },
-        );
-    }
-
-    return value;
-}
-
-fn handleAtList(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const list = args[0].list;
-
-    const pos: i64 = blk: {
-        const number = args[1].number;
-        break :blk Interpreter.integerize(number);
-    };
-
-    if (pos < 0 or list.items.len <= pos) {
-        return makeResult(scope, list.items_type, null);
-    }
-
-    return makeResult(scope, list.items_type, list.items[@intCast(pos)]);
-}
-
-fn handleUnique(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const list = args[0].list;
-
-    var set: std.HashMapUnmanaged(Value, bool, Value.MapContext, 80) = .empty;
-
-    var result: std.ArrayList(Value) = .empty;
-
-    for (list.items) |item| {
-        const gop = try set.getOrPut(scope.arena.allocator(), item);
-
-        if (gop.found_existing)
-            continue;
-
-        try result.append(scope.arena.allocator(), item);
-    }
-
-    return .{
-        .list = .{
-            .items_type = list.items_type,
-            .items = result.items,
-        },
-    };
-}
-
-fn handleSort(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const list = args[0].list;
-    const cmp_fn = args[1].lambda.instance;
-
-    const result: []Value = try scope.arena.allocator().alloc(Value, list.items.len);
-
-    for (list.items, result) |in, *out| {
-        out.* = try in.clone(scope.arena.allocator());
-    }
-
-    const Context = struct {
-        i: *Interpreter,
-        c: std.Io.Dir,
-        s: *Scope,
-        f: *const ir.LambdaInstance,
-        err: ?Error = null,
-
-        fn lessThan(s: *@This(), a: Value, b: Value) bool {
-            if (s.err == null) {
-                const out = callLambda(
-                    s.i,
-                    s.c,
-                    s.s,
-                    s.f,
-                    &.{
-                        a, b,
-                    },
-                ) catch |err| {
-                    s.err = err;
-                    unreachable;
-                    // return false;
-                };
-                return out.bool;
-            }
-
-            return false;
-        }
-    };
-
-    var ctx: Context = .{
-        .i = self,
-        .c = cwd,
-        .s = scope,
-        .f = cmp_fn,
-    };
-    //TODO: just replace it which custom sort implementation instead of this wire thing
-    std.mem.sort(Value, result, &ctx, Context.lessThan);
-
-    if (ctx.err) |err|
-        return err;
-
-    return .{
-        .list = .{
-            .items_type = list.items_type,
-            .items = result,
-        },
-    };
-}
-
-fn handleLen(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
-    const length = switch (args[0]) {
-        .string => |str| str.len,
-        .list => |list| list.items.len,
-        else => unreachable,
-    };
-
-    return .{
-        .number = @floatFromInt(length),
-    };
-}
-// when sep is "" split on chars
-fn handleSplit(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const str = args[0].string;
-    const sep = args[1].string;
-
-    if (sep.len == 0) {
-        const result: []Value = try scope.arena.allocator().alloc(Value, str.len);
-
-        for (result, 0..) |*out, idx| {
-            out.* = .{
-                .string = str[idx .. idx + 1],
-            };
+        while (try it.next()) |match| {
+            try result.append(scope.arena.allocator(), .{
+                .string = try scope.arena.allocator().dupe(u8, match),
+            });
         }
 
         return .{
             .list = .{
                 .items_type = &.string,
+                .items = try result.toOwnedSlice(scope.arena.allocator()),
+            },
+        };
+    }
+
+    fn basename(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+        const path = args[0].string;
+        return .{ .string = std.fs.path.basename(path) };
+    }
+
+    fn join_path(self: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const paths = args[0].list;
+
+        const temp_buffer: [][]const u8 = try self.allocator.alloc([]const u8, paths.items.len);
+        defer self.allocator.free(temp_buffer);
+
+        for (paths.items, temp_buffer) |in, *out| {
+            out.* = in.string;
+        }
+
+        return .{
+            .string = try std.fs.path.join(scope.arena.allocator(), temp_buffer),
+        };
+    }
+
+    fn is_file(self: *Interpreter, dir: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+        const path = args[0].string;
+
+        const stat = dir.statFile(
+            self.io,
+            path,
+            .{},
+        ) catch return .{ .bool = false };
+
+        return .{ .bool = stat.kind == .file };
+    }
+
+    fn is_dir(self: *Interpreter, dir: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+        const path = args[0].string;
+
+        const stat = dir.statFile(
+            self.io,
+            path,
+            .{},
+        ) catch return .{ .bool = false };
+
+        return .{ .bool = stat.kind == .directory };
+    }
+
+    fn os(_: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+        return .{
+            .string = @tagName(platform.tag),
+        };
+    }
+
+    fn cwd(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, _: []const Value) Error!Value {
+        var buffer: [1024]u8 = undefined;
+
+        const size = try dir.realPath(self.io, &buffer);
+
+        return .{
+            .string = try scope.arena.allocator().dupe(u8, buffer[0..size]),
+        };
+    }
+
+    fn arch(_: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+        const builtin = @import("builtin");
+
+        const arch_family = builtin.target.cpu.arch.family();
+
+        return .{
+            .string = @tagName(arch_family),
+        };
+    }
+
+    fn invokation_dir(self: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+        return .{
+            .string = self.invokation_dir,
+        };
+    }
+
+    fn status_code(self: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+        return .{ .number = @floatFromInt(self.status_code) };
+    }
+
+    fn which(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const name = args[0].string;
+
+        const result = try program.which(
+            self.allocator,
+            dir,
+            self.io,
+            &scope.environ,
+            name,
+        );
+
+        // move path to scope memory,
+        const value: ?Value = blk: {
+            if (result) |path| {
+                defer self.allocator.free(path);
+                break :blk .{
+                    .string = try scope.arena.allocator().dupe(u8, path),
+                };
+            }
+            break :blk null;
+        };
+
+        return makeResult(
+            scope,
+            &.string,
+            value,
+        );
+    }
+
+    fn @"error"(self: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+        const message = args[0].string;
+
+        try self.printer.printStyled(
+            self.allocator,
+            .{ .fg = .bright_red },
+            "{s}\n",
+            .{message},
+        );
+
+        return Error.Abort;
+    }
+
+    fn print(self: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+        const message = args[0].string;
+
+        try self.printer.print(
+            self.allocator,
+            "{s}\n",
+            .{message},
+        );
+
+        return .void;
+    }
+
+    fn any(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const list = args[0].list;
+
+        const test_fn = args[1].lambda.instance;
+
+        for (list.items) |item| {
+            const result = try callLambda(
+                self,
+                dir,
+                scope,
+                test_fn,
+                &.{
+                    item,
+                },
+            );
+
+            if (result.eql(.{ .bool = true }))
+                return .{ .bool = true };
+        }
+
+        return .{ .bool = false };
+    }
+
+    fn all(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const list = args[0].list;
+
+        const test_fn = args[1].lambda.instance;
+
+        for (list.items) |item| {
+            const result = try callLambda(
+                self,
+                dir,
+                scope,
+                test_fn,
+                &.{item},
+            );
+
+            if (result.eql(.{ .bool = false }))
+                return .{ .bool = false };
+        }
+
+        return .{ .bool = true };
+    }
+
+    fn reduce(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const list = args[0].list;
+        var value = args[1];
+        const func = args[2].lambda.instance;
+
+        for (list.items) |item| {
+            value = try callLambda(
+                self,
+                dir,
+                scope,
+                func,
+                &.{ value, item },
+            );
+        }
+
+        return value;
+    }
+
+    fn @"collections/at"(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const list = args[0].list;
+
+        const pos: i64 = blk: {
+            const number = args[1].number;
+            break :blk Interpreter.integerize(number);
+        };
+
+        if (pos < 0 or list.items.len <= pos) {
+            return makeResult(scope, list.items_type, null);
+        }
+
+        return makeResult(scope, list.items_type, list.items[@intCast(pos)]);
+    }
+
+    fn unique(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const list = args[0].list;
+
+        var set: std.HashMapUnmanaged(Value, bool, Value.MapContext, 80) = .empty;
+
+        var result: std.ArrayList(Value) = .empty;
+
+        for (list.items) |item| {
+            const gop = try set.getOrPut(scope.arena.allocator(), item);
+
+            if (gop.found_existing)
+                continue;
+
+            try result.append(scope.arena.allocator(), item);
+        }
+
+        return .{
+            .list = .{
+                .items_type = list.items_type,
+                .items = result.items,
+            },
+        };
+    }
+
+    fn sort(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const list = args[0].list;
+        const cmp_fn = args[1].lambda.instance;
+
+        const result: []Value = try scope.arena.allocator().alloc(Value, list.items.len);
+
+        for (list.items, result) |in, *out| {
+            out.* = try in.clone(scope.arena.allocator());
+        }
+
+        const Context = struct {
+            i: *Interpreter,
+            c: std.Io.Dir,
+            s: *Scope,
+            f: *const ir.LambdaInstance,
+            err: ?Error = null,
+
+            fn lessThan(s: *@This(), a: Value, b: Value) bool {
+                if (s.err == null) {
+                    const out = callLambda(
+                        s.i,
+                        s.c,
+                        s.s,
+                        s.f,
+                        &.{
+                            a, b,
+                        },
+                    ) catch |err| {
+                        s.err = err;
+                        unreachable;
+                        // return false;
+                    };
+                    return out.bool;
+                }
+
+                return false;
+            }
+        };
+
+        var ctx: Context = .{
+            .i = self,
+            .c = dir,
+            .s = scope,
+            .f = cmp_fn,
+        };
+        //TODO: just replace it which custom sort implementation instead of this wire thing
+        std.mem.sort(Value, result, &ctx, Context.lessThan);
+
+        if (ctx.err) |err|
+            return err;
+
+        return .{
+            .list = .{
+                .items_type = list.items_type,
                 .items = result,
             },
         };
     }
 
-    const list_size = std.mem.count(u8, str, sep) + 1;
+    fn @"strings/len"(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+        const string = args[0].string;
 
-    var items: std.ArrayList(Value) = try .initCapacity(
-        scope.arena.allocator(),
-        list_size,
-    );
-
-    var it = std.mem.splitSequence(u8, str, sep);
-
-    while (it.next()) |item| {
-        items.appendAssumeCapacity(.{
-            .string = item,
-        });
+        return .{
+            .number = @floatFromInt(string.len),
+        };
     }
 
-    return .{
-        .list = .{
-            .items_type = &.string,
-            .items = items.toOwnedSliceAssert(),
-        },
-    };
-}
+    fn @"collections/len"(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+        const list = args[0].list;
 
-fn handleJoin(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const strings = args[0].list;
-    const sep = args[1].string;
+        return .{
+            .number = @floatFromInt(list.items.len),
+        };
+    }
 
-    const string_size = blk: {
-        var total: usize = 0;
+    // when sep is "" split on chars
+    fn split(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const str = args[0].string;
+        const sep = args[1].string;
 
-        for (strings.items) |item| {
-            total += item.string.len;
+        if (sep.len == 0) {
+            const result: []Value = try scope.arena.allocator().alloc(Value, str.len);
+
+            for (result, 0..) |*out, idx| {
+                out.* = .{
+                    .string = str[idx .. idx + 1],
+                };
+            }
+
+            return .{
+                .list = .{
+                    .items_type = &.string,
+                    .items = result,
+                },
+            };
         }
 
-        if (strings.items.len > 1) {
-            total += (strings.items.len - 1) * sep.len;
+        const list_size = std.mem.count(u8, str, sep) + 1;
+
+        var items: std.ArrayList(Value) = try .initCapacity(
+            scope.arena.allocator(),
+            list_size,
+        );
+
+        var it = std.mem.splitSequence(u8, str, sep);
+
+        while (it.next()) |item| {
+            items.appendAssumeCapacity(.{
+                .string = item,
+            });
         }
 
-        break :blk total;
-    };
+        return .{
+            .list = .{
+                .items_type = &.string,
+                .items = items.toOwnedSliceAssert(),
+            },
+        };
+    }
 
-    const string = try scope.arena.allocator().alloc(u8, string_size);
+    fn join(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const strings = args[0].list;
+        const sep = args[1].string;
 
-    var fw = std.Io.Writer.fixed(string);
+        const string_size = blk: {
+            var total: usize = 0;
 
-    for (strings.items, 0..) |item, idx| {
-        try fw.writeAll(item.string);
+            for (strings.items) |item| {
+                total += item.string.len;
+            }
 
-        if (idx != strings.items.len - 1) {
-            try fw.writeAll(sep);
+            if (strings.items.len > 1) {
+                total += (strings.items.len - 1) * sep.len;
+            }
+
+            break :blk total;
+        };
+
+        const string = try scope.arena.allocator().alloc(u8, string_size);
+
+        var fw = std.Io.Writer.fixed(string);
+
+        for (strings.items, 0..) |item, idx| {
+            try fw.writeAll(item.string);
+
+            if (idx != strings.items.len - 1) {
+                try fw.writeAll(sep);
+            }
         }
+
+        std.debug.assert(fw.buffered().len == string.len);
+
+        return .{
+            .string = string,
+        };
     }
 
-    std.debug.assert(fw.buffered().len == string.len);
+    fn lower(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const str = args[0].string;
 
-    return .{
-        .string = string,
-    };
-}
+        const out = try std.ascii.allocLowerString(scope.arena.allocator(), str);
 
-fn handleLower(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const str = args[0].string;
-
-    const out = try std.ascii.allocLowerString(scope.arena.allocator(), str);
-
-    return .{
-        .string = out,
-    };
-}
-
-fn handleUpper(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const str = args[0].string;
-
-    const out = try std.ascii.allocUpperString(scope.arena.allocator(), str);
-
-    return .{
-        .string = out,
-    };
-}
-
-fn handleContains(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
-    const str = args[0].string;
-    const sub = args[1].string;
-
-    const contains = std.mem.containsAtLeast(u8, str, 1, sub);
-
-    return .{
-        .bool = contains,
-    };
-}
-
-fn handleStartsWith(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
-    const str = args[0].string;
-    const sub = args[1].string;
-
-    const starts_with = std.mem.startsWith(u8, str, sub);
-
-    return .{
-        .bool = starts_with,
-    };
-}
-
-fn handleEndsWith(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
-    const str = args[0].string;
-    const sub = args[1].string;
-
-    const ends_with = std.mem.endsWith(u8, str, sub);
-
-    return .{
-        .bool = ends_with,
-    };
-}
-fn handleReplaceString(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const str = args[0].string;
-    const old = args[1].string;
-    const new = args[2].string;
-
-    const replaced = try std.mem.replaceOwned(
-        u8,
-        scope.arena.allocator(),
-        str,
-        old,
-        new,
-    );
-
-    return .{
-        .string = replaced,
-    };
-}
-
-fn handleAtString(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const str = args[0].string;
-
-    const pos: i64 = blk: {
-        const number = args[1].number;
-        break :blk Interpreter.integerize(number);
-    };
-
-    if (pos < 0 or str.len <= pos) {
-        return makeResult(scope, &.string, null);
+        return .{
+            .string = out,
+        };
     }
 
-    const idx: usize = @intCast(pos);
+    fn upper(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const str = args[0].string;
 
-    return makeResult(scope, &.string, .{ .string = str[idx .. idx + 1] });
-}
+        const out = try std.ascii.allocUpperString(scope.arena.allocator(), str);
 
-fn handleLines(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const str = args[0].string;
-
-    var items: std.ArrayList(Value) = .empty;
-    errdefer items.deinit(scope.arena.allocator());
-
-    var rest = str;
-    while (rest.len > 0) {
-        const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
-
-        var line = rest[0..end];
-        if (line.len > 0 and line[line.len - 1] == '\r')
-            line = line[0 .. line.len - 1];
-
-        try items.append(scope.arena.allocator(), .{ .string = line });
-
-        rest = if (end < rest.len) rest[end + 1 ..] else rest[end..];
+        return .{
+            .string = out,
+        };
     }
 
-    return .{
-        .list = .{
-            .items_type = &.string,
-            .items = try items.toOwnedSlice(scope.arena.allocator()),
-        },
-    };
-}
+    fn contains(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+        const str = args[0].string;
+        const sub = args[1].string;
 
-fn handleTrim(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
-    const str = args[0].string;
-    const set = args[1].string;
+        const result = std.mem.containsAtLeast(u8, str, 1, sub);
 
-    const result = std.mem.trim(u8, str, set);
+        return .{
+            .bool = result,
+        };
+    }
 
-    return .{
-        .string = result,
-    };
-}
+    fn starts_with(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+        const str = args[0].string;
+        const sub = args[1].string;
 
-fn handleTrimStart(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
-    const str = args[0].string;
-    const set = args[1].string;
+        const result = std.mem.startsWith(u8, str, sub);
 
-    const result = std.mem.trimStart(u8, str, set);
+        return .{
+            .bool = result,
+        };
+    }
 
-    return .{
-        .string = result,
-    };
-}
+    fn ends_with(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+        const str = args[0].string;
+        const sub = args[1].string;
 
-fn handleTrimEnd(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
-    const str = args[0].string;
-    const set = args[1].string;
+        const result = std.mem.endsWith(u8, str, sub);
 
-    const result = std.mem.trimEnd(u8, str, set);
+        return .{
+            .bool = result,
+        };
+    }
 
-    return .{
-        .string = result,
-    };
-}
-fn handleReplaceList(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const list = args[0].list;
-    const old = args[1];
-    const new = args[2];
+    fn @"strings/replace"(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const str = args[0].string;
+        const old = args[1].string;
+        const new = args[2].string;
 
-    const replaced = try scope.arena.allocator().dupe(Value, list.items);
+        const replaced = try std.mem.replaceOwned(
+            u8,
+            scope.arena.allocator(),
+            str,
+            old,
+            new,
+        );
 
-    for (replaced) |*item| {
-        if (item.eql(old)) {
-            item.* = try new.clone(scope.arena.allocator());
+        return .{
+            .string = replaced,
+        };
+    }
+
+    fn @"strings/at"(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const str = args[0].string;
+
+        const pos: i64 = blk: {
+            const number = args[1].number;
+            break :blk Interpreter.integerize(number);
+        };
+
+        if (pos < 0 or str.len <= pos) {
+            return makeResult(scope, &.string, null);
         }
+
+        const idx: usize = @intCast(pos);
+
+        return makeResult(scope, &.string, .{ .string = str[idx .. idx + 1] });
     }
 
-    return .{
-        .list = .{
-            .items = replaced,
-            .items_type = list.items_type,
-        },
-    };
-}
+    fn lines(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const str = args[0].string;
 
-fn handleParseNumber(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
-    const str = args[0].string;
+        var items: std.ArrayList(Value) = .empty;
+        errdefer items.deinit(scope.arena.allocator());
 
-    const number: ?f64 = std.fmt.parseFloat(f64, str) catch null;
+        var rest = str;
+        while (rest.len > 0) {
+            const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
 
-    return if (number) |n|
-        makeResult(scope, &.number, .{ .number = n })
-    else
-        makeResult(scope, &.number, null);
-}
+            var line = rest[0..end];
+            if (line.len > 0 and line[line.len - 1] == '\r')
+                line = line[0 .. line.len - 1];
+
+            try items.append(scope.arena.allocator(), .{ .string = line });
+
+            rest = if (end < rest.len) rest[end + 1 ..] else rest[end..];
+        }
+
+        return .{
+            .list = .{
+                .items_type = &.string,
+                .items = try items.toOwnedSlice(scope.arena.allocator()),
+            },
+        };
+    }
+
+    fn trim(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+        const str = args[0].string;
+        const set = args[1].string;
+
+        const result = std.mem.trim(u8, str, set);
+
+        return .{
+            .string = result,
+        };
+    }
+
+    fn trim_end(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+        const str = args[0].string;
+        const set = args[1].string;
+
+        const result = std.mem.trimStart(u8, str, set);
+
+        return .{
+            .string = result,
+        };
+    }
+
+    fn trim_start(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+        const str = args[0].string;
+        const set = args[1].string;
+
+        const result = std.mem.trimEnd(u8, str, set);
+
+        return .{
+            .string = result,
+        };
+    }
+
+    fn @"collections/replace"(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const list = args[0].list;
+        const old = args[1];
+        const new = args[2];
+
+        const replaced = try scope.arena.allocator().dupe(Value, list.items);
+
+        for (replaced) |*item| {
+            if (item.eql(old)) {
+                item.* = try new.clone(scope.arena.allocator());
+            }
+        }
+
+        return .{
+            .list = .{
+                .items = replaced,
+                .items_type = list.items_type,
+            },
+        };
+    }
+
+    fn parse_number(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const str = args[0].string;
+
+        const number: ?f64 = std.fmt.parseFloat(f64, str) catch null;
+
+        return if (number) |n|
+            makeResult(scope, &.number, .{ .number = n })
+        else
+            makeResult(scope, &.number, null);
+    }
+};

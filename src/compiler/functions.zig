@@ -129,6 +129,7 @@ const fs_functions: []const Spec = &.{
 const string_functions: []const Spec = &.{
     .{
         .name = "len",
+        .unique_name = "strings/len",
         .args = &.{
             .{
                 .name = "str",
@@ -229,6 +230,7 @@ const string_functions: []const Spec = &.{
     },
     .{
         .name = "replace",
+        .unique_name = "strings/replace",
         .args = &.{
             .{
                 .name = "str",
@@ -247,6 +249,7 @@ const string_functions: []const Spec = &.{
     },
     .{
         .name = "at",
+        .unique_name = "strings/at",
         .args = &.{
             .{
                 .name = "str",
@@ -316,6 +319,7 @@ const string_functions: []const Spec = &.{
 const collections_functions: []const Spec = &.{
     .{
         .name = "len",
+        .unique_name = "collections/len",
         .args = &.{
             .{
                 .name = "list",
@@ -326,6 +330,7 @@ const collections_functions: []const Spec = &.{
     },
     .{
         .name = "replace",
+        .unique_name = "collections/replace",
         .args = &.{
             .{
                 .name = "list",
@@ -424,6 +429,7 @@ const collections_functions: []const Spec = &.{
     },
     .{
         .name = "at",
+        .unique_name = "collections/at",
         .args = &.{
             .{
                 .name = "list",
@@ -528,9 +534,10 @@ pub const definitions = Functions(
 fn Functions(comptime specs: []const Spec) type {
     @setEvalBranchQuota(5_000); // it may need to be adjusted if functions are added
 
-    const FnIdent = blk: {
-        const EnumTag = enums.FitUnsigned(specs.len);
+    const EnumTag = enums.FitUnsigned(specs.len);
 
+    // One tag per call name; overloads share a tag so `resolve` can compare with `==`.
+    const FnIdent = blk: {
         var unique_names: [specs.len][]const u8 = undefined;
         var unique_count: usize = 0;
 
@@ -552,11 +559,11 @@ fn Functions(comptime specs: []const Spec) type {
         );
     };
 
-    // For each spec (by original index), which unique-name index (i.e. FnId) it maps to.
-    const spec_to_id: [specs.len]FnIdent = blk: {
+    // For each spec (by original index), which call-name tag (FnIdent) it maps to.
+    const spec_to_ident: [specs.len]FnIdent = blk: {
         var unique_names: [specs.len][]const u8 = undefined;
         var unique_count: usize = 0;
-        var ids: [specs.len]FnIdent = undefined;
+        var idents: [specs.len]FnIdent = undefined;
 
         for (specs, 0..) |spec, spec_idx| {
             var found: ?usize = null;
@@ -571,16 +578,35 @@ fn Functions(comptime specs: []const Spec) type {
                 unique_count += 1;
                 break :blk2 unique_count - 1;
             };
-            ids[spec_idx] = @fromBackingInt(@intCast(uidx));
+            idents[spec_idx] = @fromBackingInt(@intCast(uidx));
         }
 
-        break :blk ids;
+        break :blk idents;
     };
 
-    const FunctionId = enum(usize) { _ };
+    // One tag per overload, named `unique_name orelse name`. No dedup here: two specs with the
+    // same resulting name make `@Enum` fail with a duplicate field error, which is the diagnostic
+    // we want, since overloads must be given a `unique_name`.
+    const FunctionId = blk: {
+        var names: [specs.len][]const u8 = undefined;
+        for (specs, &names) |spec, *out| {
+            out.* = spec.unique_name orelse spec.name;
+        }
+
+        const values = ct.iter(EnumTag, specs.len);
+
+        break :blk @Enum(
+            EnumTag,
+            .exhaustive,
+            &names,
+            &values,
+        );
+    };
 
     const Definition = struct {
+        /// unique id
         id: FunctionId,
+        /// name id
         ident: FnIdent,
         args: []const Spec.Param,
         return_type: TypeExpr,
@@ -592,8 +618,9 @@ fn Functions(comptime specs: []const Spec) type {
         for (specs, 0..) |spec, idx| {
             defs[idx] = def: {
                 var out = ct.copyFields(Definition, spec);
+                // `FunctionId` was built from specs in order, so tag `idx` is this spec's id
                 out.id = @fromBackingInt(@intCast(idx));
-                out.ident = spec_to_id[idx];
+                out.ident = spec_to_ident[idx];
 
                 break :def out;
             };
@@ -663,6 +690,7 @@ pub const Spec = struct {
     };
 
     name: []const u8,
+    unique_name: ?[]const u8 = null,
     args: []const Param,
     return_type: TypeExpr,
 };
