@@ -21,7 +21,10 @@
                 "filenames": [
                     "tasq"
                 ],
-                "configuration": "./language-configuration.json"
+                "configuration": "./language-configuration.json",
+                "extensions": [
+                    ".tasq"
+                ]
             }
         ],
         "grammars": [
@@ -39,19 +42,26 @@
         ],
         "semanticTokenModifiers": [
             {
-                "id": "attr_current_platform"
+                "id": "attr_current_platform",
+                "description": "Current platform attribute"
             },
             {
-                "id": "attr_platform"
+                "id": "attr_platform",
+                "description": "Platform attribute"
+
             },
             {
-                "id": "attr_doc"
+                "id": "attr_doc",
+                "description": "Documentation attribute"
+
             },
             {
-                "id": "attr_modifier"
+                "id": "attr_modifier",
+                "description": "Modifier attribute"
             },
             {
-                "id": "attr_validation"
+                "id": "attr_validation",
+                "description": "Validation attribute"
             }
         ],
         "semanticTokenScopes": [
@@ -112,6 +122,12 @@
                     "type": "number",
                     "default": 100,
                     "description": "Controls the maximum number of problems produced by the server."
+                },
+                "tasq.path": {
+                    "scope": "resource",
+                    "type":"string",
+                    "default": "tasq",
+                    "description": "Tasq binary path"
                 }
             }
         }
