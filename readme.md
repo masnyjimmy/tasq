@@ -24,6 +24,7 @@
    - [4.8 Lambdas](#48-lambdas)
    - [4.9 Ranges and Slices](#49-ranges-and-slices)
    - [4.10 Tuples and Destructuring](#410-tuples-and-destructuring)
+   - [4.11 In Expression](#411-in-expression)
 5. [Built-in Functions](#5-built-in-functions)
 6. [Process Calls](#6-process-calls)
    - [6.1 Statements and Expressions](#61-statements-and-expressions)
@@ -39,6 +40,7 @@
    - [8.6 Switch Statement](#86-switch-statement)
    - [8.7 For Statement](#87-for-statement)
    - [8.8 Task Dependencies](#88-task-dependencies)
+   - [8.9 In Statement](#89-in-statement)
 9. [Task Calls](#9-task-calls)
 10. [Groups](#10-groups)
     - [10.1 Named Groups](#101-named-groups)
@@ -48,6 +50,8 @@
     - [11.2 Checking Without Running (`--check`)](#112-checking-without-running---check)
     - [11.3 Task Arguments](#113-task-arguments)
     - [11.4 Implicit CLI Names](#114-implicit-cli-names)
+    - [11.5 Listing Tasks and Showing Usage](#115-listing-tasks-and-showing-usage)
+    - [11.6 Choosing the File and Option Placement](#116-choosing-the-file-and-option-placement)
 12. [Attributes](#12-attributes)
     - [12.1 Platform Attributes](#121-platform-attributes)
     - [12.2 Documentation Attributes](#122-documentation-attributes)
@@ -60,7 +64,7 @@
 
 ## 1. File Layout
 
-A tasq file is a plain text file named **`tasq`** with no file extension.
+A tasq file is a plain text file with no file extension. By default tasq looks for a file named **`tasq`**; another file can be selected with `-f` / `--file` ([§11.6](#116-choosing-the-file-and-option-placement)).
 
 At the root (top) level it may contain the following elements, in any order:
 
@@ -104,10 +108,11 @@ The types `void`, `noreturn` and `!T` also exist at runtime but have no literal 
 - `[]T` may be **nested** (e.g. `[][]number`). All elements must share the same type.
 - A list literal must **not be empty** where its element type cannot be determined from context.
 - **Whole-number contexts.** Wherever a `number` is used in a place where a fractional value has no meaning (range bounds and slice bounds ([§4.9](#49-ranges-and-slices)), the position argument of `@at` ([§5](#5-built-in-functions)), and any similar place), it is first **rounded up to the next whole number** (ceiling): `1.2` becomes `2`, `2.0` stays `2`, `-1.5` becomes `-1`. This is not a type conversion and never raises an error; the value is still a `number`.
-- A **tuple** has at least two elements, and each element has its own type. Its type is the ordered list of its element types, so `(string, number)` and `(number, string)` are different types. An element may be a `bool`, `char`, `number`, `string`, list or tuple; it cannot be a `lambda`, `void`, `noreturn` or `!T`. Tuples may be nested and may be list elements (all elements of such a list must then have the identical tuple type). A tuple is created with a literal and taken apart by destructuring ([§4.10](#410-tuples-and-destructuring)).
-- A `lambda` is a **template**: `|<params>| <expr>` has no fixed signature, and its parameter and result types are inferred from each use ([§4.8](#48-lambdas)). A lambda can be bound, aliased, passed to other lambdas and passed to built-ins that take a lambda ([§5](#5-built-in-functions)).
+- A **tuple** has at least two elements, and each element has its own type. Its type is the ordered list of its element types, so `(string, number)` and `(number, string)` are different types. An element may be a `bool`, `char`, `number`, `string`, list, tuple or `lambda`; it cannot be `void`, `noreturn` or `!T`. Tuples may be nested and may be list elements (all elements of such a list must then have the identical tuple type). A tuple is created with a literal and taken apart by destructuring ([§4.10](#410-tuples-and-destructuring)).
+- A `lambda` is a **template**: `|<params>| <expr>` has no fixed signature, and its parameter and result types are inferred from each use ([§4.8](#48-lambdas)). A lambda can be bound, aliased, passed to other lambdas, stored in a tuple and passed to built-ins that take a lambda ([§5](#5-built-in-functions)).
   - Every lambda literal has its own type, so two different lambdas cannot be mixed where a single type is required (for example as the elements of one list).
-  - A lambda cannot return a lambda, cannot be stored in a tuple, and cannot be a task or group argument ([§2.4](#24-argument-types)).
+  - A lambda cannot return a lambda, or a tuple that contains a lambda, and cannot be a task or group argument ([§2.4](#24-argument-types)).
+  - Lambdas can be compared and interpolated like other values ([§4.1](#41-operators), [§4.2](#42-strings-and-interpolation)), although this is rarely useful.
 
 ### 2.2 Special Types
 
@@ -117,7 +122,7 @@ These types have **no literal** and can only be produced by certain built-ins or
 |------|---------|-------------|
 | `void` | "No meaningful value" | Built-ins such as `@print` |
 | `noreturn` | The expression never yields a value; it always diverges | `@error(...)`, `break`, `continue` |
-| `!T` | A fallible result: either a `T` or an error | `@env`, `@which`, `@parse_number`, `@at` |
+| `!T` | A fallible result: either a `T` or an error | `@env`, `@which`, `@parse_number`, `@at`, `@read` |
 
 **`void`** is a real value that behaves as an ordinary concrete type. It can be assigned to a binding, and two `void` branches unify with each other, but a `void` branch does **not** unify with a differently typed branch (a `void` branch paired with a `string` branch is a type error).
 
@@ -125,7 +130,7 @@ These types have **no literal** and can only be produced by certain built-ins or
 
 **`!T`** can be used in exactly one way: by applying `fallback` ([§4.7](#47-fallback)) directly to the built-in call that produced it, yielding a plain `T`. It cannot be bound, passed to a process call or task call, stored in a list or tuple, or used in any other expression context.
 
-**Unifying branches.** `if` ([§4.3](#43-if-expression)), `switch` ([§4.4](#44-switch-expression)), `for` ([§4.5](#45-for-expression)) and `fallback` ([§4.7](#47-fallback)) combine several branches into one result type:
+**Unifying branches.** `if` ([§4.3](#43-if-expression)), `switch` ([§4.4](#44-switch-expression)), `for` ([§4.5](#45-for-expression)), `in` ([§4.11](#411-in-expression)) and `fallback` ([§4.7](#47-fallback)) combine several branches into one result type:
 
 - All branches must produce the same type.
 - A `noreturn` branch is the exception: it never yields a value, so it unifies with whatever type the other branches produce (e.g. `@error(...)`, or `break` / `continue` inside a `for` expression).
@@ -198,6 +203,7 @@ label, (x, y) := <nested tuple expression>
 | When | **Lazily**, on first reference | **Eagerly**, in statement order |
 | How often | At most once per run; the result is cached | Every time the task runs |
 | Environment | The environment of the scope they are **declared in**, never that of whichever task triggers them ([§12.4](#124-environment-attributes)) | The task's effective environment |
+| Working directory | The root working directory (the `working_dir` setting, [§7](#7-settings)), never that of whichever task or `in` block triggers them | The working directory in effect at that point of the task, including any enclosing `in` ([§8.9](#89-in-statement)) |
 
 Consequences:
 
@@ -241,7 +247,7 @@ Expressions produce a typed value. They are used in bindings, task call argument
 |----------|-----------|----------|--------|
 | Arithmetic | `+` `-` `*` `/` `%` | `number` | `number` |
 | Comparison | `>` `<` `>=` `<=` | two `number`s or two `string`s ([see below](#string-comparison)) | `bool` |
-| Equality | `==` `!=` | any matching type (tuples compare element-wise, [§4.10](#410-tuples-and-destructuring)) | `bool` |
+| Equality | `==` `!=` | any matching type (tuples compare element-wise, [§4.10](#410-tuples-and-destructuring); lambdas compare by template, [§4.8](#48-lambdas)) | `bool` |
 | Boolean | `and` `or` | `bool` | `bool` |
 | Boolean negation | `!` | `bool` | `bool` |
 | Unary minus | `-<expr>` | `number` | `number` |
@@ -320,7 +326,7 @@ $`echo "Running on {@os()} with {worker_count} workers"`
 $`mkdir -p {output_dir}/{@env("BUILD_ID") fallback "local"}`
 ```
 
-Lists and tuples are converted by converting each element and joining them with `, `; a list is wrapped in `[` `]` and a tuple in `(` `)`, e.g. `[1, 2, 3]` and `(str, 5, false)`. Strings inside them are written without quotes.
+Lists and tuples are converted by converting each element and joining them with `, `; a list is wrapped in `[` `]` and a tuple in `(` `)`, e.g. `[1, 2, 3]` and `(str, 5, false)`. Strings inside them are written without quotes. A lambda (also one inside a tuple) is written as `<lambda>`.
 
 Because `{` starts an interpolation in these literals, a literal brace must be escaped (`\{`, `\}`), for example in shell code:
 
@@ -398,7 +404,7 @@ for(<subjects>) |<captures>| <expr>
 - `<subjects>` are one or more comma-separated subjects, each a list expression or a range ([§4.9](#49-ranges-and-slices)). They are iterated in lock-step over a shared window of indices: the **intersection** of the subjects' index intervals, where a list covers `0..@len(list)` and a range covers its own bounds. With only list subjects this is the length of the **shortest** subject; no error is raised. The full rules are in [§4.9](#49-ranges-and-slices).
 - `<captures>` binds one capture to each subject, in order. A capture is an identifier (the current element of a list subject, or the current index of a range subject), `_` for a value you don't need, or a destructuring pattern `(a, b)` when the elements are tuples ([§4.10](#410-tuples-and-destructuring)). The number of captures **must equal** the number of subjects.
 - `<expr>` is evaluated once per iteration, and its result becomes the corresponding element of the produced list. The result type is `[]T`, where `T` is the type of `<expr>`. If there are no iterations the result is an empty `[]T`.
-- `<expr>` may be an `if` or `switch` expression containing `break` or `continue` branches ([§4.6](#46-break-and-continue)); these are `noreturn` and unify with the surviving branches ([§2.2](#22-special-types)).
+- `<expr>` may be an `if`, `switch` or `in` expression containing `break` or `continue` branches ([§4.6](#46-break-and-continue)); these are `noreturn` and unify with the surviving branches ([§2.2](#22-special-types)).
 
 ```
 input   := [1, 2, 3]
@@ -415,14 +421,14 @@ The statement form is described in [§8.7](#87-for-statement).
 
 `break` and `continue` are bare keywords (no arguments, no parentheses) that control iteration inside a `for`, in statement form ([§8.7](#87-for-statement)) or expression form ([§4.5](#45-for-expression)).
 
-Both have type `noreturn` ([§2.2](#22-special-types)), so they can be used as branches of a nested `if` or `switch`.
+Both have type `noreturn` ([§2.2](#22-special-types)), so they can be used as branches of a nested `if`, `switch` or `in`.
 
 | Keyword | In a `for` **statement** | In a `for` **expression** |
 |---------|--------------------------|---------------------------|
 | `break` | Stops iteration immediately. | Stops immediately and yields the list produced so far. |
 | `continue` | Skips the rest of the current iteration and proceeds to the next. | Skips the current element (it is **not** added to the list) and proceeds. |
 
-Both always refer to the **nearest enclosing `for`**; a nested `if` or `switch` does not change this.
+Both always refer to the **nearest enclosing `for`**; a nested `if`, `switch` or `in` does not change this. Leaving an `in` block this way restores the previous working directory ([§4.11](#411-in-expression)).
 
 ```
 for(numbers) |n| {
@@ -443,7 +449,7 @@ positives := for(numbers) |n| if (n < 0) continue else n
 <process_expression> fallback <expression>
 ```
 
-**After a built-in call.** Built-ins that can fail return `!T` ([§2.2](#22-special-types)), which is unusable until unwrapped, so `fallback` is **mandatory** for `@env`, `@which`, `@parse_number` and `@at`. Using `fallback` after a built-in that cannot fail (e.g. `@len`) is a compile-time error.
+**After a built-in call.** Built-ins that can fail return `!T` ([§2.2](#22-special-types)), which is unusable until unwrapped, so `fallback` is **mandatory** for `@env`, `@which`, `@parse_number`, `@at` and `@read`. Using `fallback` after a built-in that cannot fail (e.g. `@len`) is a compile-time error.
 
 **After a process expression.** A process expression aborts when its command exits non-zero ([§6.2](#62-failure-handling)), so `fallback` is **optional** there. On a non-zero exit, the fallback value replaces the process's output entirely. `fallback` cannot be combined with `nofail` (compile-time error).
 
@@ -469,6 +475,9 @@ zig := @which("zig") fallback @error("zig is not installed")
 
 // Element access with a default
 first := @at(names, 0) fallback "none"
+
+// File content with a default
+notes := @read("NOTES.md") fallback ""
 
 // Process expression with a default
 version := $`git describe --tags` fallback "dev"
@@ -518,9 +527,12 @@ task demo {
 }
 ```
 
-An error inside a body is reported when a use instantiates the lambda with types for which the body is invalid. A lambda that is never used is never analysed ([§14](#14-planned-features)).
+**Checking.** A lambda body is checked in two stages:
 
-**Scope.** A lambda body is **lexically scoped**: it sees its own parameters and the names visible where the lambda is **written**, never the locals of its caller.
+1. **At the definition.** The body is analysed with parameters of *unknown* type. Everything that can be diagnosed without knowing the parameter types is reported right there (for example unknown names and other errors that do not depend on the parameter types); an operation whose validity depends on a parameter's type is deferred. A lambda that is never used is therefore still checked for these errors.
+2. **At each instantiation.** The body is checked again with the concrete parameter types of that use. An error found here is reported with a trace: it points at the failing expression in the body, at the call that instantiated the lambda, and at the lambda's definition.
+
+**Scope.** A lambda body is **lexically scoped**: it sees its own parameters and the names visible where the lambda is **written**, never the locals of its caller. (This concerns names only; the working directory is not a name, and a lambda is evaluated in the working directory in effect where it is called, see [§4.11](#411-in-expression).)
 
 ```
 g := |k, h| h(k)
@@ -534,7 +546,7 @@ task test {
 
 Parameters follow the no-shadowing rule of bindings: a parameter cannot share a name with an already visible name (compile-time error). Lambda parameters are plain names; they cannot be destructuring patterns.
 
-**Lambdas as values.** A lambda can be bound, aliased and passed around:
+**Lambdas as values.** A lambda can be bound, aliased, passed around and stored in a tuple:
 
 ```
 apply := |fn, x| fn(x)
@@ -546,12 +558,14 @@ task demo {
 
 It can also be passed to the built-ins that take a lambda ([§5](#5-built-in-functions)).
 
+**Equality and printing.** Lambdas can be compared with `==` and `!=`: two lambda values are equal when they refer to the exact same template. A lambda is converted to the string `<lambda>` in interpolation. The same holds for a tuple that contains a lambda, which is compared element-wise ([§4.10](#410-tuples-and-destructuring)). Neither is useful in practice, but both are allowed.
+
 **Limits:**
 
 - **No recursion.** A lambda cannot call itself, directly or through other lambdas (compile-time error).
-- **A lambda cannot return a lambda.** `|a| |b| a + b` is a compile-time error (`lambda cannot return a lambda`).
+- **A lambda cannot return a lambda**, nor a tuple that contains a lambda. `|a| |b| a + b` is a compile-time error (`lambda cannot return a lambda`). This is a deliberate part of the language, not a gap.
 - A lambda body is an expression, so it cannot contain task calls or statements. Use a task for actions.
-- A lambda cannot be a task or group argument ([§2.4](#24-argument-types)) or a tuple element ([§2.1](#21-runtime-types)).
+- A lambda cannot be a task or group argument ([§2.4](#24-argument-types)).
 
 ### 4.9 Ranges and Slices
 
@@ -583,7 +597,7 @@ Every `for` subject contributes an interval of indices, and the loop runs over t
 
 - The loop's **window** starts at the largest start and ends at the smallest end of all intervals, and iterates one index at a time. List elements are always read at their **absolute index**, which is what makes `for(list, 0..) |item, i|` bind `i` to the element's index.
 - Because a list's interval starts at `0`, a range bound below `0` is **clamped to `0` whenever at least one subject is a list**. When **no** subject is a list, negative bounds are kept, which is useful for generating lists.
-- If the window has **no finite end** (every subject is a range without a right bound), the loop runs **zero times**. A range loop can never be infinite.
+- If the window has **no finite end** (every subject is a range without a right bound), the loop runs **zero times**. A range loop can never be infinite; infinite loops do not exist in tasq.
 - If the window's start is not below its end, the loop runs zero times. This is never an error.
 - With only list subjects the window is `0..@len(shortest)`, which is the lock-step rule of earlier versions.
 
@@ -661,6 +675,7 @@ nested := ("p", (1, 2))         // type (string, (number, number))
 - `==` and `!=` compare two tuples of the same type element by element. Tuples of different types cannot be compared (compile-time error).
 - In interpolation a tuple is shown in parentheses, e.g. `(str, 5, false)` ([§4.2](#42-strings-and-interpolation)).
 - Tuples cannot be task or group arguments ([§2.4](#24-argument-types)).
+- A tuple may contain a lambda. Such a tuple is compared and interpolated like any other ([§4.8](#48-lambdas)), but cannot be returned from a lambda.
 
 #### Destructuring
 
@@ -715,6 +730,41 @@ task test {
 }
 ```
 
+### 4.11 In Expression
+
+`in` changes the **working directory** for the duration of one expression or block, without a process call. Changing directory is a common operation, and `` $`cd` `` cannot do it properly: every process call is its own invocation ([§6](#6-process-calls)), so a `cd` inside one affects neither later process calls nor the built-in functions. `in` affects all of them.
+
+```
+in(<path>) <expression> else <expression>
+```
+
+`in` is a keyword: it cannot be used as the name of a binding, parameter, task or group. The statement form is described in [§8.9](#89-in-statement).
+
+**Evaluation:**
+
+- `<path>` is an expression of type `string`, evaluated once, first.
+- A relative path is resolved against the working directory **in effect**, so nested `in` blocks compose. An absolute path is used as is.
+- The path is **valid** when it exists and is a directory. If it is valid, the working directory becomes that directory and the first expression is evaluated. If it is not valid (it does not exist, or it is a file), the `else` expression is evaluated instead, in the working directory that was in effect around the `in`.
+- The `else` branch is **required** in expression form, as for `if` ([§4.3](#43-if-expression)). The branches are unified as described in [§2.2](#22-special-types), so `@error(...)` is a typical `else` branch.
+
+```
+sources := in("src") @sort(@glob("*.zig"), |a, b| a < b) else @error("src/ is missing")
+```
+
+**What the working directory affects.** Inside `in`, the new working directory is used by:
+
+- every process call ([§6](#6-process-calls));
+- the built-ins `@glob`, `@exists`, `@read`, `@is_file`, `@is_dir` and `@cwd` ([§5](#5-built-in-functions)).
+
+`@invocation_dir` is not affected. `in` also does not touch the **environment**: the body runs in the effective environment inherited from the enclosing context ([§12.4](#124-environment-attributes)), exactly as it would outside `in`, and the `.env` file ([§7](#7-settings)) is neither re-read nor re-located.
+
+**Inheritance and restoration:**
+
+- The previous working directory is **restored** when the `in` is left, however that happens: normally, through `break` or `continue` ([§4.6](#46-break-and-continue)), or by an abort (`@error(...)` or a failed process).
+- A task called from inside an `in` block inherits the working directory, which reverts when the call returns; this is the same dynamic scoping as `[env]` ([§12.4](#124-environment-attributes)).
+- A lambda is evaluated in the working directory in effect **where it is called**, not where it is written ([§4.8](#48-lambdas)).
+- **Static bindings** ([§3](#3-bindings)) never see the working directory of whatever triggers them; they start from the root working directory (the `working_dir` setting, [§7](#7-settings)).
+
 ---
 
 ## 5. Built-in Functions
@@ -726,16 +776,26 @@ Built-in functions are called with an `@` prefix and may appear in any expressio
 | Signature | Returns | Description |
 |-----------|---------|-------------|
 | `@env(key: string)` | `!string` | Value of environment variable `key` as visible in the current scope ([§12.4](#124-environment-attributes)), or an error if unset. There is no default-value overload; use `fallback`, e.g. `@env("PORT") fallback "8080"`. |
-| `@which(name: string)` | `!string` | Path of program `name`, looked up in the `PATH` of the current scope's environment (so a `PATH` set with `[env]` is honored), or an error if not found. |
-| `@exists(path: string)` | `bool` | `true` if a file or directory exists at `path`. |
+| `@which(name: string)` | `!string` | Path of program `name`, found like the unix `which` command: it is looked up in the `PATH` of the current scope's environment (so a `PATH` set with `[env]` is honored). Errors if not found. |
 | `@os()` | `string` | The current platform: `"windows"`, `"linux"` or `"macos"`. |
+| `@arch()` | `string` | The architecture **family** of the current platform. Its values are those of Zig's `builtin.target.cpu.arch.family()`, for example `"x86"` (both 32-bit and 64-bit x86), `"arm"`, `"aarch64"` or `"riscv"`. The exact set of values is that of the Zig version tasq is built with. |
+| `@cwd()` | `string` | The absolute path of the working directory in effect: the `working_dir` setting ([§7](#7-settings)), or the directory entered by an enclosing `in` ([§4.11](#411-in-expression)). |
+| `@invocation_dir()` | `string` | The directory from which tasq was called. Unlike `@cwd()` it is not affected by the `working_dir` setting or by `in`. |
 | `@status_code()` | `number` | Exit status of the most recently executed process. Every process call, statement or expression, updates it, including a process expression evaluated as part of a lazily evaluated static binding ([§3](#3-bindings)). After a process that failed without aborting (`nofail`, or a taken `fallback`) it holds that non-zero status. Errors if no process has run yet in the current task. |
 
 **File system**
 
+Relative paths given to `@exists`, `@is_file`, `@is_dir`, `@read` and `@glob` are resolved against the working directory in effect ([§7](#7-settings), [§4.11](#411-in-expression)), the same one process calls run in. `@basename` and `@join_path` only work on strings and never touch the file system.
+
 | Signature | Returns | Description |
 |-----------|---------|-------------|
-| `@glob(pattern: string)` | `[]string` | Lists, recursively, the files and directories that match the glob `pattern`. A relative `pattern` is matched relative to the working directory in effect for the task, the same one its process calls run in ([§7](#7-settings)). The result is **not sorted** and its order is unspecified; use `@sort` for a deterministic order. An invalid pattern currently results in an empty list rather than an error ([§14](#14-planned-features)). |
+| `@exists(path: string)` | `bool` | `true` if a file or directory exists at `path`. |
+| `@is_file(path: string)` | `bool` | `true` if `path` exists and is a file. `false` if it is missing or is not a file. |
+| `@is_dir(path: string)` | `bool` | `true` if `path` exists and is a directory. `false` if it is missing or is not a directory. |
+| `@read(path: string)` | `!string` | The content of the file at `path`, exactly as stored (nothing is trimmed). Errors if the file cannot be read or is not valid UTF-8. |
+| `@glob(pattern: string)` | `[]string` | Lists, recursively, the files and directories that match the glob `pattern`. The result is **not sorted** and its order is unspecified; use `@sort` for a deterministic order. An invalid pattern currently results in an empty list rather than an error ([§14](#14-planned-features)). |
+| `@basename(path: string)` | `string` | The final component of `path`. Trailing separators are ignored. |
+| `@join_path(parts: []string)` | `string` | Joins `parts` into one path using the **native path separator of the current operating system** (`\` on Windows, `/` elsewhere). |
 
 **Output and control**
 
@@ -757,13 +817,13 @@ Built-in functions are called with an `@` prefix and may appear in any expressio
 | `@len(str: string)` | `number` | Number of characters in `str`. |
 | `@at(str: string, pos: number)` | `!string` | The character at index `pos` of `str`, as a `string`. `pos` is rounded up to a whole number first ([§2.1](#21-runtime-types)); errors if the result is less than `0` or not less than `@len(str)`. |
 | `@split(str: string, sep: string)` | `[]string` | Splits `str` wherever `sep` occurs. |
-| `@join(list: []string, sep: string)` | `string` | Joins the elements of `list`, separated by `sep`. |
+| `@join(strings: []string, sep: string)` | `string` | Joins the elements of `strings`, separated by `sep`. |
 | `@lines(str: string)` | `[]string` | Cuts `str` into lines and returns them as a list. Lines end at `\n` or `\r\n`; the line terminators are not part of the returned lines. A final terminator does not produce an extra empty line, and an empty `str` yields an empty list. |
 | `@lower(str: string)` | `string` | `str` in lowercase. |
 | `@upper(str: string)` | `string` | `str` in uppercase. |
 | `@contains(str: string, sub: string)` | `bool` | `true` if `str` contains `sub`. |
 | `@starts_with(str: string, prefix: string)` | `bool` | `true` if `str` begins with `prefix`. |
-| `@ends_with(str: string, postfix: string)` | `bool` | `true` if `str` ends with `postfix`. |
+| `@ends_with(str: string, suffix: string)` | `bool` | `true` if `str` ends with `suffix`. |
 | `@replace(str: string, old: string, new: string)` | `string` | Copy of `str` with every occurrence of `old` replaced by `new`. |
 | `@trim(str: string, set: string)` | `string` | Copy of `str` with all leading and trailing characters that occur in `set` removed. `set` is treated as a set of characters, not as a sequence. |
 | `@trim_start(str: string, set: string)` | `string` | Like `@trim`, but removes only leading characters. |
@@ -777,17 +837,17 @@ Built-in functions are called with an `@` prefix and may appear in any expressio
 | `@at(list: []T, pos: number)` | `!T` | The element at index `pos` of `list`. `pos` is rounded up to a whole number first ([§2.1](#21-runtime-types)); errors if the result is less than `0` or not less than `@len(list)`. |
 | `@replace(list: []T, old: T, new: T)` | `[]T` | Copy of `list` with every element equal to `old` replaced by `new`. |
 | `@unique(list: []T)` | `[]T` | Copy of `list` without duplicates. Elements are compared with `==`; the first occurrence of each element is kept and the original order is preserved. |
-| `@sort(list: []T, less: \|T, T\| -> bool)` | `[]T` | Copy of `list` sorted using `less`. `less(a, b)` returns `true` when `a` must be ordered before `b`. `list` itself is unchanged. |
-| `@all(list: []T, predicate: \|T\| -> bool)` | `bool` | `true` if `predicate` is `true` for every element (vacuously `true` for an empty list). |
-| `@any(list: []T, predicate: \|T\| -> bool)` | `bool` | `true` if `predicate` is `true` for at least one element. |
-| `@reduce(list: []T, init: T, combine: \|T, T\| -> T)` | `T` | Folds `list` into a single value: starting from `init`, calls `combine(accumulator, element)` for each element in order and returns the final accumulator. |
+| `@sort(list: []T, fn: \|T, T\| -> bool)` | `[]T` | Copy of `list` sorted using `fn`. `fn(a, b)` returns `true` when `a` must be ordered before `b` (a "less than" function). `list` itself is unchanged. |
+| `@all(list: []T, fn: \|T\| -> bool)` | `bool` | `true` if `fn` is `true` for every element (vacuously `true` for an empty list). |
+| `@any(list: []T, fn: \|T\| -> bool)` | `bool` | `true` if `fn` is `true` for at least one element. |
+| `@reduce(list: []T, init: T, fn: \|T, T\| -> T)` | `T` | Folds `list` into a single value: starting from `init`, calls `fn(accumulator, element)` for each element in order and returns the final accumulator. |
 
 **Notes:**
 
 - **Overloads.** `@len`, `@at` and `@replace` each have a string and a list form. The overload is chosen at compile time from the argument types.
 - **Lambda arguments.** `@sort`, `@all`, `@any` and `@reduce` take a lambda ([§4.8](#48-lambdas)), written inline or given by name (`@any(xs, big)` with `big := |n| n > 10`). The notation `|T| -> bool` means "a lambda taking one `T` and returning `bool`". The overload is chosen from the function name, the types of the non-lambda arguments and the lambda's **number of parameters**; the lambda's parameter types then come from that overload, and its body must produce the result type the overload expects (e.g. `bool` for `@any`).
-- **Sort order.** The lambda given to `@sort` is a "less than" function: it should be a strict ordering (`less(a, a)` is `false`, and `less(a, b)` and `less(b, a)` are never both `true`). The order of the result for a lambda that violates this is unspecified.
-- **Fallible built-ins.** `@env`, `@which`, `@parse_number` and `@at` return `!T` and can only be used with `fallback` ([§4.7](#47-fallback)).
+- **Sort order.** The lambda given to `@sort` is a "less than" function: it should be a strict ordering (`fn(a, a)` is `false`, and `fn(a, b)` and `fn(b, a)` are never both `true`). The order of the result for a lambda that violates this is unspecified.
+- **Fallible built-ins.** `@env`, `@which`, `@parse_number`, `@at` and `@read` return `!T` and can only be used with `fallback` ([§4.7](#47-fallback)).
 - **Element access.** `@at` reads a single element or character. To take a part of a list or string, use a slice ([§4.9](#49-ranges-and-slices)), which never errors.
 
 **Examples:**
@@ -808,6 +868,15 @@ task demo {
     @print(`{@sort([3, 1, 2], |a, b| a < b)}`)        // [1, 2, 3]
     @print(`{@sort([3, 1, 2], |a, b| a > b)}`)        // [3, 2, 1]
     @print(`{@sort(["b", "c", "a"], |a, b| a < b)}`)  // [a, b, c]
+
+    // Paths
+    @print(@basename("src/main.zig"))                 // main.zig
+    @print(@basename("src/lib/"))                     // lib
+    @print(@join_path(["src", "lib", "main.zig"]))    // src/lib/main.zig (src\lib\main.zig on Windows)
+
+    // File system
+    if (@is_file("config.toml"))
+        @print(@read("config.toml") fallback "")
 }
 ```
 
@@ -826,7 +895,8 @@ $[<attributes>]`<command>`
 
 - Only `$` followed by a backtick literal is a process call; there is no `$"..."` form.
 - `{<expr>}` interpolation and escape sequences work as in interpolated strings ([§4.2](#42-strings-and-interpolation)).
-- Each `` $`...` `` literal is **one process invocation**. It runs using the interpreter from the `script` setting, in the directory from the `working_dir` setting ([§7](#7-settings)), and in the environment described in [§12.4](#124-environment-attributes).
+- Each `` $`...` `` literal is **one process invocation**. It runs using the interpreter from the `script` setting, in the working directory in effect (the `working_dir` setting ([§7](#7-settings)), or the directory entered by an enclosing `in` ([§8.9](#89-in-statement))), and in the environment described in [§12.4](#124-environment-attributes).
+- Because every process call is its own invocation, a `cd` inside one does not carry over to later process calls or to built-in functions. To change the working directory, use `in` ([§4.11](#411-in-expression), [§8.9](#89-in-statement)).
 
 ### 6.1 Statements and Expressions
 
@@ -846,7 +916,7 @@ A process call is a **statement** when it stands alone as a line of a task body,
 
 **Captured output.** For a process expression, every newline (`\n` or `\r\n`) at the **end** of the captured output is removed. Nothing else is trimmed: leading whitespace, trailing spaces and tabs, and newlines inside the output are preserved.
 
-**Static bindings.** A process expression in a static binding runs lazily on first reference, once, and the result is cached ([§3](#3-bindings)). It runs in the environment of the declaring scope ([§12.4](#124-environment-attributes)). Because every process updates `@status_code()`, that first reference can change the value `@status_code()` reports in the task that triggered it.
+**Static bindings.** A process expression in a static binding runs lazily on first reference, once, and the result is cached ([§3](#3-bindings)). It runs in the environment and the working directory of the declaring scope ([§12.4](#124-environment-attributes), [§7](#7-settings)). Because every process updates `@status_code()`, that first reference can change the value `@status_code()` reports in the task that triggered it.
 
 ### 6.2 Failure Handling
 
@@ -939,7 +1009,7 @@ set script = ["zsh", "-c"]
 |---------|-----------|-------------|
 | `script` | `[]string` | Command and arguments used to invoke each process call, e.g. `["sh", "-c"]`. |
 | `dotenv` | `bool \| string` | Whether to read a `.env` file into the environment. `set dotenv` enables the default `.env` file in `working_dir`; `set dotenv = "path/to/file"` enables it using that file instead. Default: `false`. See [§12.4](#124-environment-attributes) for how loaded values interact with `[env]` and the OS environment. |
-| `working_dir` | `string` | Working directory of tasq's spawned processes; also used to resolve the default `.env` path. Defaults to the directory `tasq` was invoked from. |
+| `working_dir` | `string` | The root working directory: the working directory of tasq's spawned processes and of the file-system built-ins ([§5](#5-built-in-functions)); also used to resolve the default `.env` path. Defaults to the directory `tasq` was invoked from. Inside a task, `in` temporarily replaces it for a block ([§8.9](#89-in-statement)). |
 
 > There is no setting to ignore process failures; see [§6.2](#62-failure-handling).
 > Additional settings will be added in future versions.
@@ -1038,6 +1108,7 @@ A task body may contain any combination of:
 | If statement | `if / else if / else` ([§8.5](#85-if-statement)) |
 | Switch statement | `switch(...) { ... }` ([§8.6](#86-switch-statement)) |
 | For statement | `for(...) \|...\| { ... }` ([§8.7](#87-for-statement)) |
+| In statement | `in(path) { ... } else { ... }` ([§8.9](#89-in-statement)) |
 | Task call | `name(...)` / `::name(...)` / `group::name(...)` ([§9](#9-task-calls)) |
 | Expression statement | Any other expression, e.g. `@print(msg)` |
 
@@ -1051,7 +1122,7 @@ _ := double(2)        // evaluated, result discarded
 
 `_` is never defined as a name, so it cannot be read, and may be used any number of times in one scope.
 
-**Statement blocks.** Wherever statements are expected (a task body, the branches of `if`, the body of `for`, the body of a `switch` branch), the grammar accepts a *statement block*:
+**Statement blocks.** Wherever statements are expected (a task body, the branches of `if`, the body of `for`, the body of `in`, the body of a `switch` branch), the grammar accepts a *statement block*:
 
 ```
 STMT_BLOCK := '{' STATEMENTS '}' | STATEMENT
@@ -1121,7 +1192,7 @@ for(<subjects>) |<captures>| <stmt_block>
 - `<subjects>` are one or more comma-separated subjects, each a list expression or a range ([§4.9](#49-ranges-and-slices)). They are iterated in lock-step over a shared window of indices: the **intersection** of the subjects' index intervals, where a list covers `0..@len(list)` and a range covers its own bounds. With only list subjects, iteration runs only for the length of the **shortest** subject; there is no out-of-bounds access and no error. The extra elements of longer subjects are never visited. A window with no finite end (only unbounded ranges) runs zero times. The full rules are in [§4.9](#49-ranges-and-slices).
 - `<captures>` binds one capture to each subject, in order. A capture is an identifier (the current element of a list subject, or the current index of a range subject), `_` to ignore the value, or a destructuring pattern `(a, b)` when the elements are tuples ([§4.10](#410-tuples-and-destructuring)). The number of captures **must equal** the number of subjects.
 - `<stmt_block>` is a `{ }` block or a single statement ([§8.4](#84-task-body)).
-- `break` and `continue` ([§4.6](#46-break-and-continue)) may be used inside, including from a nested `if` or `switch`.
+- `break` and `continue` ([§4.6](#46-break-and-continue)) may be used inside, including from a nested `if`, `switch` or `in`.
 
 ```
 words   := ["one", "two", "three"]
@@ -1183,6 +1254,7 @@ task other [dep_a()] {
 - Dependencies run before the body, in the order listed.
 - A dependency's arguments are ordinary expressions and may use the task's **own arguments**, e.g. `[compile(target)]`.
 - The task's `[env]` attributes ([§12.4](#124-environment-attributes)) **apply to its dependencies**, as if the task had called them itself.
+- Dependencies run in the working directory in which the task itself was called ([§9](#9-task-calls)).
 - The list sits after the signature, so it is never confused with an attribute list ([§12](#12-attributes)), which precedes the `task` keyword.
 - A task with dependencies may also have a brace-less body ([§8.4](#84-task-body)).
 
@@ -1218,6 +1290,56 @@ task test(name: string) [build()]
     $`./test --test {name}`
 ```
 
+### 8.9 In Statement
+
+`in` as a **statement** changes the working directory for a block of statements. The semantics, which are shared with the expression form, are described in [§4.11](#411-in-expression): the path is resolved against the working directory in effect, the previous directory is restored however the block is left, and the environment is not changed.
+
+```
+in(<path>) <stmt_block>
+[else <stmt_block>]
+```
+
+- `<path>` is an expression of type `string`, evaluated once.
+- If the path exists and is a directory, the `<stmt_block>` runs with that directory as the working directory. Otherwise (the path does not exist, or is a file) the `else` block runs in the working directory that was in effect around the `in`.
+- `else` is **optional**. If the path is not valid and there is no `else`, the block is skipped silently and execution continues after the `in`, as for a `switch` without a match ([§8.6](#86-switch-statement)).
+- Both bodies are statement blocks, so single statements may omit their braces ([§8.4](#84-task-body)).
+- `break` and `continue` ([§4.6](#46-break-and-continue)) may be used inside and refer to the nearest enclosing `for`; the working directory is restored first.
+- `else` takes a statement block, and `in` is itself a statement, so chains such as `in("a") { ... } else in("b") { ... } else { ... }` need no extra syntax.
+- Task calls inside the block inherit the working directory, which reverts when the call returns ([§9](#9-task-calls)).
+
+```
+task frontend {
+    in("frontend") {
+        $`npm ci`
+        $`npm run build`
+    } else {
+        @error("the frontend/ directory is missing")
+    }
+}
+
+// Built-in functions follow `in`; `$`cd`` could never do this
+task tests {
+    in("tests") {
+        for(@sort(@glob("*.zig"), |a, b| a < b)) |file| $`zig test {file}`
+    }
+}
+
+// Nested blocks compose, and the previous directory is restored
+task nested {
+    in("a") {
+        in("b") {
+            @print(@cwd())   // <start>/a/b
+        }
+        @print(@cwd())       // <start>/a
+    }
+}
+
+// First existing directory wins
+task output {
+    in("dist") $`ls` else in("build") $`ls` else @error("nothing was built")
+}
+```
+
 ---
 
 ## 9. Task Calls
@@ -1251,6 +1373,8 @@ compile("main.rs", jobs: 4)
 Names in task calls are the **argument identifiers** as declared in the signature, not the `[long]` / `[short]` CLI names.
 
 When calling a task in a group from outside that group, the group's shared arguments must also be passed by identifier. A task called from inside its own group may omit them ([§10.1](#101-named-groups)).
+
+**Inherited context.** A called task runs in the context of its caller: it inherits the effective environment ([§12.4](#124-environment-attributes)) and the working directory ([§4.11](#411-in-expression)) in effect at the call. Both revert when the call returns.
 
 **Compile-time call errors:**
 
@@ -1341,15 +1465,28 @@ group {
 ### 11.1 Invocation
 
 ```
-tasq <task_name> [arguments...]
-tasq [options]
+tasq [COMMAND] [OPTIONS]...
+tasq <task_name> [arguments...] [-f <file>]
 ```
+
+**Commands:**
 
 | Command | Description |
 |---------|-------------|
 | `tasq <task_name> [arguments...]` | Run a task. Arguments map to the task's declared arguments ([§11.3](#113-task-arguments)). |
-| `tasq --check` | Check the `tasq` file and print diagnostics without running anything ([§11.2](#112-checking-without-running---check)). |
-| `tasq --help` | Print help output, which lists tasks and groups with their `[desc]` descriptions. `[private]` tasks and groups are omitted ([§12.2](#122-documentation-attributes)). |
+| `tasq --check` | Run the diagnostics over the source file and print them, without running anything ([§11.2](#112-checking-without-running---check)). |
+| `tasq --list` | Display the list of tasks ([§11.5](#115-listing-tasks-and-showing-usage)). |
+| `tasq --usage <task_name>` | Display the usage of a task ([§11.5](#115-listing-tasks-and-showing-usage)). |
+| `tasq --lsp` | Start the language server (LSP) on stdio, for editor integration. |
+| `tasq --version` | Display the application version. |
+| `tasq --help` | Print the help message of the command line interface itself (commands and global options). It does not list tasks; use `--list` for that. |
+
+**Global options:**
+
+| Option | Description |
+|--------|-------------|
+| `-f <file>`, `--file <file>` | Target file; overrides the default `tasq` ([§11.6](#116-choosing-the-file-and-option-placement)). |
+| `-h`, `--help` | Show the help message. |
 
 ### 11.2 Checking Without Running (`--check`)
 
@@ -1362,8 +1499,8 @@ tasq --check
 **What it does not do:**
 
 - It executes nothing. No task body runs, no process call is spawned (statement or expression), and no binding is evaluated.
-- Because nothing runs, it cannot detect **runtime** failures: a command exiting non-zero, an `@error(...)` being reached, a missing environment variable, an unparsable `@parse_number` input, an `@at` position out of bounds, and so on.
-- Lambdas are analysed only where they are used ([§4.8](#48-lambdas)), so a lambda that is never used is not checked.
+- Because nothing runs, it cannot detect **runtime** failures: a command exiting non-zero, an `@error(...)` being reached, a missing environment variable, an unparsable `@parse_number` input, an `@at` position out of bounds, an unreadable `@read` file, and so on.
+- Lambdas are checked in two stages ([§4.8](#48-lambdas)): at their definition, with parameters of unknown type, and at each use, with the concrete types. Errors that depend on a parameter's type can therefore only be found for lambdas that are used.
 
 **Exit status.** `tasq --check` exits with a non-zero status when at least one error diagnostic is reported, so it can be used in scripts and CI.
 
@@ -1388,7 +1525,7 @@ tasq task_name --verbose
 tasq task_name -v
 ```
 
-**Mixing.** When a task has both kinds, positional arguments are consumed first in declaration order. Named arguments may appear anywhere in the command.
+**Mixing.** When a task has both kinds, positional arguments are consumed first in declaration order. Named arguments may appear anywhere in the command, except that the global `-f` / `--file` option must come last ([§11.6](#116-choosing-the-file-and-option-placement)).
 
 ### 11.4 Implicit CLI Names
 
@@ -1413,6 +1550,28 @@ task example(
     extra: flag,
 ) { ... }
 ```
+
+### 11.5 Listing Tasks and Showing Usage
+
+**`tasq --list`** displays the tasks of the file, grouped by group. Each task is shown with the names of its positional arguments and its `[desc]` description ([§12.2](#122-documentation-attributes)). `[private]` tasks and groups are omitted.
+
+**`tasq --usage <task_name>`** displays the usage of one task: its signature, that is its arguments with their CLI names ([§11.3](#113-task-arguments), [§11.4](#114-implicit-cli-names)) and default values, together with the `[desc]` descriptions of the task and of its arguments.
+
+```
+tasq --list
+tasq --usage build
+```
+
+### 11.6 Choosing the File and Option Placement
+
+By default tasq reads the file named `tasq`. The global option `-f <file>` (or `--file <file>`) selects another file instead. It works with every command and with running a task, in which case it must be given **at the end** of the command line, after the task name and the task's arguments:
+
+```
+tasq test value1 -f "../tasq"    // runs task `test` with "value1", using the file ../tasq
+tasq --list -f "../tasq"
+```
+
+**Help option.** `-h` / `--help` prints the help message when it is used as a command. Once a task name has been given, it neither prints the help message nor is it passed on to the task.
 
 ---
 
@@ -1485,8 +1644,8 @@ task open {
 
 | Attribute | Meta type | Valid on | Unique | Description |
 |-----------|-----------|----------|:------:|-------------|
-| `[desc: "text"]` | `string` | `task`, `group`, argument | Yes | Human-readable description shown in help output. |
-| `[private]` | *(none)* | `task`, `group` | Yes | Hides the task or group from help/listing output. A private task can still be called normally, by name from another task or directly from the command line; it is only omitted from generated documentation. |
+| `[desc: "text"]` | `string` | `task`, `group`, argument | Yes | Human-readable description shown by `tasq --list` and `tasq --usage` ([§11.5](#115-listing-tasks-and-showing-usage)). |
+| `[private]` | *(none)* | `task`, `group` | Yes | Hides the task or group from `tasq --list` output. A private task can still be called normally, by name from another task or directly from the command line; it is only omitted from generated documentation. |
 
 ```
 [desc: "Compile and package the project for distribution"]
@@ -1500,7 +1659,7 @@ task build(
     $`cargo build --release --jobs {jobs} --target {target}`
 }
 
-// Internal helper: callable, but hidden from `tasq --help`
+// Internal helper: callable, but hidden from `tasq --list`
 [private]
 task _prepare_workspace {
     $`mkdir -p .cache/build`
@@ -1577,6 +1736,7 @@ task create_user(
 - If a called task declares its own `[env]` for the same name, that value takes precedence for the duration of that call, and the earlier one resumes on return (ordinary nested shadowing).
 - **Static bindings** ([§3](#3-bindings)) never see the `[env]` of the task that triggers them. They are evaluated in the environment of the scope they are declared in: the `.env` file (if enabled) and the OS environment.
 - **Task-local bindings** see the task's effective environment: its own `[env]` plus whatever it inherited.
+- `in` ([§4.11](#411-in-expression), [§8.9](#89-in-statement)) does not change the environment: its body inherits the effective environment of the enclosing context, like everything else.
 
 **Precedence.** When a variable could come from several sources, the most specific wins:
 
@@ -1620,7 +1780,7 @@ task show {
 | `"text"` | `string` | No | Basic string |
 | `` `text {expr}` `` | `string` | Yes (`{ }`) | Interpolated string |
 | `'c'` | `char` | No | Single character |
-| `("a", 1)` | tuple | No | Two or more elements of any value type ([§4.10](#410-tuples-and-destructuring)) |
+| `("a", 1)` | tuple | No | Two or more elements of any value type, lambdas included ([§4.10](#410-tuples-and-destructuring)) |
 | `\|a, b\| expr` | lambda | No | Single-expression function; types inferred per use ([§4.8](#48-lambdas)) |
 | `` $`command {expr}` `` | process call | Yes (`{ }`) | Statement or expression ([§6.1](#61-statements-and-expressions)) |
 
@@ -1636,6 +1796,15 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 | `@at(list, 0) fallback x` | Single element or character (errors out of range) | [§5](#5-built-in-functions) |
 | `a, b := tuple` | Destructuring binding | [§4.10](#410-tuples-and-destructuring) |
 | `for(tuples) \|(a, b)\| ...` | Destructuring capture | [§4.10](#410-tuples-and-destructuring) |
+
+### Working Directory
+
+| Form | Meaning | See |
+|------|---------|-----|
+| `in(path) { ... } else { ... }` | Statement: run a block in `path`; `else` optional | [§8.9](#89-in-statement) |
+| `in(path) expr else expr` | Expression: evaluate in `path`; `else` required | [§4.11](#411-in-expression) |
+| `@cwd()` | Working directory in effect | [§5](#5-built-in-functions) |
+| `@invocation_dir()` | Directory tasq was called from | [§5](#5-built-in-functions) |
 
 ### Scope Resolution
 
@@ -1661,10 +1830,11 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 | Operators, precedence | [§4.1](#41-operators) |
 | Ranges, range loops, slices | [§4.9](#49-ranges-and-slices) |
 | Tuples, destructuring | [§4.10](#410-tuples-and-destructuring) |
+| Changing the working directory (`in`) | [§4.11](#411-in-expression), [§8.9](#89-in-statement) |
 | Process call defaults (echo, stdout, stdin, failure) | [§6.1](#61-statements-and-expressions) |
 | Built-in function list | [§5](#5-built-in-functions) |
 | Which attributes go where | [§12](#12-attributes) |
-| CLI options (`--check`, `--help`) | [§11.1](#111-invocation) |
+| CLI commands and options (`--check`, `--list`, `--usage`, `-f`, ...) | [§11](#11-command-line-interface) |
 
 ---
 
@@ -1672,7 +1842,6 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 
 Reserved for future versions; not currently part of the language:
 
-- **Unbounded range loops.** A `for` window with no finite end (for example `for(0..)`) currently runs zero times, so range loops can never be infinite ([§4.9](#49-ranges-and-slices)). Other semantics may be defined later.
 - **Precise string units.** `@len`, `@at` and string slices count "characters". The exact unit (Unicode code point, character or glyph) is to be decided and defined precisely ([§4.9](#49-ranges-and-slices), [§5](#5-built-in-functions)).
 - **Additional built-in functions**: type conversion utilities and other helpers.
 - **Glob errors.** An invalid pattern passed to `@glob` currently results in an empty list ([§5](#5-built-in-functions)). Reporting it as an error may be defined later.
@@ -1681,6 +1850,3 @@ Reserved for future versions; not currently part of the language:
 - **Isolated `@status_code()` for static bindings.** Today a lazily evaluated static binding that runs a process updates `@status_code()` like any other process; this may change so that evaluating a static binding leaves it untouched.
 - **Eager evaluation of selected static bindings.** A way to force chosen static bindings to be evaluated at startup instead of on first reference.
 - **Configurable stdin for process expressions.** They currently read an empty stdin.
-- **Definition-time checking of lambdas.** Today a lambda body is analysed only when used, so an unused lambda is never checked (and `tasq --check` does not check it either). Planned: check every lambda where it is defined (unknown names, errors independent of parameter types) and require that a body only uses names declared before the lambda.
-- **Lambda diagnostics with instantiation traces.** Errors inside a lambda body should also point at the call that instantiated it and at the lambda's definition.
-- **Returning lambdas (closures).** A lambda cannot return a lambda today, because lambda values do not capture their environment. For the same reason a lambda cannot be stored in a tuple.
