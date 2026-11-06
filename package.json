@@ -97,6 +97,10 @@
             {
                 "command": "tasq.stopLanguageServer",
                 "title": "tasq: Stop language server"
+            },            
+            {
+                "command": "tasq.restartLanguageServer",
+                "title": "tasq: Restart language server"
             }
         ],
         "configuration": {

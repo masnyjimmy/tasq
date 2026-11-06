@@ -11,36 +11,39 @@ import {
 
 let client: LanguageClient | undefined;
 
-export async function activate(context: ExtensionContext) {
-    let serverModule = context.asAbsolutePath(path.join('..', 'tsq', 'zig-out', 'bin', 'tasq.exe'));
+function createClient(): LanguageClient {
+    const config = workspace.getConfiguration("tasq");
+    const binaryPath = config.get<string>("path", "tasq");
 
-    let serverOptions: ServerOptions = {
-        run: { command: serverModule, args: ['--lsp'], transport: TransportKind.stdio },
-        debug: {
-            command: serverModule,
-            args: ['--lsp'],
-            transport: TransportKind.stdio,
-        },
+    const serverOptions: ServerOptions  = {
+        run: { command: binaryPath, args: ["--lsp"], transport: TransportKind.stdio},
+        debug: {command: binaryPath, args: ["--lsp"], transport: TransportKind.stdio},
     };
 
-    let clientOptions: LanguageClientOptions = {
-        documentSelector: [
-            { scheme: 'file', language: 'tasq' },
-        ],
+    const clientOptions: LanguageClientOptions = {
+        documentSelector: [{ scheme: "file", language: "tasq"}],
         synchronize: {
-            fileEvents: workspace.createFileSystemWatcher('**/tasq'),
+            fileEvents: workspace.createFileSystemWatcher("**/tasq"),
         },
     };
 
-    client = new LanguageClient("tasq-lsp", serverOptions, clientOptions);
+    return new LanguageClient("tasq-lsp", serverOptions, clientOptions);
+}
 
+async function disposeClient() {
+    const old = client;
+    client = undefined;
+    await old?.dispose();
+}
+
+export async function activate(context: ExtensionContext) {
     const stopCommand = commands.registerCommand("tasq.stopLanguageServer", async () => {
         if(!client) {
             window.showInformationMessage('Language client is not initialized.');
             return;
         }
 
-        if(client.state == State.Running) {
+        if(client.state === State.Running) {
             try {
                 await client.stop();
                 window.showInformationMessage('Language client stop succesfully');
@@ -52,8 +55,20 @@ export async function activate(context: ExtensionContext) {
         }
     });
 
-    context.subscriptions.push(stopCommand);
+    const restartCommand = commands.registerCommand("tasq.restartLanguageServer", async () => {
+        try {
+            await disposeClient();
+            client = createClient();
+            await client.start();
+            window.showInformationMessage("Tasq language server restarted");
+        } catch(error) {
+            window.showErrorMessage(`Failed to restart language server: ${error}`);
+        }
+    });
 
+    context.subscriptions.push(stopCommand, restartCommand);
+
+    client = createClient();
     await client.start();
 }
 
