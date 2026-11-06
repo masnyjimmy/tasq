@@ -98,7 +98,7 @@ const fs_functions: []const Spec = &.{
         .name = "join_path",
         .args = &.{
             .{
-                .name = "a",
+                .name = "parts",
                 .type = .{ .concrete = .{ .list = &.string } },
             },
         },
