@@ -43,6 +43,7 @@ pub const NodeKind = enum {
     literal,
     list,
     slice,
+    spread,
     name_ref,
     lambda_call,
     paren_expr,

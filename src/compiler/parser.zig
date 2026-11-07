@@ -25,6 +25,10 @@ const EXPR_START: FollowSet = .set(&.{
     .switch_kw, .if_kw,    .at,          .not_kw,
     .minus,     .dollar,   .continue_kw, .break_kw,
 });
+// A list element is either an expression or a spread (`...expr`).
+// `...` is NOT part of EXPR_START: a spread is only valid directly inside
+// a list literal, not anywhere an expression may appear.
+const LIST_ELEM_START: FollowSet = EXPR_START.with(&.{.triple_dot});
 const STMT_START: FollowSet = FollowSet.set(&.{
     .ident,  .if_kw,  .switch_kw,
     .for_kw, .dcolon, .dollar,
@@ -826,8 +830,8 @@ pub const Parser = struct {
                     .lbracket,
                     .rbracket,
                     .comma,
-                    follow.withSet(EXPR_START),
-                    parseExpr,
+                    follow.withSet(LIST_ELEM_START),
+                    parseListElem,
                 );
 
                 try self.close(.list);
@@ -846,6 +850,19 @@ pub const Parser = struct {
                 "expected an expression, found '{t}'",
                 .{tag},
             ),
+        }
+    }
+
+    /// One element of a list literal: either a plain expression or a spread,
+    /// `...expr`, which splices the elements of another list into this one.
+    fn parseListElem(self: *Parser, follow: FollowSet) Error!void {
+        if (try self.at(.triple_dot)) {
+            try self.open();
+            try self.advance();
+            try self.parseExpr(follow);
+            try self.close(.spread);
+        } else {
+            try self.parseExpr(follow);
         }
     }
 

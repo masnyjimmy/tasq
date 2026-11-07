@@ -738,11 +738,24 @@ pub const Sema = struct {
                 var it = list.iter();
                 while (it.next()) |item| {
                     // a bad item has already been reported by its own check
-                    const value = try skipIncomplete(self.assertLiteral(item, item_expected)) orelse {
-                        failed = true;
-                        continue;
-                    };
-                    try items.append(self.arena.allocator(), value);
+                    switch (@as(ast.ListItem, item).classify()) {
+                        .spread => |spread| {
+                            try self.diagnostics.err(
+                                spread.node.trimmedSpan(),
+                                "spread cannot be used in list literals",
+                                .{},
+                            );
+                            failed = true;
+                            continue;
+                        },
+                        .expr => |item_expr| {
+                            const value = try skipIncomplete(self.assertLiteral(item_expr, item_expected)) orelse {
+                                failed = true;
+                                continue;
+                            };
+                            try items.append(self.arena.allocator(), value);
+                        },
+                    }
                 }
 
                 if (failed) return Error.Incomplete;
@@ -1557,34 +1570,83 @@ pub const Sema = struct {
                 var items_type: Type = .unknown;
 
                 while (it.next()) |item| {
-                    var result = try skipIncomplete(self.analyseExprPartial(item, scope)) orelse {
-                        broken = true;
-                        continue;
-                    };
+                    switch (@as(ast.ListItem, item).classify()) {
+                        .spread => |spread| {
+                            const item_expr = spread.expr orelse {
+                                broken = true;
+                                continue;
+                            };
 
-                    // `[1, break]`: the list itself could never be produced
-                    if (try self.rejectNoreturn(item, &result, "a list item", .{})) {
-                        broken = true;
-                        continue;
+                            var result: ExprResult(ir.Expr) = try skipIncomplete(
+                                self.analyseExpr(item_expr, scope),
+                            ) orelse {
+                                broken = true;
+                                continue;
+                            };
+
+                            if (try self.rejectNoreturn(item_expr, &result, "a list item", .{})) {
+                                broken = true;
+                                continue;
+                            }
+
+                            if (result.type != .list and result.type != .unknown) {
+                                try self.diagnostics.err(
+                                    item_expr.node.trimmedSpan(),
+                                    "only list can be spread, got '{f}'",
+                                    .{result.type},
+                                );
+                                broken = true;
+                                continue;
+                            }
+
+                            items_type = try Type.unify(self.arena.allocator(), items_type, result.type.list.*) orelse blk: {
+                                try self.diagnostics.err(
+                                    item_expr.node.trimmedSpan(),
+                                    "list items must all have the same type: expected '{f}', got '{f}'",
+                                    .{ items_type, result.type.list.* },
+                                );
+                                break :blk items_type;
+                            };
+
+                            if (result.is_static == false)
+                                is_static = false;
+
+                            try items.append(self.arena.allocator(), .{
+                                .expr = try self.create(ir.Expr, result.expr),
+                                .is_spread = true,
+                            });
+                        },
+                        .expr => |item_expr| {
+                            var result: ExprResult(ir.Expr) = try skipIncomplete(
+                                self.analyseExpr(item_expr, scope),
+                            ) orelse {
+                                broken = true;
+                                continue;
+                            };
+
+                            if (try self.rejectNoreturn(item_expr, &result, "a list item", .{})) {
+                                broken = true;
+                                continue;
+                            }
+
+                            items_type = try Type.unify(self.arena.allocator(), items_type, result.type) orelse blk: {
+                                try self.diagnostics.err(
+                                    item_expr.node.trimmedSpan(),
+                                    "list items must all have the same type: expected '{f}', got '{f}'",
+                                    .{ items_type, result.type },
+                                );
+                                break :blk items_type;
+                            };
+
+                            if (result.is_static == false)
+                                is_static = false;
+
+                            try items.append(self.arena.allocator(), .{
+                                .expr = try self.create(ir.Expr, result.expr),
+                                .is_spread = false,
+                            });
+                        },
                     }
-
-                    items_type = try Type.unify(self.arena.allocator(), items_type, result.type) orelse blk: {
-                        // BUG: multiple diagnostics
-                        try self.diagnostics.err(
-                            it.lastSpan(),
-                            "list items must all have the same type: expected '{f}', got '{f}'",
-                            .{ items_type, result.type },
-                        );
-                        break :blk items_type;
-                    };
-
-                    if (result.is_static == false)
-                        is_static = false;
-
-                    try items.append(self.arena.allocator(), .{
-                        .expr = try self.create(ir.Expr, result.expr),
-                        .is_spread = false,
-                    });
                 }
 
                 // an item failed and nothing else is known: do not report the missing type on top

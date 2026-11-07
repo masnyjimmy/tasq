@@ -490,9 +490,46 @@ pub const UnaryExpr = struct {
 
 pub const ListExpr = AnyKindIterable(
     .loose,
-    Expr,
-    Expr.KINDS,
+    ListItem,
+    ListItem.KINDS,
 );
+
+pub const ListItem = struct {
+    const KINDS: []const cst.NodeKind = [_]cst.NodeKind{.spread} ++ Expr.KINDS;
+
+    node: *const cst.Node,
+
+    pub const Kind = union(enum) {
+        spread: Spread,
+        expr: Expr,
+    };
+
+    pub fn from(node: *const cst.Node) ListItem {
+        return .{ .node = node };
+    }
+
+    pub fn classify(self: *const ListItem) Kind {
+        return switch (self.node.kind) {
+            .spread => .{ .spread = .from(self.node) },
+            else => .{ .expr = .from(self.node) },
+        };
+    }
+};
+
+pub const Spread = struct {
+    node: *const cst.Node,
+    expr: ?Expr,
+
+    pub fn from(node: *const cst.Node) Spread {
+        var it = node.iter();
+
+        const expr = expectAnyNode(&it, Expr, Expr.KINDS);
+        return .{
+            .node = node,
+            .expr = expr,
+        };
+    }
+};
 
 pub const BuiltinCall = struct {
     node: *const cst.Node,
