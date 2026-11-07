@@ -5,8 +5,7 @@ const enums = @import("enums.zig");
 pub const Tag = enum {
     windows,
     linux,
-    ios,
+    macos,
     other,
 };
-
-pub const tag = enums.castEnum(builtin.os.tag, Tag) orelse @compileError("unsupported platform");
+pub const tag = enums.castEnum(builtin.target.os.tag, Tag) orelse @compileError("unsupported platform");
