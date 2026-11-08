@@ -13,5 +13,4 @@ pub const default_options: ir.Options = switch (platform.tag) {
     .linux => .{
         .shell = &.{ "/bin/bash", "-c" },
     },
-    else => unreachable,
 };
