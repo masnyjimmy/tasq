@@ -211,8 +211,8 @@ fn addTasq(
 
     const exe = b.addExecutable(.{
         .name = "tasq",
-        .use_llvm = true,
-        .use_lld = true,
+        .use_llvm = if (optimize == .debug) true else null,
+        .use_lld = if (optimize == .debug and !target.result.os.tag.isDarwin()) true else null,
         .root_module = exe_mod,
     });
     exe.root_module.addImport("lib", lib_mod);
