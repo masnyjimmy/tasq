@@ -10,7 +10,7 @@ const tasq = JSON.parse(
 // https://astro.build/config
 export default defineConfig({
 	site: 'https://masnyjimmy.github.io/',
-	base: '/tasq',
+	base: '/tasq/',
 	integrations: [
 		starlight({
 			title: 'Tasq Docs',

@@ -1,12 +1,15 @@
 # tasq Language Specification
 
 > **tasq** is a task runner language and interpreter designed as a modern, expressive replacement for limited task definition formats such as Justfile and Taskfile.
+>
+> **Status:** v0.1.0-beta. The language is feature-rich but may still change before v0.1.0.
 
 ---
 
 ## Table of Contents
 
 1. [File Layout](#1-file-layout)
+   - [1.1 Reserved Words](#11-reserved-words)
 2. [Type System](#2-type-system)
    - [2.1 Runtime Types](#21-runtime-types)
    - [2.2 Special Types](#22-special-types)
@@ -25,6 +28,7 @@
    - [4.9 Ranges and Slices](#49-ranges-and-slices)
    - [4.10 Tuples and Destructuring](#410-tuples-and-destructuring)
    - [4.11 In Expression](#411-in-expression)
+   - [4.12 With Expression](#412-with-expression)
 5. [Built-in Functions](#5-built-in-functions)
 6. [Process Calls](#6-process-calls)
    - [6.1 Statements and Expressions](#61-statements-and-expressions)
@@ -75,6 +79,20 @@ At the root (top) level it may contain the following elements, in any order:
 | Task definitions | Executable units of work ([§8](#8-tasks)) |
 | Group definitions | Containers that share arguments across tasks ([§10](#10-groups)) |
 
+### 1.1 Reserved Words
+
+The following words are keywords. They cannot be used as the name of a binding, parameter, lambda parameter, capture, task or group:
+
+```
+task  group  set
+if  else  switch  for  in  with
+break  continue  fallback
+and  or  not
+true  false
+```
+
+The name `_` is also special: it is never defined and only discards a value ([§3](#3-bindings), [§8.4](#84-task-body)).
+
 ---
 
 ## 2. Type System
@@ -124,11 +142,13 @@ These types have **no literal** and can only be produced by certain built-ins or
 | `noreturn` | The expression never yields a value; it always diverges | `@error(...)`, `break`, `continue` |
 | `!T` | A fallible result: either a `T` or an error | `@env`, `@which`, `@parse_number`, `@at`, `@read` |
 
+> **Notation.** The `!` in `!T` is type notation only. It is not an operator and cannot be written in source code. Boolean negation is written `not` ([§4.1](#41-operators)).
+
 **`void`** is a real value that behaves as an ordinary concrete type. It can be assigned to a binding, and two `void` branches unify with each other, but a `void` branch does **not** unify with a differently typed branch (a `void` branch paired with a `string` branch is a type error).
 
 **`noreturn`** can never be assigned to a binding.
 
-**`!T`** can be used in exactly one way: by applying `fallback` ([§4.7](#47-fallback)) directly to the built-in call that produced it, yielding a plain `T`. It cannot be bound, passed to a process call or task call, stored in a list or tuple, or used in any other expression context.
+**`!T`** can be used in exactly one way: by applying `fallback` ([§4.7](#47-fallback)) directly to the built-in call that produced it, yielding a plain `T`. It cannot be bound, passed to a process call or task call, stored in a list or tuple, used as a `with` subject ([§4.12](#412-with-expression)), or used in any other expression context.
 
 **Unifying branches.** `if` ([§4.3](#43-if-expression)), `switch` ([§4.4](#44-switch-expression)), `for` ([§4.5](#45-for-expression)), `in` ([§4.11](#411-in-expression)) and `fallback` ([§4.7](#47-fallback)) combine several branches into one result type:
 
@@ -195,6 +215,7 @@ label, (x, y) := <nested tuple expression>
 - Within one scope, binding names must be unique.
 - Inside a task body, task arguments behave as immutable bindings of their runtime type.
 - A binding named `_` is never defined; it only discards its value ([§8.4](#84-task-body)). Inside a destructuring pattern, `_` discards just that element.
+- A binding is a declaration, not an expression. To name a value **inside** an expression (for example in the body of a lambda, which cannot contain declarations), use `with` ([§4.12](#412-with-expression)).
 
 **Evaluation:**
 
@@ -249,7 +270,7 @@ Expressions produce a typed value. They are used in bindings, task call argument
 | Comparison | `>` `<` `>=` `<=` | two `number`s or two `string`s ([see below](#string-comparison)) | `bool` |
 | Equality | `==` `!=` | any matching type (tuples compare element-wise, [§4.10](#410-tuples-and-destructuring); lambdas compare by template, [§4.8](#48-lambdas)) | `bool` |
 | Boolean | `and` `or` | `bool` | `bool` |
-| Boolean negation | `!` | `bool` | `bool` |
+| Boolean negation | `not <expr>` | `bool` | `bool` |
 | Unary minus | `-<expr>` | `number` | `number` |
 | List spread | `[...list, item, ...]` | list `[]T`, items `T` | `[]T` |
 | Range | `a..b`, `a..` | `number` | not a value; only valid as a `for` subject or a slice index ([§4.9](#49-ranges-and-slices)) |
@@ -259,7 +280,14 @@ Expressions produce a typed value. They are used in bindings, task call argument
 
 - There is **no implicit type coercion**; operands must match the expected types exactly.
 - Precedence follows mathematical convention (`*`, `/`, `%` before `+`, `-`). Boolean operators bind more loosely than comparisons.
+- **Boolean operator precedence.** From tightest to loosest: comparison and equality, then `not`, then `and`, then `or`. So `not a == b` means `not (a == b)`, `not a and b` means `(not a) and b`, and `a or b and c` means `a or (b and c)`. `not` may be repeated (`not not x`).
+- There is **no `!` operator**. Boolean negation is always written `not`. The `!` of `!=` belongs to that operator only.
 - The slice postfix `[...]` binds tighter than every operator. The range operator `..` binds more loosely than every arithmetic operator, so `a + 1..b * 2` means `(a + 1)..(b * 2)`.
+
+```
+if (not @exists("config.toml")) @error("missing config.toml")
+ok := @all(nums, |n| n >= 0) and not @any(nums, |n| n > 100)
+```
 
 #### String comparison
 
@@ -404,7 +432,8 @@ for(<subjects>) |<captures>| <expr>
 - `<subjects>` are one or more comma-separated subjects, each a list expression or a range ([§4.9](#49-ranges-and-slices)). They are iterated in lock-step over a shared window of indices: the **intersection** of the subjects' index intervals, where a list covers `0..@len(list)` and a range covers its own bounds. With only list subjects this is the length of the **shortest** subject; no error is raised. The full rules are in [§4.9](#49-ranges-and-slices).
 - `<captures>` binds one capture to each subject, in order. A capture is an identifier (the current element of a list subject, or the current index of a range subject), `_` for a value you don't need, or a destructuring pattern `(a, b)` when the elements are tuples ([§4.10](#410-tuples-and-destructuring)). The number of captures **must equal** the number of subjects.
 - `<expr>` is evaluated once per iteration, and its result becomes the corresponding element of the produced list. The result type is `[]T`, where `T` is the type of `<expr>`. If there are no iterations the result is an empty `[]T`.
-- `<expr>` may be an `if`, `switch` or `in` expression containing `break` or `continue` branches ([§4.6](#46-break-and-continue)); these are `noreturn` and unify with the surviving branches ([§2.2](#22-special-types)).
+- `<expr>` may be an `if`, `switch`, `in` or `with` expression containing `break` or `continue` branches ([§4.6](#46-break-and-continue)); these are `noreturn` and unify with the surviving branches ([§2.2](#22-special-types)).
+- `<expr>` may itself be a `for` expression (a nested loop). The inner `for` produces a list, so the outer result is a list of lists.
 
 ```
 input   := [1, 2, 3]
@@ -415,20 +444,34 @@ doubled := for(input) |i| i * 2
 squares := for(0..5) |i| i * i  // [0, 1, 4, 9, 16]
 ```
 
+The same loop shapes cover the common list operations, depending on what the body does:
+
+| Body | Behaves as |
+|------|------------|
+| a plain value | map |
+| a branch that is `continue` | filter |
+| a branch that is `break` | take-while |
+| a branch that is `@error(...)` | validate |
+
+```
+ports := [22, 0, 443, 70000, 8080, -5]
+valid := for(ports) |p| if (p < 1 or p > 65535) continue else p   // [22, 443, 8080]
+```
+
 The statement form is described in [§8.7](#87-for-statement).
 
 ### 4.6 Break and Continue
 
 `break` and `continue` are bare keywords (no arguments, no parentheses) that control iteration inside a `for`, in statement form ([§8.7](#87-for-statement)) or expression form ([§4.5](#45-for-expression)).
 
-Both have type `noreturn` ([§2.2](#22-special-types)), so they can be used as branches of a nested `if`, `switch` or `in`.
+Both have type `noreturn` ([§2.2](#22-special-types)), so they can be used as branches of a nested `if`, `switch`, `in` or `with`.
 
 | Keyword | In a `for` **statement** | In a `for` **expression** |
 |---------|--------------------------|---------------------------|
 | `break` | Stops iteration immediately. | Stops immediately and yields the list produced so far. |
 | `continue` | Skips the rest of the current iteration and proceeds to the next. | Skips the current element (it is **not** added to the list) and proceeds. |
 
-Both always refer to the **nearest enclosing `for`**; a nested `if`, `switch` or `in` does not change this. Leaving an `in` block this way restores the previous working directory ([§4.11](#411-in-expression)).
+Both always refer to the **nearest enclosing `for`**; a nested `if`, `switch`, `in` or `with` does not change this, and neither does an inner `for`: in nested loops, `break` and `continue` affect only the innermost one. Leaving an `in` block this way restores the previous working directory ([§4.11](#411-in-expression)).
 
 ```
 for(numbers) |n| {
@@ -558,13 +601,23 @@ task demo {
 
 It can also be passed to the built-ins that take a lambda ([§5](#5-built-in-functions)).
 
+**Naming intermediate values.** A lambda body is one expression, so it cannot contain bindings. Use `with` ([§4.12](#412-with-expression)) to compute a value once and use it several times inside the body:
+
+```
+parse_repo := |line|
+    with(@split(line, ";")) |parts| (
+        @at(parts, 0) fallback @error("missing repo name"),
+        @at(parts, 1) fallback @error("missing repo url"),
+    )
+```
+
 **Equality and printing.** Lambdas can be compared with `==` and `!=`: two lambda values are equal when they refer to the exact same template. A lambda is converted to the string `<lambda>` in interpolation. The same holds for a tuple that contains a lambda, which is compared element-wise ([§4.10](#410-tuples-and-destructuring)). Neither is useful in practice, but both are allowed.
 
 **Limits:**
 
 - **No recursion.** A lambda cannot call itself, directly or through other lambdas (compile-time error).
 - **A lambda cannot return a lambda**, nor a tuple that contains a lambda. `|a| |b| a + b` is a compile-time error (`lambda cannot return a lambda`). This is a deliberate part of the language, not a gap.
-- A lambda body is an expression, so it cannot contain task calls or statements. Use a task for actions.
+- A lambda body is an expression, so it cannot contain task calls or statements. Use a task for actions, and `with` to name intermediate values.
 - A lambda cannot be a task or group argument ([§2.4](#24-argument-types)).
 
 ### 4.9 Ranges and Slices
@@ -685,18 +738,19 @@ Destructuring binds the elements of a tuple to separate names. A **pattern** is 
 pattern := name | '_' | '(' pattern ',' pattern { ',' pattern } ')'
 ```
 
-It is allowed in two places:
+It is allowed in three places:
 
 | Place | Syntax | Notes |
 |-------|--------|-------|
 | Binding | `a, b := <tuple expr>` | The outermost pattern is written **without** parentheses. Nested patterns use parentheses: `label, (x, y) := <tuple expr>`. |
 | `for` capture | `for(<subjects>) \|(a, b)\| ...` | A subject whose elements are tuples is captured with a parenthesized pattern. Plain captures may be mixed in: `\|(a, b), i\|`. |
+| `with` capture | `with(<tuple expr>) \|(a, b)\| ...` | A subject that is a tuple is captured with a parenthesized pattern ([§4.12](#412-with-expression)). |
 
 **Rules:**
 
 - The pattern's shape must match the tuple's type **exactly**: the same number of elements at every level (compile-time error otherwise), and the right-hand side must be a tuple.
 - `_` discards one element. It is never defined and may appear any number of times.
-- The names a pattern introduces are ordinary bindings: they are immutable, must be unique within their scope and follow the no-shadowing rule of [§3](#3-bindings). A name bound by a `for` capture is visible only in that loop's body.
+- The names a pattern introduces are ordinary bindings: they are immutable, must be unique within their scope and follow the no-shadowing rule of [§3](#3-bindings). A name bound by a `for` or `with` capture is visible only in that construct's body.
 - Destructuring bindings are valid at file root, in a group body and in a task body. Evaluation is as in [§3](#3-bindings): task-local bindings run eagerly in statement order, and static bindings run **lazily and once**, when **any** of their names is first referenced.
 - Destructuring is not available for lambda parameters or task and group arguments.
 
@@ -738,7 +792,7 @@ task test {
 in(<path>) <expression> else <expression>
 ```
 
-`in` is a keyword: it cannot be used as the name of a binding, parameter, task or group. The statement form is described in [§8.9](#89-in-statement).
+`in` is a keyword ([§1.1](#11-reserved-words)). The statement form is described in [§8.9](#89-in-statement).
 
 **Evaluation:**
 
@@ -764,6 +818,63 @@ sources := in("src") @sort(@glob("*.zig"), |a, b| a < b) else @error("src/ is mi
 - A task called from inside an `in` block inherits the working directory, which reverts when the call returns; this is the same dynamic scoping as `[env]` ([§12.4](#124-environment-attributes)).
 - A lambda is evaluated in the working directory in effect **where it is called**, not where it is written ([§4.8](#48-lambdas)).
 - **Static bindings** ([§3](#3-bindings)) never see the working directory of whatever triggers them; they start from the root working directory (the `working_dir` setting, [§7](#7-settings)).
+
+### 4.12 With Expression
+
+`with` names one or more intermediate values **inside a single expression**. It is a building block for expression pipelines: compute a value once, then use it several times in the body. It matters most in lambda bodies ([§4.8](#48-lambdas)), which are a single expression and cannot contain bindings ([§3](#3-bindings)).
+
+```
+with(<subjects>) |<captures>| <expr>
+```
+
+- `<subjects>` are one or more comma-separated expressions. They are evaluated once each, **left to right**, before the body.
+- `<captures>` binds one capture to each subject, in order. A capture is an identifier, `_` for a value you don't need, or a destructuring pattern `(a, b)` when the subject is a tuple ([§4.10](#410-tuples-and-destructuring)). The number of captures **must equal** the number of subjects (compile-time error otherwise).
+- `<expr>` is the **body**. It extends as far right as possible, like a lambda body.
+- The value and type of the whole `with` expression are those of the body. If the body is `noreturn`, so is the `with` expression ([§2.2](#22-special-types)).
+- Unlike `for`, `with` does not iterate: the body is evaluated exactly once.
+
+**Subjects.** A subject is an ordinary value, treated as the right-hand side of a binding would be. It may be of any type a binding can hold, but not `noreturn`, not a range ([§4.9](#49-ranges-and-slices)), and not a fallible result `!T`, which must first be unwrapped with `fallback` ([§4.7](#47-fallback), [§2.2](#22-special-types)). Subjects are evaluated each time the `with` expression is evaluated; nothing is cached.
+
+**Scope.**
+
+- Captured names are visible **only in the body**, never in the other subjects of the same `with`. To build a value from an earlier one, nest the expressions: `with(a) |x| with(f(x)) |y| ...`.
+- Captured names follow the no-shadowing rule of bindings ([§3](#3-bindings)) and must be unique within one `with`. `_` may appear any number of times and is never defined.
+- `with` does not change the working directory or the environment; unlike `in` ([§4.11](#411-in-expression)), the body runs exactly as it would outside the `with`.
+- `break` and `continue` inside the body refer to the nearest enclosing `for`, as in a branch of `if` ([§4.6](#46-break-and-continue)).
+- Inside a lambda, a `with` follows the two-stage checking of [§4.8](#48-lambdas): captured types are known only per instance.
+
+**Expression only.** `with` has no statement form. In a task body, name a value with a binding (`name := ...`, [§8.4](#84-task-body)); a `with` written on its own line is an expression statement and is subject to the discarded-value rule of [§8.4](#84-task-body).
+
+```
+// Compute once, use twice: split the line a single time
+parse_repo := |line|
+    with(@split(line, ";")) |parts| (
+        @at(parts, 0) fallback @error("missing repo name"),
+        @at(parts, 1) fallback @error("missing repo url"),
+    )
+
+// A `with` body can be a `for` expression; `with` and `fallback` compose
+read_repos := |file|
+    with(@read(file) fallback @error(`{file} not found`)) |text|
+        for(@lines(text)) |line|
+            if (line == "") continue
+            else parse_repo(line)
+
+// Several subjects, each taken apart with a destructuring pattern
+describe := |origin, p|
+    with(origin, p) |(ox, oy), (px, py)| `dx={px - ox} dy={py - oy}`
+
+// Nested `with`: the second subject uses the first capture
+shout := |s|
+    with(@trim(s, " ")) |t|
+        with(@upper(t)) |u| `{u}!`
+
+task print_repos {
+    for(read_repos("repos.txt")) |(name, url)| {
+        @print(`name: {name}, url: {url}`)
+    }
+}
+```
 
 ---
 
@@ -900,7 +1011,7 @@ $[<attributes>]`<command>`
 
 ### 6.1 Statements and Expressions
 
-A process call is a **statement** when it stands alone as a line of a task body, and an **expression** when it appears where an expression is expected (a binding's right-hand side, an argument, inside an interpolation, a static binding at file root or in a group body, and so on).
+A process call is a **statement** when it stands alone as a line of a task body, and an **expression** when it appears where an expression is expected (a binding's right-hand side, an argument, inside an interpolation, a `with` subject, a static binding at file root or in a group body, and so on).
 
 | Aspect | Process statement | Process expression |
 |--------|-------------------|--------------------|
@@ -1121,6 +1232,8 @@ _ := double(2)        // evaluated, result discarded
 ```
 
 `_` is never defined as a name, so it cannot be read, and may be used any number of times in one scope.
+
+**No statement form of `with`.** `with` ([§4.12](#412-with-expression)) exists only as an expression. In a task body, name a value with a binding (`name := ...`) instead.
 
 **Statement blocks.** Wherever statements are expected (a task body, the branches of `if`, the body of `for`, the body of `in`, the body of a `switch` branch), the grammar accepts a *statement block*:
 
@@ -1786,6 +1899,25 @@ task show {
 
 Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` `` `\0` `\xNN` `\u{NNNN...}` `\{` `\}`
 
+### Boolean Operators
+
+| Form | Meaning | See |
+|------|---------|-----|
+| `a and b`, `a or b` | Logical and / or | [§4.1](#41-operators) |
+| `not a` | Logical negation (there is no `!` operator) | [§4.1](#41-operators) |
+| precedence | comparison, then `not`, then `and`, then `or` | [§4.1](#41-operators) |
+
+### Expression Forms
+
+| Form | Meaning | See |
+|------|---------|-----|
+| `if (c) a else b` | Conditional expression | [§4.3](#43-if-expression) |
+| `switch(x) { p => a, else => b }` | Multi-way expression | [§4.4](#44-switch-expression) |
+| `for(list) \|x\| expr` | Builds a list: map, filter (`continue`), take-while (`break`), validate (`@error`) | [§4.5](#45-for-expression) |
+| `with(expr) \|x\| expr` | Names a value inside an expression (expression only) | [§4.12](#412-with-expression) |
+| `call() fallback x` | Replacement value when a call fails | [§4.7](#47-fallback) |
+| `in(path) a else b` | Evaluate in another directory | [§4.11](#411-in-expression) |
+
 ### Ranges, Slices and Tuples
 
 | Form | Meaning | See |
@@ -1796,6 +1928,7 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 | `@at(list, 0) fallback x` | Single element or character (errors out of range) | [§5](#5-built-in-functions) |
 | `a, b := tuple` | Destructuring binding | [§4.10](#410-tuples-and-destructuring) |
 | `for(tuples) \|(a, b)\| ...` | Destructuring capture | [§4.10](#410-tuples-and-destructuring) |
+| `with(tuple) \|(a, b)\| ...` | Destructuring capture in `with` | [§4.12](#412-with-expression) |
 
 ### Working Directory
 
@@ -1827,10 +1960,12 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 
 | Looking for | See |
 |-------------|-----|
-| Operators, precedence | [§4.1](#41-operators) |
+| Operators, precedence, `not` | [§4.1](#41-operators) |
+| Reserved words | [§1.1](#11-reserved-words) |
 | Ranges, range loops, slices | [§4.9](#49-ranges-and-slices) |
 | Tuples, destructuring | [§4.10](#410-tuples-and-destructuring) |
 | Changing the working directory (`in`) | [§4.11](#411-in-expression), [§8.9](#89-in-statement) |
+| Naming values inside an expression (`with`) | [§4.12](#412-with-expression) |
 | Process call defaults (echo, stdout, stdin, failure) | [§6.1](#61-statements-and-expressions) |
 | Built-in function list | [§5](#5-built-in-functions) |
 | Which attributes go where | [§12](#12-attributes) |

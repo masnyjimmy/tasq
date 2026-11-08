@@ -5,7 +5,7 @@ parse_repo := |line|
     )
 
 read_repos := |file|
-    with(@read(file) fallback @error("repos.txt not found")) |text|
+    with(@read(file) fallback @error(`{file} not found`)) |text|
         for(@lines(text)) |line|
             if (line == "") continue
             else parse_repo(line)
