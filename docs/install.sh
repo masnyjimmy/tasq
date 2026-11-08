@@ -60,7 +60,7 @@ main() {
         *) VERSION="v$VERSION" ;;
     esac
     archive="$BIN-$VERSION-$arch-$os.tar.gz"
-    base="https://github/$REPO/releases/download/$VERSION"
+    base="https://github.com/$REPO/releases/download/$VERSION"
 
     tmp=$(mktemp -d 2>/dev/null || mktemp -d -t tasq)
     trap 'rm -rf "$tmp"' EXIT INT TERM
