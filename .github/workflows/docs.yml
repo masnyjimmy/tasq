@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: "actions/checkout@v7"
       - name: Install, build and upload the site
-        uses: withastro/action@v3
+        uses: withastro/action@v6
         with: 
           path: docs
   
@@ -35,4 +35,4 @@ jobs:
     steps:
       - name: Deploy to github pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
