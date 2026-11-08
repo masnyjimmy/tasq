@@ -1,0 +1,3 @@
+task hello {
+    $`echo "Hello from tasq!"`
+}

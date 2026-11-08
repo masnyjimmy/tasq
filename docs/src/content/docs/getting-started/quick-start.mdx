@@ -3,7 +3,10 @@ title: Quick start
 description: Write and run your first tasq tasks in a few minutes.
 ---
 
-import { Steps, Aside } from '@astrojs/starlight/components';
+import { Steps, Aside, Code } from '@astrojs/starlight/components';
+import hello from "../../../examples/hello.tasq?raw";
+import greet from "../../../examples/greet.tasq?raw";
+import deps from "../../../examples/deps.tasq?raw";
 
 This page walks you through writing a small tasq file and running it. It assumes you have [installed tasq](../installation/).
 
@@ -13,20 +16,15 @@ This page walks you through writing a small tasq file and running it. It assumes
 
 1. **Create a file**
 
-   Create a file named `hello.tasq` and add your first task:
-
-   ```txt
-   task hello {
-     $`echo "Hello from tasq!"`
-   }
-   ```
+   Create a file named `tasq` and add your first task:
+    <Code code={hello} lang="tasq" title="tasq"/>
 
    A task has a name and a body in braces. The `$` runs a command, and the backticks hold the command line.
 
 2. **Run it**
 
    ```sh
-   tasq run hello
+   tasq hello
    ```
 
    You should see `Hello from tasq!` printed.
@@ -35,17 +33,12 @@ This page walks you through writing a small tasq file and running it. It assumes
 
    Tasks can take parameters with a type and an optional default value:
 
-   ```txt
-   task greet(name: string = "world") {
-     $`echo "Hello, {name}!"`
-   }
-   ```
-
+    <Code code={greet} lang="tasq" title="tasq"/>
    Values inside `{ }` in a backtick string are substituted into the command.
 
    ```sh
-   tasq run greet
-   tasq run greet --name tasq
+   tasq greet # Hello, world!
+   tasq greet tasq # Hello, tasq!
    ```
 
 4. **Add a dependency**
@@ -65,7 +58,7 @@ This page walks you through writing a small tasq file and running it. It assumes
    Running `release` runs `build` first.
 
    ```sh
-   tasq run release
+   tasq release
    ```
 
 </Steps>

@@ -19,7 +19,7 @@ The script detects your platform, downloads the matching release, verifies its c
   <TabItem label="Linux">
 
 ```sh
-curl -fsSL https://OWNER.github.io/tasq/install.sh | sh
+curl -fsSL https://masnyjimmy.github.io/tasq/install.sh | sh
 ```
 
   The binary is installed to `~/.local/bin`. If that directory is not on your `PATH`, the script prints the line to add to your shell profile.
@@ -28,7 +28,7 @@ curl -fsSL https://OWNER.github.io/tasq/install.sh | sh
   <TabItem label="Windows">
 
 ```powershell
-irm https://OWNER.github.io/tasq/install.ps1 | iex
+irm https://masnyjimmy.github.io/tasq/install.ps1 | iex
 ```
 
   The binary is installed to `%LOCALAPPDATA%\tasq\bin`, and that directory is added to your user `PATH`. Restart open terminals afterwards.
@@ -42,14 +42,14 @@ irm https://OWNER.github.io/tasq/install.ps1 | iex
   <TabItem label="Linux">
 
 ```sh
-curl -fsSL https://OWNER.github.io/tasq/install.sh | sh -s -- v0.1.0
+curl -fsSL https://masnyjimmy.github.io/tasq/install.sh | sh -s -- v0.1.0
 ```
 
   </TabItem>
   <TabItem label="Windows">
 
 ```powershell
-$env:TASQ_VERSION = "v0.1.0"; irm https://OWNER.github.io/tasq/install.ps1 | iex
+$env:TASQ_VERSION = "v0.1.0"; irm https://masnyjimmy.github.io/tasq/install.ps1 | iex
 ```
 
   </TabItem>
@@ -88,7 +88,7 @@ $env:TASQ_VERSION = "v0.1.0"; irm https://OWNER.github.io/tasq/install.ps1 | iex
 You need [Zig](https://ziglang.org/download/) 0.17.0.
 
 ```sh
-git clone https://github.com/OWNER/tasq
+git clone https://github.com/masnyjimmy/tasq
 cd tasq
 zig build -Doptimize=ReleaseSafe
 ```
