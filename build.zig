@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) void {
     const run_cmd = b.addRunArtifact(tasq.exe);
     run_cmd.step.dependOn(b.getInstallStep());
     run_cmd.addPassthruArgs();
-    const run_step = b.step("run", "Run tsq");
+    const run_step = b.step("run", "Run tasq");
     run_step.dependOn(&run_cmd.step);
 
     // ---- release step -----
@@ -106,14 +106,14 @@ fn addReleaseStep(
 
         const archive: std.Build.LazyPath = if (is_windows) blk: {
             const zip = b.addSystemCommand(&.{ "zip", "-q", "-j" });
-            const out = zip.addOutputFileArg(archive_name);
+            const out = zip.addOutputFileArg2(archive_name, .{});
             zip.addFileArg(staged_dir.path(b, exe_name));
             break :blk out;
         } else blk: {
             const tar = b.addSystemCommand(&.{ "tar", "-czf" });
-            const out = tar.addOutputDirectoryArg(archive_name);
+            const out = tar.addOutputFileArg2(archive_name, .{});
             tar.addArg("-C");
-            tar.addDirectoryArg(staged_dir);
+            tar.addDirectoryArg2(staged_dir, .{});
             tar.addArg(exe_name);
             break :blk out;
         };
@@ -121,7 +121,7 @@ fn addReleaseStep(
         const install = b.addInstallFileWithDir(archive, .{ .custom = "release" }, archive_name);
         release_step.dependOn(&install.step);
 
-        sums.addFileArg(archive);
+        sums.addFileArg2(archive, .{});
     }
 
     const sums_install = b.addInstallFileWithDir(sums_file, .{ .custom = "release" }, "SHA256SUMS");
@@ -181,7 +181,7 @@ fn addTasq(
         strip,
     );
 
-    const compiler_mod = createModule(b, "src/compiler//root.zig", target, optimize, strip);
+    const compiler_mod = createModule(b, "src/compiler/root.zig", target, optimize, strip);
     compiler_mod.addImport("lib", lib_mod);
 
     const interpreter_mod = createModule(b, "src/interpreter/root.zig", target, optimize, strip);
@@ -205,7 +205,7 @@ fn addTasq(
     cli_mod.addOptions("build_options", build_options);
 
     const exe_mod = createModule(b, "src/main.zig", target, optimize, strip);
-    cli_mod.addOptions("build_options", build_options);
+    exe_mod.addOptions("build_options", build_options);
 
     const exe = b.addExecutable(.{
         .name = "tasq",
