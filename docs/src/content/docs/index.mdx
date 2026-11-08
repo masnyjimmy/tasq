@@ -1,0 +1,29 @@
+---
+title: Tasq
+description: A language for defining and running tasks.
+template: splash
+hero:
+  tagline: A language for defining and running tasks. One small binary, no runtime.
+  actions:
+    - text: Install
+      link: /getting-started/installation/
+      icon: right-arrow
+    - text: Quick start
+      link: /getting-started/quick-started
+      variant: minimal
+---
+import { Card, CardGrid } from '@astrojs/starlight/components';
+ 
+{/* TODO: replace the tagline above with your real one-line pitch, and fix the cards if any claim is wrong. */}
+ 
+<CardGrid>
+  <Card title="Single binary" icon="rocket">
+    Download one file, put it on your `PATH`, and you are ready to go.
+  </Card>
+  <Card title="Linux and Windows" icon="laptop">
+    Prebuilt binaries for x86_64 and aarch64.
+  </Card>
+  <Card title="Editor support" icon="pencil">
+    A language server brings diagnostics to your editor.
+  </Card>
+</CardGrid>
