@@ -1,0 +1,82 @@
+---
+title: Quick start
+description: Write and run your first tasq tasks in a few minutes.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+This page walks you through writing a small tasq file and running it. It assumes you have [installed tasq](../installation/).
+
+{/* VERIFY everything marked below against the real CLI: file name, `tasq run`, how tasks are listed, how arguments are passed. */}
+
+<Steps>
+
+1. **Create a file**
+
+   Create a file named `hello.tasq` and add your first task:
+
+   ```txt
+   task hello {
+     $`echo "Hello from tasq!"`
+   }
+   ```
+
+   A task has a name and a body in braces. The `$` runs a command, and the backticks hold the command line.
+
+2. **Run it**
+
+   ```sh
+   tasq run hello
+   ```
+
+   You should see `Hello from tasq!` printed.
+
+3. **Add a parameter**
+
+   Tasks can take parameters with a type and an optional default value:
+
+   ```txt
+   task greet(name: string = "world") {
+     $`echo "Hello, {name}!"`
+   }
+   ```
+
+   Values inside `{ }` in a backtick string are substituted into the command.
+
+   ```sh
+   tasq run greet
+   tasq run greet --name tasq
+   ```
+
+4. **Add a dependency**
+
+   List the tasks that must run first in square brackets after the name:
+
+   ```txt
+   task build {
+     $`echo "building..."`
+   }
+
+   task release [build()] {
+     $`echo "releasing..."`
+   }
+   ```
+
+   Running `release` runs `build` first.
+
+   ```sh
+   tasq run release
+   ```
+
+</Steps>
+
+<Aside type="tip">
+  Run `tasq --help` to see every command and option.
+</Aside>
+
+## Next steps
+
+{/* TODO: link the guides and the language reference here once they exist. */}
+
+- Set up your editor for diagnostics and completion.
+- Read the language reference.

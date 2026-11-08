@@ -1,0 +1,110 @@
+---
+title: Installation
+description: Install tasq on Linux and Windows, or build it from source.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+tasq is a single binary with no runtime dependencies. Use whichever method below suits you.
+
+<Aside type="caution">
+  Prebuilt macOS binaries are not published yet. On macOS, [build from source](#build-from-source).
+</Aside>
+
+## Install script
+
+The script detects your platform, downloads the matching release, verifies its checksum and installs the binary.
+
+<Tabs syncKey="os">
+  <TabItem label="Linux">
+
+```sh
+curl -fsSL https://OWNER.github.io/tasq/install.sh | sh
+```
+
+  The binary is installed to `~/.local/bin`. If that directory is not on your `PATH`, the script prints the line to add to your shell profile.
+
+  </TabItem>
+  <TabItem label="Windows">
+
+```powershell
+irm https://OWNER.github.io/tasq/install.ps1 | iex
+```
+
+  The binary is installed to `%LOCALAPPDATA%\tasq\bin`, and that directory is added to your user `PATH`. Restart open terminals afterwards.
+
+  </TabItem>
+</Tabs>
+
+### Install a specific version
+
+<Tabs syncKey="os">
+  <TabItem label="Linux">
+
+```sh
+curl -fsSL https://OWNER.github.io/tasq/install.sh | sh -s -- v0.1.0
+```
+
+  </TabItem>
+  <TabItem label="Windows">
+
+```powershell
+$env:TASQ_VERSION = "v0.1.0"; irm https://OWNER.github.io/tasq/install.ps1 | iex
+```
+
+  </TabItem>
+</Tabs>
+
+{/* VERIFY: the TASQ_VERSION / TASQ_INSTALL_DIR names must match the env vars used inside install.sh and install.ps1. */}
+
+## Manual download
+
+1. Open the [latest release](https://github.com/OWNER/tasq/releases/latest).
+2. Download the archive for your platform, for example `tasq-v0.1.0-x86_64-linux.tar.gz`, together with `SHA256SUMS`.
+3. Verify the download:
+
+   <Tabs syncKey="os">
+     <TabItem label="Linux">
+
+   ```sh
+   sha256sum --check --ignore-missing SHA256SUMS
+   ```
+
+     </TabItem>
+     <TabItem label="Windows">
+
+   ```powershell
+   (Get-FileHash .\tasq-v0.1.0-x86_64-windows.zip -Algorithm SHA256).Hash
+   # compare the result with the matching line in SHA256SUMS
+   ```
+
+     </TabItem>
+   </Tabs>
+
+4. Extract the archive and move `tasq` (or `tasq.exe`) to a directory on your `PATH`.
+
+## Build from source
+
+You need [Zig](https://ziglang.org/download/) 0.17.0.
+
+```sh
+git clone https://github.com/OWNER/tasq
+cd tasq
+zig build -Doptimize=ReleaseSafe
+```
+
+The binary is written to `zig-out/bin/tasq`.
+
+## Check the installation
+
+```sh
+tasq --version
+```
+
+{/* VERIFY: this assumes the CLI has a --version flag. */}
+
+If the command is not found, make sure the install directory is on your `PATH` and open a new terminal.
+
+## Next steps
+
+Continue with the [quick start](../quick-start/) to write and run your first task.
