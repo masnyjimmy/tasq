@@ -62,10 +62,10 @@ fn addReleaseStep(
     build_options: *std.Build.Step.Options,
 ) void {
     const release_optimize = b.option(
-        std.builtin.OptimizeMode,
+        std.builtin.Optimize,
         "release-optimize",
         "Optimize mode for `zig build release` (default: ReleaseSafe)",
-    ) orelse .ReleaseSafe;
+    ) orelse .safe;
 
     const release_step = b.step("release", "Cross-compile, package and checksum all release targets");
 
@@ -153,7 +153,7 @@ fn createModule(
 fn addTasq(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.builtin.Optimize,
     strip: ?bool,
     build_options: *std.Build.Step.Options,
 ) Tasq {
