@@ -4,6 +4,8 @@ import starlight from '@astrojs/starlight';
 
 // https://astro.build/config
 export default defineConfig({
+	site: 'https://masnyjimmy.github.io/',
+	base: '/tasq',
 	integrations: [
 		starlight({
 			title: 'Tasq Docs',
