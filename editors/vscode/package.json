@@ -4,6 +4,12 @@
     "author": "masnyjimmy",
     "license": "ISC",
     "version": "0.1.0",
+    "homepage": "https://masnyjimmy.github.io/tasq",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/masnyjimmy/tasq.git",
+        "directory": "editors/vscode"
+    },
     "main": "./out/extension.js",
     "engines": {
         "vscode": "^1.105.0"
