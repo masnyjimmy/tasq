@@ -1,6 +1,7 @@
 const std = @import("std");
 const lib = @import("lib");
 const conzole = @import("conzole");
+const build_options = @import("build_options");
 
 const AppContext = @import("Context.zig");
 
@@ -26,8 +27,8 @@ fn PrintVersion(ctx: *const Context) !void {
     try ctx.app.printer.printStyled(
         ctx.app.allocator,
         .{ .fg = .bright_white },
-        "later bro",
-        .{},
+        "version: {s}\n",
+        .{build_options.version},
     );
 }
 
