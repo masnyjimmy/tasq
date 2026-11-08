@@ -1,0 +1,299 @@
+{
+  "$schema": "https://json.schemastore.org/tmlanguage.json",
+  "name": "My Task Language",
+  "scopeName": "source.tasq",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#char" },
+    { "include": "#process" },
+    { "include": "#interpolated-string" },
+    { "include": "#group-definition" },
+    { "include": "#task-definition" },
+    { "include": "#function-call" },
+    { "include": "#lambda-params" },
+    { "include": "#parameters" },
+    { "include": "#builtin-functions" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#types" },
+    { "include": "#numbers" },
+    { "include": "#assignment-target" },
+    { "include": "#punctuation" },
+    { "include": "#operators" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "comment": "line comment: // ...",
+      "name": "comment.line.double-slash.tasq",
+      "match": "//.*$"
+    },
+
+    "escape": {
+      "comment": "escape sequences, valid in every literal kind: \\n \\t \\r \\\\ \\\" \\' \\` \\0 \\{ \\} \\xNN \\u{NNNN...}. Order matters: specific forms first, catch-all invalid last.",
+      "patterns": [
+        {
+          "name": "constant.character.escape.unicode.tasq",
+          "match": "\\\\u\\{[0-9a-fA-F]+\\}"
+        },
+        {
+          "name": "constant.character.escape.hex.tasq",
+          "match": "\\\\x[0-9a-fA-F]{2}"
+        },
+        {
+          "name": "constant.character.escape.tasq",
+          "match": "\\\\[ntr\\\\\"'`0{}]"
+        },
+        {
+          "name": "invalid.illegal.escape.tasq",
+          "match": "\\\\."
+        }
+      ]
+    },
+
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.tasq",
+          "match": "\\b(set|task|group|if|else|switch|for|break|continue|fallback|with|in)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.tasq",
+          "match": "\\b(and|or|not)\\b"
+        }
+      ]
+    },
+
+    "group-definition": {
+      "match": "\\b(group)\\b(?:\\s+([a-zA-Z_][a-zA-Z0-9_]*))?",
+      "captures": {
+        "1": { "name": "keyword.control.tasq" },
+        "2": { "name": "entity.name.type.tasq" }
+      }
+    },
+
+    "task-definition": {
+      "match": "\\b(task)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.control.tasq" },
+        "2": { "name": "entity.name.function.tasq" }
+      }
+    },
+
+    "function-call": {
+      "comment": "identifier immediately followed by '(' that isn't a reserved word — covers dependency-list calls like dep_task(...) and builtin-style calls",
+      "match": "\\b(?!task\\b|group\\b|if\\b|else\\b|switch\\b|for\\b|fallback\\b|set\\b|and\\b|or\\b|with\\b|in\\b|not\\b|true\\b|false\\b|null\\b|string\\b|flag\\b|number\\b)([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.call.tasq" }
+      }
+    },
+
+    "lambda-params": {
+      "comment": "covers for(array) |item| { } and @any(array, |x| x == 5)",
+      "begin": "\\|",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.parameters.begin.tasq" }
+      },
+      "end": "\\|",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.parameters.end.tasq" }
+      },
+      "patterns": [
+        { "name": "variable.parameter.capture.tasq", "match": "[a-zA-Z_][a-zA-Z0-9_]*" },
+        { "name": "punctuation.separator.delimiter.tasq", "match": "," }
+      ]
+    },
+
+    "parameters": {
+      "patterns": [
+        {
+          "comment": "handles both `name: type` and `name: []type` (array types)",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*:\\s*(\\[\\])?\\s*([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "variable.parameter.tasq" },
+            "2": { "name": "storage.modifier.array.tasq" },
+            "3": { "name": "support.type.tasq" }
+          }
+        }
+      ]
+    },
+
+    "builtin-functions": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.tasq",
+          "match": "@[a-zA-Z_][a-zA-Z0-9_]*"
+        }
+      ]
+    },
+
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.tasq",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.tasq",
+          "match": "\\bnull\\b"
+        }
+      ]
+    },
+
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.tasq",
+          "match": "\\b(string_list|number_list|string|flag|number)\\b"
+        }
+      ]
+    },
+
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.tasq",
+          "match": "\\b\\d+(\\.\\d+)?\\b"
+        }
+      ]
+    },
+
+    "assignment-target": {
+      "comment": "colors the LHS identifier in `a := ...` as a declaration; purely positional, not symbol-aware",
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?=\\s*:=)",
+      "name": "variable.other.assignment.tasq"
+    },
+
+    "strings": {
+      "comment": "basic string: \"text\" — no interpolation, escapes only",
+      "name": "string.quoted.double.tasq",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "include": "#escape" }
+      ]
+    },
+
+    "char": {
+      "comment": "character literal: 'c' (including escapes such as '\\n', '\\x41', '\\u{1F600}'). Ends at end-of-line so a stray apostrophe cannot swallow the rest of the file.",
+      "name": "string.quoted.single.char.tasq",
+      "begin": "'",
+      "end": "'|(?=$)",
+      "patterns": [
+        { "include": "#escape" }
+      ]
+    },
+
+    "interpolated-string": {
+      "comment": "interpolated string: `text {expr} text`. #escape comes first so \\{ \\} \\` and \\u{...} are consumed before { can start an interpolation or ` can end the string.",
+      "name": "string.interpolated.tasq",
+      "begin": "`",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.tasq" }
+      },
+      "end": "`",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.tasq" }
+      },
+      "patterns": [
+        { "include": "#escape" },
+        { "include": "#interpolation" }
+      ]
+    },
+
+    "process": {
+      "comment": "process call: $`command {expr}` with optional attributes: $[nofail, noecho]`command`. Assumes no nested ']' inside the attribute list.",
+      "name": "meta.process.tasq string.interpolated.process.tasq",
+      "begin": "(\\$)(?:(\\[)([^\\]\\n]*)(\\]))?(`)",
+      "beginCaptures": {
+        "1": { "name": "keyword.operator.process.tasq" },
+        "2": { "name": "punctuation.section.brackets.begin.tasq" },
+        "3": {
+          "patterns": [
+            { "name": "entity.other.attribute-name.tasq", "match": "[a-zA-Z_][a-zA-Z0-9_]*" },
+            { "name": "punctuation.separator.delimiter.tasq", "match": "," }
+          ]
+        },
+        "4": { "name": "punctuation.section.brackets.end.tasq" },
+        "5": { "name": "punctuation.definition.string.begin.tasq" }
+      },
+      "end": "`",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.tasq" }
+      },
+      "patterns": [
+        { "include": "#escape" },
+        { "include": "#interpolation" }
+      ]
+    },
+
+    "interpolation": {
+      "comment": "{expr} inside an interpolated string or process call",
+      "name": "meta.interpolation.tasq",
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.interpolation.begin.tasq" }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.interpolation.end.tasq" }
+      },
+      "patterns": [
+        { "include": "#expression" }
+      ]
+    },
+
+    "expression": {
+      "comment": "what may appear inside {...}; braces are deliberately excluded so the closing } ends the interpolation",
+      "patterns": [
+        { "include": "#process" },
+        { "include": "#strings" },
+        { "include": "#char" },
+        { "include": "#interpolated-string" },
+        { "include": "#builtin-functions" },
+        { "include": "#lambda-params" },
+        { "include": "#keywords" },
+        { "include": "#constants" },
+        { "include": "#numbers" },
+        { "include": "#expression-punctuation" },
+        { "include": "#operators" },
+        { "include": "#identifiers" }
+      ]
+    },
+
+    "expression-punctuation": {
+      "patterns": [
+        { "name": "punctuation.separator.delimiter.tasq", "match": "," },
+        { "name": "punctuation.section.parens.begin.tasq", "match": "\\(" },
+        { "name": "punctuation.section.parens.end.tasq", "match": "\\)" },
+        { "name": "punctuation.section.brackets.begin.tasq", "match": "\\[" },
+        { "name": "punctuation.section.brackets.end.tasq", "match": "\\]" }
+      ]
+    },
+
+    "punctuation": {
+      "patterns": [
+        { "include": "#expression-punctuation" },
+        { "name": "punctuation.section.braces.begin.tasq", "match": "\\{" },
+        { "name": "punctuation.section.braces.end.tasq", "match": "\\}" }
+      ]
+    },
+
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.fat_arrow.tasq", "match": "=>" },
+        { "name": "keyword.operator.assignment.tasq", "match": ":=" },
+        { "name": "keyword.operator.comparison.tasq", "match": "==|!=|<=|>=|<|>" },
+        { "name": "keyword.operator.logical.tasq", "match": "!" },
+        { "name": "keyword.operator.arithmetic.tasq", "match": "[+\\-*/%]" }
+      ]
+    },
+
+    "identifiers": {
+      "comment": "catch-all for any bare identifier not claimed by a more specific rule above; grammars have no symbol table so this can't distinguish bound vs unbound names — that's LSP territory",
+      "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b",
+      "name": "variable.other.readwrite.tasq"
+    }
+  }
+}

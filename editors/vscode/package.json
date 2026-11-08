@@ -1,0 +1,154 @@
+{
+    "name": "tasq",
+    "description": "tasq language vscode support extension",
+    "author": "masnyjimmy",
+    "license": "ISC",
+    "version": "0.1.0",
+    "main": "./out/extension.js",
+    "engines": {
+        "vscode": "^1.105.0"
+    },
+    "activationEvents": [
+        "onLanguage:tasq"
+    ],
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "tasq",
+                "filenames": [
+                    "tasq"
+                ],
+                "configuration": "./language-configuration.json",
+                "extensions": [
+                    ".tasq"
+                ]
+            }
+        ],
+        "grammars": [
+            {
+                "language": "tasq",
+                "scopeName": "source.tasq",
+                "path": "./syntaxes/tasq.tmLanguage.json"
+            },
+            {
+                "scopeName": "markdown.tasq.codeblock",
+                "path": "./syntaxes/codeblock.json",
+                "injectTo": ["text.html.markdown"],
+                "embeddedLanguages": {
+                    "meta.embedded.block.tasq": "tasq"
+                }
+            }
+        ],
+        "semanticTokenTypes": [
+            {
+                "id": "decorator",
+                "description": "tasq attribute"
+            }
+        ],
+        "semanticTokenModifiers": [
+            {
+                "id": "attr_current_platform",
+                "description": "Current platform attribute"
+            },
+            {
+                "id": "attr_platform",
+                "description": "Platform attribute"
+
+            },
+            {
+                "id": "attr_doc",
+                "description": "Documentation attribute"
+
+            },
+            {
+                "id": "attr_modifier",
+                "description": "Modifier attribute"
+            },
+            {
+                "id": "attr_validation",
+                "description": "Validation attribute"
+            }
+        ],
+        "semanticTokenScopes": [
+            {
+                "language": "tasq",
+                "scopes": {
+                    "decorator.attr_current_platform": [
+                        "entity.name.tag.tsq.platform.current"
+                    ],
+                    "decorator.attr_platform": [
+                        "entity.name.tag.tsq.platform"
+                    ],
+                    "decorator.attr_doc": [
+                        "comment.block.documentation.tsq"
+                    ],
+                    "decorator.attr_modifier": [
+                        "storage.modifier.tsq"
+                    ],
+                    "decorator.attr_validation": [
+                        "support.type.property-name.tsq"
+                    ]
+                }
+            }
+        ],
+        "configurationDefaults": {
+            "editor.semanticTokenColorCustomizations": {
+                "rules": {
+                    "decorator.attr_current_platform": {
+                        "foreground": "#c586c0",
+                        "fontStyle": "bold"
+                    },
+                    "decorator.attr_platform": {
+                        "foreground": "#7a7a85",
+                        "fontStyle": "italic"
+                    },
+                    "decorator.attr_doc": "#4ec9b0",
+                    "decorator.attr_modifier": "#569cd6",
+                    "decorator.attr_validation": "#e5c07b"
+                }
+            }
+        },
+        "commands": [
+            {
+                "command": "tasq.stopLanguageServer",
+                "title": "tasq: Stop language server"
+            },            
+            {
+                "command": "tasq.restartLanguageServer",
+                "title": "tasq: Restart language server"
+            }
+        ],
+        "configuration": {
+            "type": "object",
+            "title": "tasq configuration",
+            "properties": {
+                "tasq.maxNumberOfProblems": {
+                    "scope": "resource",
+                    "type": "number",
+                    "default": 100,
+                    "description": "Controls the maximum number of problems produced by the server."
+                },
+                "tasq.path": {
+                    "scope": "resource",
+                    "type":"string",
+                    "default": "tasq",
+                    "description": "Tasq binary path"
+                }
+            }
+        }
+    },
+    "scripts": {
+        "compile": "tsc -b"
+    },
+    "dependencies": {
+        "vscode-languageclient": "^9.0.1"
+    },
+    "devDependencies": {
+        "@types/node": "^25.9.1",
+        "@types/vscode": "^1.105.0",
+        "typescript": "^6.0.3"
+    }
+}
