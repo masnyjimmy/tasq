@@ -53,6 +53,7 @@ pub fn build(b: *std.Build) void {
 
     // ---- release step -----
 
+    addReleaseStep(b, version, build_options);
 }
 
 fn addReleaseStep(
