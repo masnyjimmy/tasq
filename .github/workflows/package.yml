@@ -1,3 +1,4 @@
+name: Package
 on:
   push:
     tags: ["v*"]
