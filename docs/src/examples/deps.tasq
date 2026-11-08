@@ -1,0 +1,7 @@
+task build {
+    $`echo "building..."`
+}
+
+task release [build()] {
+    $`echo "releasing..."`
+}
