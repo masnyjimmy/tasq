@@ -61,6 +61,7 @@
     - [12.2 Documentation Attributes](#122-documentation-attributes)
     - [12.3 Argument Attributes](#123-argument-attributes)
     - [12.4 Environment Attributes](#124-environment-attributes)
+    - [12.5 Working Directory Attribute](#125-working-directory-attribute)
 13. [Quick Reference](#13-quick-reference)
 14. [Planned Features](#14-planned-features)
 
@@ -815,7 +816,7 @@ sources := in("src") @sort(@glob("*.zig"), |a, b| a < b) else @error("src/ is mi
 **Inheritance and restoration:**
 
 - The previous working directory is **restored** when the `in` is left, however that happens: normally, through `break` or `continue` ([§4.6](#46-break-and-continue)), or by an abort (`@error(...)` or a failed process).
-- A task called from inside an `in` block inherits the working directory, which reverts when the call returns; this is the same dynamic scoping as `[env]` ([§12.4](#124-environment-attributes)).
+- A task called from inside an `in` block does **not** inherit the block's directory: every task runs in its own working directory ([§12.5](#125-working-directory-attribute)), whoever calls it. This differs from `[env]`, which a callee does inherit ([§12.4](#124-environment-attributes)).
 - A lambda is evaluated in the working directory in effect **where it is called**, not where it is written ([§4.8](#48-lambdas)).
 - **Static bindings** ([§3](#3-bindings)) never see the working directory of whatever triggers them; they start from the root working directory (the `working_dir` setting, [§7](#7-settings)).
 
@@ -890,13 +891,13 @@ Built-in functions are called with an `@` prefix and may appear in any expressio
 | `@which(name: string)` | `!string` | Path of program `name`, found like the unix `which` command: it is looked up in the `PATH` of the current scope's environment (so a `PATH` set with `[env]` is honored). Errors if not found. |
 | `@os()` | `string` | The current platform: `"windows"`, `"linux"` or `"macos"`. |
 | `@arch()` | `string` | The architecture **family** of the current platform. Its values are those of Zig's `builtin.target.cpu.arch.family()`, for example `"x86"` (both 32-bit and 64-bit x86), `"arm"`, `"aarch64"` or `"riscv"`. The exact set of values is that of the Zig version tasq is built with. |
-| `@cwd()` | `string` | The absolute path of the working directory in effect: the `working_dir` setting ([§7](#7-settings)), or the directory entered by an enclosing `in` ([§4.11](#411-in-expression)). |
+| `@cwd()` | `string` | The absolute path of the working directory in effect: the task's working directory ([§12.5](#125-working-directory-attribute)), or the directory entered by an enclosing `in` ([§4.11](#411-in-expression)). |
 | `@invocation_dir()` | `string` | The directory from which tasq was called. Unlike `@cwd()` it is not affected by the `working_dir` setting or by `in`. |
 | `@status_code()` | `number` | Exit status of the most recently executed process. Every process call, statement or expression, updates it, including a process expression evaluated as part of a lazily evaluated static binding ([§3](#3-bindings)). After a process that failed without aborting (`nofail`, or a taken `fallback`) it holds that non-zero status. Errors if no process has run yet in the current task. |
 
 **File system**
 
-Relative paths given to `@exists`, `@is_file`, `@is_dir`, `@read` and `@glob` are resolved against the working directory in effect ([§7](#7-settings), [§4.11](#411-in-expression)), the same one process calls run in. `@basename` and `@join_path` only work on strings and never touch the file system.
+Relative paths given to `@exists`, `@is_file`, `@is_dir`, `@read` and `@glob` are resolved against the working directory in effect ([§12.5](#125-working-directory-attribute), [§4.11](#411-in-expression)), the same one process calls run in. `@basename` and `@join_path` only work on strings and never touch the file system.
 
 | Signature | Returns | Description |
 |-----------|---------|-------------|
@@ -1006,7 +1007,7 @@ $[<attributes>]`<command>`
 
 - Only `$` followed by a backtick literal is a process call; there is no `$"..."` form.
 - `{<expr>}` interpolation and escape sequences work as in interpolated strings ([§4.2](#42-strings-and-interpolation)).
-- Each `` $`...` `` literal is **one process invocation**. It runs using the interpreter from the `script` setting, in the working directory in effect (the `working_dir` setting ([§7](#7-settings)), or the directory entered by an enclosing `in` ([§8.9](#89-in-statement))), and in the environment described in [§12.4](#124-environment-attributes).
+- Each `` $`...` `` literal is **one process invocation**. It runs using the interpreter from the `script` setting, in the working directory in effect (the task's working directory ([§12.5](#125-working-directory-attribute)), or the directory entered by an enclosing `in` ([§8.9](#89-in-statement))), and in the environment described in [§12.4](#124-environment-attributes).
 - Because every process call is its own invocation, a `cd` inside one does not carry over to later process calls or to built-in functions. To change the working directory, use `in` ([§4.11](#411-in-expression), [§8.9](#89-in-statement)).
 
 ### 6.1 Statements and Expressions
@@ -1120,7 +1121,7 @@ set script = ["zsh", "-c"]
 |---------|-----------|-------------|
 | `script` | `[]string` | Command and arguments used to invoke each process call, e.g. `["sh", "-c"]`. |
 | `dotenv` | `bool \| string` | Whether to read a `.env` file into the environment. `set dotenv` enables the default `.env` file in `working_dir`; `set dotenv = "path/to/file"` enables it using that file instead. Default: `false`. See [§12.4](#124-environment-attributes) for how loaded values interact with `[env]` and the OS environment. |
-| `working_dir` | `string` | The root working directory: the working directory of tasq's spawned processes and of the file-system built-ins ([§5](#5-built-in-functions)); also used to resolve the default `.env` path. Defaults to the directory `tasq` was invoked from. Inside a task, `in` temporarily replaces it for a block ([§8.9](#89-in-statement)). |
+| `working_dir` | `string` | The root working directory. The working directory of a task is this directory followed by the `cwd` of its group and of the task ([§12.5](#125-working-directory-attribute)); spawned processes and the file-system built-ins ([§5](#5-built-in-functions)) use the working directory in effect. Also used to resolve the default `.env` path. Defaults to the directory `tasq` was invoked from. Inside a task, `in` temporarily replaces the working directory for a block ([§8.9](#89-in-statement)). |
 
 > There is no setting to ignore process failures; see [§6.2](#62-failure-handling).
 > Additional settings will be added in future versions.
@@ -1369,7 +1370,7 @@ task other [dep_a()] {
 - Dependencies run before the body, one after another, **in the order listed**. They never run in parallel.
 - A dependency's arguments are ordinary expressions. They may use the task's **own arguments** (e.g. `[compile(target)]`), the group's shared arguments, static bindings and built-ins. The task body has not run yet, so its task-local bindings do not exist and cannot be used.
 - The task's `[env]` attributes ([§12.4](#124-environment-attributes)) **apply to its dependencies**, as if the task had called them itself.
-- Dependencies run in the working directory in which the task itself was called ([§9](#9-task-calls)).
+- Each dependency runs in its own working directory ([§12.5](#125-working-directory-attribute)), like any task.
 - The list sits after the signature, so it is never confused with an attribute list ([§12](#12-attributes)), which precedes the `task` keyword.
 - A task with dependencies may also have a brace-less body ([§8.4](#84-task-body)).
 - Dependencies only **order** tasks. tasq never skips a task because its outputs are up to date.
@@ -1380,7 +1381,7 @@ A dependency that has already run is not run again. This is what makes a shared 
 
 **Call trees.** Every *call* starts a new **call tree**: the task named on the command line ([§11](#11-command-line-interface)) and every task call statement in a body ([§9](#9-task-calls)) is the root of its own tree. A tree consists of the called task, its dependencies, their dependencies, and so on. Deduplication happens **inside one tree** and never across trees.
 
-- **Identity.** A run is identified by the task together with its **resolved arguments**: defaults are filled in first, and for a task in a group the group's shared arguments are included. Arguments are compared by value, and lists element by element, in order. So `build()` and `build(release: false)` are the same run when `release` defaults to `false`, while `deploy("staging")` and `deploy("prod")` are different runs.
+- **Identity.** A run is identified by the task together with its **resolved arguments**: defaults are filled in first, and for a task in a group the group's shared arguments are included. Arguments are compared by value, and lists element by element, in order. So `build()` and `build(release: false)` are the same run when `release` defaults to `false`, while `deploy("staging")` and `deploy("prod")` are different runs. The working directory is not part of the identity, because it depends only on the task itself ([§12.5](#125-working-directory-attribute)).
 - **Skipping.** When a dependency's identity matches a run that already **finished** in the same tree, the dependency is skipped, silently.
 - **The root is never skipped.** The task that starts a tree always runs.
 - **Arguments are evaluated first.** A dependency's identity depends on its arguments, so they are evaluated even if the dependency then turns out to be skipped. Keep dependency arguments free of side effects.
@@ -1393,17 +1394,16 @@ A dependency that has already run is not run again. This is what makes a shared 
 
 **Failure.** The first failure aborts the whole run: the remaining dependencies and the body do not run, and tasq exits with a non-zero status.
 
-**Cycles.** A task cannot depend on itself, directly or through other tasks. The compiler follows both dependency lists and task call statements in bodies, so each of the following is a compile-time error, and `tasq --check` reports the cycle:
+**Cycles.** A task cannot depend on itself, directly or through other tasks. Each of the following is a compile-time error, and `tasq --check` reports the cycle:
 
 ```
-task a [b()] { ... }
-task b [a()] { ... }
+task a [a()] { ... }
 
-task c { d() }
-task d { c() }
+task b [c()] { ... }
+task c [b()] { ... }
 ```
 
-A call that sits in a branch which never executes (for example inside `if (false)`) still counts.
+Only dependency lists are checked. A cycle through task call statements ([§9](#9-task-calls)), such as two tasks that call each other from their bodies, is **not detected** yet ([§14](#14-planned-features)); running one never terminates normally.
 
 **Examples:**
 
@@ -1514,7 +1514,7 @@ in(<path>) <stmt_block>
 - Both bodies are statement blocks, so single statements may omit their braces ([§8.4](#84-task-body)).
 - `break` and `continue` ([§4.6](#46-break-and-continue)) may be used inside and refer to the nearest enclosing `for`; the working directory is restored first.
 - `else` takes a statement block, and `in` is itself a statement, so chains such as `in("a") { ... } else in("b") { ... } else { ... }` need no extra syntax.
-- Task calls inside the block inherit the working directory, which reverts when the call returns ([§9](#9-task-calls)).
+- A task called from inside the block does not inherit the directory; it runs in its own working directory ([§12.5](#125-working-directory-attribute)).
 
 ```
 task frontend {
@@ -1583,7 +1583,7 @@ Names in task calls are the **argument identifiers** as declared in the signatur
 
 When calling a task in a group from outside that group, the group's shared arguments must also be passed by identifier. A task called from inside its own group may omit them ([§10.1](#101-named-groups)).
 
-**Inherited context.** A called task runs in the context of its caller: it inherits the effective environment ([§12.4](#124-environment-attributes)) and the working directory ([§4.11](#411-in-expression)) in effect at the call. Both revert when the call returns.
+**Inherited context.** A called task inherits the effective environment ([§12.4](#124-environment-attributes)) in effect at the call, which reverts when the call returns. The working directory is **not** inherited: a task always runs in its own working directory, determined by the `working_dir` setting and the `[cwd]` attributes of its group and of the task ([§12.5](#125-working-directory-attribute)), no matter who calls it or from inside which `in` block ([§4.11](#411-in-expression)).
 
 **Calls and dependencies.** A task call statement **always runs** the task, even if the same task with the same arguments already ran earlier in the invocation. It starts a new call tree ([§8.8](#88-task-dependencies)): the called task's own dependencies are deduplicated among themselves, but not against tasks that ran before the call. Calling `build()` twice in a body runs `build` twice. To run a shared task once, list it as a dependency instead.
 
@@ -1599,6 +1599,8 @@ task release [build()] {
 ```
 
 Output of `tasq release`: `build`, `build`, `test`, `release`. Writing `task release [build(), test()]` instead puts both in one call tree, and `build` runs once.
+
+**Cycles.** A task must not call itself, directly or through other tasks. Cycles through call statements are not detected ([§8.8](#88-task-dependencies)).
 
 **Compile-time call errors:**
 
@@ -1642,6 +1644,7 @@ group group_name(
 - Groups **cannot be nested**.
 - Group arguments are **promoted to named**: they implicitly receive CLI names following the same rules as non-positional argument types ([§11.4](#114-implicit-cli-names)).
 - Group arguments are shared by every task in the group.
+- A group may carry `[cwd]`, which applies to every task in it ([§12.5](#125-working-directory-attribute)).
 - Tasks in a named group are called from outside as `group_name::task_name(...)`.
 
 **Calling tasks within a named group:**
@@ -1829,6 +1832,7 @@ Several attributes may share one bracket pair, comma-separated, or be spread ove
 | `[windows]` `[linux]` `[macos]` | ✓ | ✓ | | ✓ | | | Yes |
 | `[desc]` | ✓ | ✓ | ✓ | | | | Yes |
 | `[private]` | ✓ | ✓ | | | | | Yes |
+| `[cwd]` | ✓ | ✓ | | | | | Yes |
 | `[long]` `[short]` | | | ✓ | | | | Yes |
 | `[int]` `[min]` `[max]` `[pattern]` `[max_items]` | | | ✓ | | | | Yes |
 | `[env]` | ✓ | | | | | | No (repeatable) |
@@ -1993,6 +1997,53 @@ task show {
 }
 ```
 
+### 12.5 Working Directory Attribute
+
+| Attribute | Meta type | Valid on | Unique | Description |
+|-----------|-----------|----------|:------:|-------------|
+| `[cwd: "path"]` | `string` | `task`, `group` | Yes | Sets the directory a task runs in. On a group it applies to every task of the group, named or anonymous. |
+
+**Working directory of a task.** The directory a task starts in is always:
+
+```
+working_dir (setting)  +  group cwd  +  task cwd
+```
+
+Each part is optional. `working_dir` ([§7](#7-settings)) defaults to the directory tasq was invoked from. A group's `cwd` is relative to it, and a task's `cwd` is relative to the result so far. A task with no `cwd`, in a group with no `cwd`, runs in `working_dir`.
+
+- **Independent of the caller.** The result depends only on the task's own definition. It is the same whether the task is run from the command line, listed as a dependency or called from a body, and a call made from inside an `in` block does not change it ([§4.11](#411-in-expression)). This is why the working directory is not part of a dependency's identity ([§8.8](#88-task-dependencies)).
+- **What it affects.** Every process call and the file-system built-ins ([§5](#5-built-in-functions)) in the task body start in this directory, and so does `@cwd()`. `in` replaces it for a block, and a relative `in` path is resolved against it ([§4.11](#411-in-expression)).
+- **What it does not affect.** Static bindings are evaluated in the root working directory, never in the `cwd` of whatever task triggers them ([§3](#3-bindings)). `@invocation_dir()` is unchanged.
+- The `cwd` value is a meta `string` and must be a basic `"..."` literal ([§2.3](#23-meta-types)).
+- If the resulting directory does not exist when the task runs, the run aborts with an error.
+
+```
+[cwd: "services"]
+group {
+    [cwd: "api"]
+    task test {
+        $`go test ./...`           // runs in <working_dir>/services/api
+    }
+
+    task lint {
+        $`golangci-lint run`       // runs in <working_dir>/services
+    }
+}
+
+task whereami {
+    @print(@cwd())
+}
+
+[cwd: "docs"]
+task docs {
+    @print(@cwd())                 // <working_dir>/docs
+    in("build") {
+        @print(@cwd())             // <working_dir>/docs/build
+        whereami()                 // prints <working_dir>: the called task uses its own directory
+    }
+}
+```
+
 ---
 
 ## 13. Quick Reference
@@ -2047,6 +2098,7 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 |------|---------|-----|
 | `in(path) { ... } else { ... }` | Statement: run a block in `path`; `else` optional | [§8.9](#89-in-statement) |
 | `in(path) expr else expr` | Expression: evaluate in `path`; `else` required | [§4.11](#411-in-expression) |
+| `[cwd: "dir"]` on a task or group | Task working directory: `working_dir` + group `cwd` + task `cwd`; independent of the caller | [§12.5](#125-working-directory-attribute) |
 | `@cwd()` | Working directory in effect | [§5](#5-built-in-functions) |
 | `@invocation_dir()` | Directory tasq was called from | [§5](#5-built-in-functions) |
 
@@ -2057,7 +2109,7 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 | `task t [a(), b(1)] { ... }` | Run `a`, then `b(1)`, before the body; sequential, in order | [§8.8](#88-task-dependencies) |
 | same task and same arguments, once per call tree | Runs once; later occurrences are skipped | [§8.8](#88-task-dependencies) |
 | `a()` as a statement in a body | Always runs; starts a new call tree | [§9](#9-task-calls) |
-| `a` depends on `b` and `b` on `a` | Compile-time error (also through call statements) | [§8.8](#88-task-dependencies) |
+| `a` depends on `b` and `b` on `a` | Compile-time error (cycles through call statements are not detected) | [§8.8](#88-task-dependencies) |
 
 ### Scope Resolution
 
@@ -2090,6 +2142,7 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 | Built-in function list | [§5](#5-built-in-functions) |
 | Dependencies: order, deduplication, cycles | [§8.8](#88-task-dependencies) |
 | Calling a task from a body | [§9](#9-task-calls) |
+| Working directory of a task (`cwd`) | [§12.5](#125-working-directory-attribute) |
 | Which attributes go where | [§12](#12-attributes) |
 | CLI commands and options (`--check`, `--list`, `--usage`, `-f`, ...) | [§11](#11-command-line-interface) |
 
@@ -2107,4 +2160,5 @@ Reserved for future versions; not currently part of the language:
 - **Isolated `@status_code()` for static bindings.** Today a lazily evaluated static binding that runs a process updates `@status_code()` like any other process; this may change so that evaluating a static binding leaves it untouched.
 - **Eager evaluation of selected static bindings.** A way to force chosen static bindings to be evaluated at startup instead of on first reference.
 - **Configurable stdin for process expressions.** They currently read an empty stdin.
-- **Dependency identity.** Today a run is identified by the task and its resolved arguments only ([§8.8](#88-task-dependencies)). Two dependencies on the same task with the same arguments count as one run even if they sit under different `[env]` attributes or different `in` directories. A future version may make the effective `[env]` and the working directory part of the identity.
+- **Dependency identity.** Today a run is identified by the task and its resolved arguments only ([§8.8](#88-task-dependencies)). Two dependencies on the same task with the same arguments count as one run even if they sit under different `[env]` attributes. A future version may make the effective `[env]` part of the identity. (The working directory needs no such handling: it depends only on the task, [§12.5](#125-working-directory-attribute).)
+- **Cycle detection for task call statements.** Dependency cycles are rejected at compile time, but cycles through task call statements are not detected today ([§8.8](#88-task-dependencies), [§9](#9-task-calls)). A future version may report them.
