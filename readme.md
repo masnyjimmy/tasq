@@ -1363,13 +1363,109 @@ task other [dep_a()] {
 }
 ```
 
+**Basics:**
+
 - Each entry is an ordinary task call ([§9](#9-task-calls)): same scope resolution, argument passing and compile-time call errors.
-- Dependencies run before the body, in the order listed.
-- A dependency's arguments are ordinary expressions and may use the task's **own arguments**, e.g. `[compile(target)]`.
+- Dependencies run before the body, one after another, **in the order listed**. They never run in parallel.
+- A dependency's arguments are ordinary expressions. They may use the task's **own arguments** (e.g. `[compile(target)]`), the group's shared arguments, static bindings and built-ins. The task body has not run yet, so its task-local bindings do not exist and cannot be used.
 - The task's `[env]` attributes ([§12.4](#124-environment-attributes)) **apply to its dependencies**, as if the task had called them itself.
 - Dependencies run in the working directory in which the task itself was called ([§9](#9-task-calls)).
 - The list sits after the signature, so it is never confused with an attribute list ([§12](#12-attributes)), which precedes the `task` keyword.
 - A task with dependencies may also have a brace-less body ([§8.4](#84-task-body)).
+- Dependencies only **order** tasks. tasq never skips a task because its outputs are up to date.
+
+#### Deduplication
+
+A dependency that has already run is not run again. This is what makes a shared dependency (a `build` that both `test` and `lint` need) run once.
+
+**Call trees.** Every *call* starts a new **call tree**: the task named on the command line ([§11](#11-command-line-interface)) and every task call statement in a body ([§9](#9-task-calls)) is the root of its own tree. A tree consists of the called task, its dependencies, their dependencies, and so on. Deduplication happens **inside one tree** and never across trees.
+
+- **Identity.** A run is identified by the task together with its **resolved arguments**: defaults are filled in first, and for a task in a group the group's shared arguments are included. Arguments are compared by value, and lists element by element, in order. So `build()` and `build(release: false)` are the same run when `release` defaults to `false`, while `deploy("staging")` and `deploy("prod")` are different runs.
+- **Skipping.** When a dependency's identity matches a run that already **finished** in the same tree, the dependency is skipped, silently.
+- **The root is never skipped.** The task that starts a tree always runs.
+- **Arguments are evaluated first.** A dependency's identity depends on its arguments, so they are evaluated even if the dependency then turns out to be skipped. Keep dependency arguments free of side effects.
+
+**Evaluation order.** A dependency's arguments are evaluated right before that dependency starts, left to right through the list. A later dependency's arguments can therefore observe the effects of the earlier dependencies:
+
+```
+[generate(), show(@read("version.txt") fallback "none")]   // version.txt is read after generate() has run
+```
+
+**Failure.** The first failure aborts the whole run: the remaining dependencies and the body do not run, and tasq exits with a non-zero status.
+
+**Cycles.** A task cannot depend on itself, directly or through other tasks. The compiler follows both dependency lists and task call statements in bodies, so each of the following is a compile-time error, and `tasq --check` reports the cycle:
+
+```
+task a [b()] { ... }
+task b [a()] { ... }
+
+task c { d() }
+task d { c() }
+```
+
+A call that sits in a branch which never executes (for example inside `if (false)`) still counts.
+
+**Examples:**
+
+```
+task build {
+    @print("build")
+}
+
+task test [build()] {
+    @print("test")
+}
+
+task release [build(), test()] {
+    @print("release")
+}
+```
+
+`build` is listed twice in the same tree (directly, and through `test`), so it runs once. Output of `tasq release`:
+
+```
+build
+test
+release
+```
+
+Different arguments are different runs:
+
+```
+task a(v: number) {
+    @print(`A:{v}`)
+}
+
+task b [a(1)] {
+    @print("B")
+}
+
+task c [a(2), b()] {
+    @print("C")
+}
+```
+
+Output of `tasq c`:
+
+```
+A:2
+A:1
+B
+C
+```
+
+A diamond runs the shared task once:
+
+```
+task d { @print("D") }
+task b [d()] { @print("B") }
+task c [d()] { @print("C") }
+task a [b(), c()] { @print("A") }
+```
+
+Output of `tasq a`: `D`, `B`, `C`, `A`, one per line.
+
+A task call statement is not a dependency: it starts a new tree, so it runs even if the same task already ran. To share a run, list both tasks as dependencies of the same task ([§9](#9-task-calls)).
 
 **Passing arguments and environment to a dependency:**
 
@@ -1488,6 +1584,21 @@ Names in task calls are the **argument identifiers** as declared in the signatur
 When calling a task in a group from outside that group, the group's shared arguments must also be passed by identifier. A task called from inside its own group may omit them ([§10.1](#101-named-groups)).
 
 **Inherited context.** A called task runs in the context of its caller: it inherits the effective environment ([§12.4](#124-environment-attributes)) and the working directory ([§4.11](#411-in-expression)) in effect at the call. Both revert when the call returns.
+
+**Calls and dependencies.** A task call statement **always runs** the task, even if the same task with the same arguments already ran earlier in the invocation. It starts a new call tree ([§8.8](#88-task-dependencies)): the called task's own dependencies are deduplicated among themselves, but not against tasks that ran before the call. Calling `build()` twice in a body runs `build` twice. To run a shared task once, list it as a dependency instead.
+
+```
+task build { @print("build") }
+
+task test [build()] { @print("test") }
+
+task release [build()] {
+    test()                // a new call: build() runs again inside it
+    @print("release")
+}
+```
+
+Output of `tasq release`: `build`, `build`, `test`, `release`. Writing `task release [build(), test()]` instead puts both in one call tree, and `build` runs once.
 
 **Compile-time call errors:**
 
@@ -1939,6 +2050,15 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 | `@cwd()` | Working directory in effect | [§5](#5-built-in-functions) |
 | `@invocation_dir()` | Directory tasq was called from | [§5](#5-built-in-functions) |
 
+### Dependencies and Calls
+
+| Form | Meaning | See |
+|------|---------|-----|
+| `task t [a(), b(1)] { ... }` | Run `a`, then `b(1)`, before the body; sequential, in order | [§8.8](#88-task-dependencies) |
+| same task and same arguments, once per call tree | Runs once; later occurrences are skipped | [§8.8](#88-task-dependencies) |
+| `a()` as a statement in a body | Always runs; starts a new call tree | [§9](#9-task-calls) |
+| `a` depends on `b` and `b` on `a` | Compile-time error (also through call statements) | [§8.8](#88-task-dependencies) |
+
 ### Scope Resolution
 
 | Syntax | Resolves to |
@@ -1968,6 +2088,8 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 | Naming values inside an expression (`with`) | [§4.12](#412-with-expression) |
 | Process call defaults (echo, stdout, stdin, failure) | [§6.1](#61-statements-and-expressions) |
 | Built-in function list | [§5](#5-built-in-functions) |
+| Dependencies: order, deduplication, cycles | [§8.8](#88-task-dependencies) |
+| Calling a task from a body | [§9](#9-task-calls) |
 | Which attributes go where | [§12](#12-attributes) |
 | CLI commands and options (`--check`, `--list`, `--usage`, `-f`, ...) | [§11](#11-command-line-interface) |
 
@@ -1985,3 +2107,4 @@ Reserved for future versions; not currently part of the language:
 - **Isolated `@status_code()` for static bindings.** Today a lazily evaluated static binding that runs a process updates `@status_code()` like any other process; this may change so that evaluating a static binding leaves it untouched.
 - **Eager evaluation of selected static bindings.** A way to force chosen static bindings to be evaluated at startup instead of on first reference.
 - **Configurable stdin for process expressions.** They currently read an empty stdin.
+- **Dependency identity.** Today a run is identified by the task and its resolved arguments only ([§8.8](#88-task-dependencies)). Two dependencies on the same task with the same arguments count as one run even if they sit under different `[env]` attributes or different `in` directories. A future version may make the effective `[env]` and the working directory part of the identity.
