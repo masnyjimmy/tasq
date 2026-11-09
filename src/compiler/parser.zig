@@ -707,9 +707,13 @@ pub const Parser = struct {
     fn parseIn(self: *Parser, comptime body_type: BodyType, follow: FollowSet) Error!void {
         try self.open();
 
-        try self.expect(.in_kw, follow.withSet(EXPR_START));
-        try self.parseExpr(follow.withSet(body_type.bodyStart()));
-        try body_type.parse(self, follow);
+        try self.expect(.in_kw, follow.with(&.{.lparen}));
+        try self.expect(.lparen, follow.withSet(EXPR_START));
+        try self.parseExpr(follow.with(&.{.rparen}));
+        try self.expect(.rparen, body_type.bodyStart());
+        try body_type.parse(self, follow.with(&.{.else_kw}));
+        if (try self.eat(.else_kw))
+            try body_type.parse(self, follow);
 
         try self.close(.in);
     }

@@ -250,11 +250,19 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
 
             const path = subject.string;
 
-            const in_dir = try cwd.openDir(
+            const in_dir = cwd.openDir(
                 self.io,
                 path,
                 .{},
-            );
+            ) catch {
+                if (in_stmt.@"else") |@"else"| {
+                    var in_scope = try Scope.create(scope, self.allocator, @"else".scope);
+                    defer in_scope.destroy();
+
+                    try self.runBlock(cwd, in_scope, @"else".statements);
+                }
+                return;
+            };
             defer in_dir.close(self.io);
 
             var in_scope = try Scope.create(scope, self.allocator, in_stmt.body.scope);
@@ -753,11 +761,13 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
 
             const path = subject.string;
 
-            const in_dir = try cwd.openDir(
+            const in_dir = cwd.openDir(
                 self.io,
                 path,
                 .{},
-            );
+            ) catch {
+                return try self.evaluateExpr(cwd, scope, &in.@"else");
+            };
             defer in_dir.close(self.io);
 
             return try self.evaluateExpr(in_dir, scope, &in.body);

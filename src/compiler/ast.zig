@@ -335,17 +335,20 @@ pub const InExpr = struct {
     node: *const cst.Node,
     subject: ?Expr,
     body: ?Expr,
+    @"else": ?Expr,
 
     pub fn from(node: *const cst.Node) InExpr {
         var it = node.iter();
 
         const subject = expectAnyNode(&it, Expr, Expr.KINDS);
         const body = expectAnyNode(&it, Expr, Expr.KINDS);
+        const @"else" = expectAnyNode(&it, Expr, Expr.KINDS);
 
         return .{
             .node = node,
             .subject = subject,
             .body = body,
+            .@"else" = @"else",
         };
     }
 };
@@ -1135,17 +1138,19 @@ pub const InStmt = struct {
     node: *const cst.Node,
     subject: ?Expr,
     body: Statements,
+    @"else": ?Statements,
 
     pub fn from(node: *const cst.Node) InStmt {
         var it = node.iter();
 
         const subject = expectAnyNode(&it, Expr, Expr.KINDS);
         const body = expectNode(&it, Statements, .stmt_block) orelse unreachable;
-
+        const @"else" = expectNode(&it, Statements, .stmt_block);
         return .{
             .node = node,
             .subject = subject,
             .body = body,
+            .@"else" = @"else",
         };
     }
 };

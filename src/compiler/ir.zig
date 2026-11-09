@@ -134,6 +134,7 @@ pub const Statement = union(enum) {
 pub const InStmt = struct {
     subject: Expr,
     body: StatementBlock,
+    @"else": ?StatementBlock,
 };
 
 pub const ProcessStmt = struct {
@@ -248,6 +249,7 @@ pub const Expr = union(enum) {
 pub const InExpr = struct {
     subject: Expr,
     body: Expr,
+    @"else": Expr,
     type: Type,
 };
 
