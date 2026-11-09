@@ -2786,41 +2786,45 @@ pub const Sema = struct {
         for (try task_call.args.collect(alloc)) |in_arg| {
             const arg = in_arg.unwrap() orelse continue;
             const span = arg.node.trimmedSpan();
-            const value_node = arg.value orelse return Error.Incomplete;
 
-            const param: *ir.Argument = if (arg.name) |name_node| blk: {
-                seen_named = true;
-                const name = name_node.string() orelse return Error.Incomplete;
-                break :blk findParam(task, name) orelse {
-                    try self.diagnostics.err(
-                        span,
-                        "task '{s}' has no parameter named '{s}'",
-                        .{ task.name, name },
-                    );
-                    continue;
-                };
-            } else blk: {
-                if (seen_named) {
-                    try self.diagnostics.err(
-                        span,
-                        "positional argument cannot follow a named argument: move it before the named ones",
-                        .{},
-                    );
-                    continue;
-                }
+            const param: *ir.Argument, const expr: ast.Expr = blk: switch (arg.classify()) {
+                .positional => |maybe_expr| {
+                    const expr = maybe_expr orelse continue;
+                    if (seen_named) {
+                        try self.diagnostics.err(
+                            span,
+                            "positional argument cannot follow a named argument: move it before the named ones",
+                            .{},
+                        );
+                        continue;
+                    }
+                    const idx = next_positional;
+                    next_positional += 1;
 
-                const idx = next_positional;
-                next_positional += 1;
-
-                if (idx >= task.args.len) {
-                    try self.diagnostics.err(
-                        span,
-                        "too many positional arguments for task '{s}': got {}, it takes at most {}",
-                        .{ task.name, idx + 1, task.args.len },
-                    );
-                    continue;
-                }
-                break :blk task.args[idx];
+                    if (idx >= task.args.len) {
+                        try self.diagnostics.err(
+                            span,
+                            "too many positional arguments for task '{s}': got {}, it takes at most {}",
+                            .{ task.name, idx + 1, task.args.len },
+                        );
+                        continue;
+                    }
+                    break :blk .{ task.args[idx], expr };
+                },
+                .named => |named| {
+                    seen_named = true;
+                    const name = named.name.string() orelse unreachable;
+                    const expr = named.value orelse continue;
+                    const param = findParam(task, name) orelse {
+                        try self.diagnostics.err(
+                            span,
+                            "task '{s}' has no parameter named '{s}'",
+                            .{ task.name, name },
+                        );
+                        continue;
+                    };
+                    break :blk .{ param, expr };
+                },
             };
 
             if (args.contains(param.name)) {
@@ -2833,8 +2837,8 @@ pub const Sema = struct {
             }
 
             // partial: the parameter type completes an empty list (`update([])`)
-            var value = try self.analyseExprPartial(value_node, scope);
-            _ = try self.rejectNoreturn(value_node, &value, "an argument of task '{s}'", .{task.name});
+            var value = try self.analyseExprPartial(expr, scope);
+            _ = try self.rejectNoreturn(expr, &value, "an argument of task '{s}'", .{task.name});
 
             const expected = param.type.typeOf();
 
@@ -2844,7 +2848,7 @@ pub const Sema = struct {
                 try coerce(self.arena.allocator(), &value, unified);
             } else {
                 try self.diagnostics.err(
-                    value_node.node.trimmedSpan(),
+                    expr.node.trimmedSpan(),
                     "invalid argument for parameter '{s}' of task '{s}': expected '{f}', got '{f}'",
                     .{ param.name, task.name, expected, value.type },
                 );

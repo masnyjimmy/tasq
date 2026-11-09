@@ -540,7 +540,7 @@ pub const Parser = struct {
 
         const named = try self.at(.ident) and try self.peekAt(1) == .colon;
         if (named) {
-            try self.advance();
+            try self.advanceAs(.name);
             try self.advance();
         }
 

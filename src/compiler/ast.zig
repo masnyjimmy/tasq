@@ -1038,18 +1038,50 @@ pub const TaskCall = struct {
     }
 };
 
-pub const TaskCallArgs = KindIterable(.strict, TaskCallArg, .task_call_arg);
+pub const TaskCallArgs = AnyKindIterable(.strict, TaskCallArg, TaskCallArg.KINDS);
 
 pub const TaskCallArg = struct {
+    const KINDS: []const cst.NodeKind = &.{
+        .task_call_arg,
+        .task_call_named_arg,
+    };
+    pub const Kind = union(enum) {
+        positional: ?Expr,
+        named: TaskCallNamedArg,
+    };
+
     node: *const cst.Node,
-    name: ?Name,
-    value: ?Expr,
 
     pub fn from(node: *const cst.Node) TaskCallArg {
+        return .{ .node = node };
+    }
+
+    pub fn classify(self: *const TaskCallArg) Kind {
+        var it = self.node.iter();
+
+        return switch (self.node.kind) {
+            .task_call_arg => .{ .positional = expectAnyNode(&it, Expr, Expr.KINDS) },
+            .task_call_named_arg => .{ .named = .from(self.node) },
+            else => unreachable,
+        };
+    }
+};
+pub const TaskCallNamedArg = struct {
+    node: *const cst.Node,
+    name: Name,
+    value: ?Expr,
+
+    pub fn from(node: *const cst.Node) TaskCallNamedArg {
         var it = node.iter();
-        const name = eatNode(&it, Name, .name);
+
+        const name = expectNode(&it, Name, .name) orelse unreachable;
         const value = expectAnyNode(&it, Expr, Expr.KINDS);
-        return .{ .node = node, .name = name, .value = value };
+
+        return .{
+            .node = node,
+            .name = name,
+            .value = value,
+        };
     }
 };
 
