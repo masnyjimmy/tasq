@@ -11,15 +11,15 @@ const ir = compiler.ir;
 const Value = compiler.Value;
 const Scope = @import("Scope.zig");
 
-const Interpreter = @import("interpreter.zig");
+const Runtime = @import("Runtime.zig");
 const globs = @import("glob.zig");
 
 const functions_count = functions.definitions.items.len;
 
-pub const Error = Interpreter.Error;
+pub const Error = Runtime.Error;
 
 pub fn callFunction(
-    interpreter: *Interpreter,
+    runtime: *Runtime,
     cwd: std.Io.Dir,
     scope: *Scope,
     id: functions.definitions.Id,
@@ -31,7 +31,7 @@ pub fn callFunction(
 
             const handler: *const handlers.Signature = &@field(handlers, name);
 
-            return handler(interpreter, cwd, scope, args);
+            return handler(runtime, cwd, scope, args);
         },
     }
 }
@@ -60,7 +60,7 @@ pub fn makeResult(scope: *Scope, result_type: *const Type, value: ?Value) Error!
 }
 
 fn callLambda(
-    self: *Interpreter,
+    self: *Runtime,
     cwd: std.Io.Dir,
     scope: *Scope,
     lambda: *const ir.LambdaInstance,
@@ -96,9 +96,9 @@ fn callLambda(
 }
 
 const handlers = struct {
-    const Signature = fn (*Interpreter, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value;
+    const Signature = fn (*Runtime, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value;
 
-    fn env(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn env(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const key = args[0].string;
 
         return if (scope.environ.get(key)) |value| makeResult(
@@ -108,7 +108,7 @@ const handlers = struct {
         ) else makeResult(scope, &.string, null);
     }
 
-    fn exists(self: *Interpreter, dir: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn exists(self: *Runtime, dir: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
         const path = args[0].string;
 
         const access_result = dir.access(self.io, path, .{ .read = true });
@@ -121,7 +121,7 @@ const handlers = struct {
         return .{ .bool = result };
     }
 
-    fn read(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn read(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const RESULT_TYPE = &@unionInit(Type, "string", {});
 
         const path = args[0].string;
@@ -136,7 +136,7 @@ const handlers = struct {
         return makeResult(scope, RESULT_TYPE, .{ .string = content });
     }
 
-    fn glob(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn glob(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const pattern = args[0].string;
 
         var it = globs.iterate(
@@ -171,12 +171,12 @@ const handlers = struct {
         };
     }
 
-    fn basename(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn basename(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
         const path = args[0].string;
         return .{ .string = std.fs.path.basename(path) };
     }
 
-    fn join_path(self: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn join_path(self: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const paths = args[0].list;
 
         const temp_buffer: [][]const u8 = try self.allocator.alloc([]const u8, paths.items.len);
@@ -191,7 +191,7 @@ const handlers = struct {
         };
     }
 
-    fn is_file(self: *Interpreter, dir: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn is_file(self: *Runtime, dir: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
         const path = args[0].string;
 
         const stat = dir.statFile(
@@ -203,7 +203,7 @@ const handlers = struct {
         return .{ .bool = stat.kind == .file };
     }
 
-    fn is_dir(self: *Interpreter, dir: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn is_dir(self: *Runtime, dir: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
         const path = args[0].string;
 
         const stat = dir.statFile(
@@ -215,13 +215,13 @@ const handlers = struct {
         return .{ .bool = stat.kind == .directory };
     }
 
-    fn os(_: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+    fn os(_: *Runtime, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
         return .{
             .string = @tagName(platform.tag),
         };
     }
 
-    fn cwd(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, _: []const Value) Error!Value {
+    fn cwd(self: *Runtime, dir: std.Io.Dir, scope: *Scope, _: []const Value) Error!Value {
         var buffer: [1024]u8 = undefined;
 
         const size = try dir.realPath(self.io, &buffer);
@@ -231,7 +231,7 @@ const handlers = struct {
         };
     }
 
-    fn arch(_: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+    fn arch(_: *Runtime, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
         const builtin = @import("builtin");
 
         const arch_family = builtin.target.cpu.arch.family();
@@ -241,17 +241,17 @@ const handlers = struct {
         };
     }
 
-    fn invokation_dir(self: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+    fn invokation_dir(self: *Runtime, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
         return .{
             .string = self.invokation_dir,
         };
     }
 
-    fn status_code(self: *Interpreter, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+    fn status_code(self: *Runtime, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
         return .{ .number = @floatFromInt(self.status_code) };
     }
 
-    fn which(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn which(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const name = args[0].string;
 
         const result = try program.which(
@@ -280,7 +280,7 @@ const handlers = struct {
         );
     }
 
-    fn @"error"(self: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn @"error"(self: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
         const message = args[0].string;
 
         try self.printer.printStyled(
@@ -293,7 +293,7 @@ const handlers = struct {
         return Error.Abort;
     }
 
-    fn print(self: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn print(self: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
         const message = args[0].string;
 
         try self.printer.print(
@@ -305,7 +305,7 @@ const handlers = struct {
         return .void;
     }
 
-    fn any(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn any(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const list = args[0].list;
 
         const test_fn = args[1].lambda.instance;
@@ -328,7 +328,7 @@ const handlers = struct {
         return .{ .bool = false };
     }
 
-    fn all(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn all(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const list = args[0].list;
 
         const test_fn = args[1].lambda.instance;
@@ -349,7 +349,7 @@ const handlers = struct {
         return .{ .bool = true };
     }
 
-    fn reduce(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn reduce(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const list = args[0].list;
         var value = args[1];
         const func = args[2].lambda.instance;
@@ -367,12 +367,12 @@ const handlers = struct {
         return value;
     }
 
-    fn @"collections/at"(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn @"collections/at"(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const list = args[0].list;
 
         const pos: i64 = blk: {
             const number = args[1].number;
-            break :blk Interpreter.integerize(number);
+            break :blk Runtime.integerize(number);
         };
 
         if (pos < 0 or list.items.len <= pos) {
@@ -382,7 +382,7 @@ const handlers = struct {
         return makeResult(scope, list.items_type, list.items[@intCast(pos)]);
     }
 
-    fn unique(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn unique(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const list = args[0].list;
 
         var set: std.HashMapUnmanaged(Value, bool, Value.MapContext, 80) = .empty;
@@ -406,7 +406,7 @@ const handlers = struct {
         };
     }
 
-    fn sort(self: *Interpreter, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn sort(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const list = args[0].list;
         const cmp_fn = args[1].lambda.instance;
 
@@ -417,7 +417,7 @@ const handlers = struct {
         }
 
         const Context = struct {
-            i: *Interpreter,
+            i: *Runtime,
             c: std.Io.Dir,
             s: *Scope,
             f: *const ir.LambdaInstance,
@@ -465,7 +465,7 @@ const handlers = struct {
         };
     }
 
-    fn @"strings/len"(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn @"strings/len"(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
         const string = args[0].string;
 
         return .{
@@ -473,7 +473,7 @@ const handlers = struct {
         };
     }
 
-    fn @"collections/len"(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn @"collections/len"(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
         const list = args[0].list;
 
         return .{
@@ -482,7 +482,7 @@ const handlers = struct {
     }
 
     // when sep is "" split on chars
-    fn split(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn split(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const str = args[0].string;
         const sep = args[1].string;
 
@@ -526,7 +526,7 @@ const handlers = struct {
         };
     }
 
-    fn join(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn join(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const strings = args[0].list;
         const sep = args[1].string;
 
@@ -563,7 +563,7 @@ const handlers = struct {
         };
     }
 
-    fn lower(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn lower(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const str = args[0].string;
 
         const out = try std.ascii.allocLowerString(scope.arena.allocator(), str);
@@ -573,7 +573,7 @@ const handlers = struct {
         };
     }
 
-    fn upper(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn upper(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const str = args[0].string;
 
         const out = try std.ascii.allocUpperString(scope.arena.allocator(), str);
@@ -583,7 +583,7 @@ const handlers = struct {
         };
     }
 
-    fn contains(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn contains(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
         const str = args[0].string;
         const sub = args[1].string;
 
@@ -594,7 +594,7 @@ const handlers = struct {
         };
     }
 
-    fn starts_with(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn starts_with(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
         const str = args[0].string;
         const sub = args[1].string;
 
@@ -605,7 +605,7 @@ const handlers = struct {
         };
     }
 
-    fn ends_with(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn ends_with(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
         const str = args[0].string;
         const sub = args[1].string;
 
@@ -616,7 +616,7 @@ const handlers = struct {
         };
     }
 
-    fn @"strings/replace"(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn @"strings/replace"(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const str = args[0].string;
         const old = args[1].string;
         const new = args[2].string;
@@ -634,12 +634,12 @@ const handlers = struct {
         };
     }
 
-    fn @"strings/at"(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn @"strings/at"(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const str = args[0].string;
 
         const pos: i64 = blk: {
             const number = args[1].number;
-            break :blk Interpreter.integerize(number);
+            break :blk Runtime.integerize(number);
         };
 
         if (pos < 0 or str.len <= pos) {
@@ -651,7 +651,7 @@ const handlers = struct {
         return makeResult(scope, &.string, .{ .string = str[idx .. idx + 1] });
     }
 
-    fn lines(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn lines(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const str = args[0].string;
 
         var items: std.ArrayList(Value) = .empty;
@@ -678,7 +678,7 @@ const handlers = struct {
         };
     }
 
-    fn trim(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn trim(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
         const str = args[0].string;
         const set = args[1].string;
 
@@ -689,7 +689,7 @@ const handlers = struct {
         };
     }
 
-    fn trim_end(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn trim_end(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
         const str = args[0].string;
         const set = args[1].string;
 
@@ -700,7 +700,7 @@ const handlers = struct {
         };
     }
 
-    fn trim_start(_: *Interpreter, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn trim_start(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
         const str = args[0].string;
         const set = args[1].string;
 
@@ -711,7 +711,7 @@ const handlers = struct {
         };
     }
 
-    fn @"collections/replace"(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn @"collections/replace"(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const list = args[0].list;
         const old = args[1];
         const new = args[2];
@@ -732,7 +732,7 @@ const handlers = struct {
         };
     }
 
-    fn parse_number(_: *Interpreter, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn parse_number(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
         const str = args[0].string;
 
         const number: ?f64 = std.fmt.parseFloat(f64, str) catch null;
