@@ -1006,10 +1006,23 @@ pub const Sema = struct {
     }
 
     fn analyseInStmt(self: *Sema, in_stmt: ast.InStmt, scope: *Scope) Error!ir.InStmt {
-        const subject = try self.analyseExpr(
+        const subject_node = in_stmt.subject orelse return Error.Incomplete;
+
+        var subject = try self.analyseExpr(
             in_stmt.subject orelse return Error.Incomplete,
             scope,
         );
+        _ = try self.rejectNoreturn(subject_node, &subject, "in subject", .{});
+
+        if (subject.type != .string and subject.type != .unknown) {
+            try self.diagnostics.err(
+                subject_node.node.trimmedSpan(),
+                "invalid in subject type, expected '{f}', got '{f}'",
+                .{
+                    @as(Type, .string), subject.type,
+                },
+            );
+        }
 
         const body = try self.analyseBlock(
             in_stmt.node,
@@ -1017,17 +1030,15 @@ pub const Sema = struct {
             scope,
         );
 
-        if (subject.type != .string and subject.type != .unknown) {
-            try self.diagnostics.err(
-                in_stmt.subject.?.node.span,
-                "invalid in subject, expected '{f}', got '{f}'",
-                .{ @as(Type, .string), subject.type },
-            );
-        }
+        const @"else" = if (in_stmt.@"else") |@"else"|
+            try self.analyseBlock(@"else".node, @"else", scope)
+        else
+            null;
 
         return .{
             .subject = subject.expr,
             .body = body,
+            .@"else" = @"else",
         };
     }
 
@@ -2189,16 +2200,13 @@ pub const Sema = struct {
     }
 
     fn analyseInExpr(self: *Sema, in_expr: ast.InExpr, scope: *Scope) Error!ExprResult(ir.InExpr) {
+        const subject_node = in_expr.subject orelse return Error.Incomplete;
         var subject = try self.analyseExpr(
-            in_expr.subject orelse return Error.Incomplete,
+            subject_node,
             scope,
         );
-        var body = try self.analyseExprPartial(
-            in_expr.body orelse return Error.Incomplete,
-            scope,
-        );
-        _ = try self.rejectNoreturn(in_expr.subject.?, &subject, "in path expression", .{});
-        _ = try self.rejectNoreturn(in_expr.body.?, &body, "in body", .{});
+
+        _ = try self.rejectNoreturn(subject_node, &subject, "in subject (path)", .{});
 
         if (subject.type != .string and subject.type != .unknown) {
             try self.diagnostics.err(
@@ -2208,10 +2216,39 @@ pub const Sema = struct {
             );
         }
 
+        var body = try self.analyseExprPartial(
+            in_expr.body orelse return Error.Incomplete,
+            scope,
+        );
+
+        const else_node = in_expr.@"else" orelse {
+            try self.diagnostics.err(
+                in_expr.node.trimmedSpan(),
+                "missing else branch",
+                .{},
+            );
+            return Error.Incomplete;
+        };
+
+        var @"else" = try self.analyseExprPartial(else_node, scope);
+
+        const result_type = try Type.unify(self.arena.allocator(), body.type, @"else".type) orelse {
+            try self.diagnostics.err(
+                else_node.node.trimmedSpan(),
+                "both 'in' branches must have the same type: expected '{f}', got '{f}'",
+                .{ body.type, @"else".type },
+            );
+            return Error.Incomplete;
+        };
+
+        try coerce(self.arena.allocator(), &body, result_type);
+        try coerce(self.arena.allocator(), &@"else", result_type);
+
         return .{
             .expr = .{
                 .subject = subject.expr,
                 .body = body.expr,
+                .@"else" = @"else".expr,
                 .type = body.type,
             },
             .is_static = subject.is_static and body.is_static,
@@ -2323,7 +2360,14 @@ pub const Sema = struct {
             scope,
         );
 
-        const else_node = if_expr.@"else" orelse return Error.Incomplete;
+        const else_node = if_expr.@"else" orelse {
+            try self.diagnostics.err(
+                if_expr.node.trimmedSpan(),
+                "missing else branch",
+                .{},
+            );
+            return Error.Incomplete;
+        };
         var @"else" = try self.analyseExprPartial(else_node, scope);
 
         const result_type = try Type.unify(self.arena.allocator(), then.type, @"else".type) orelse {
