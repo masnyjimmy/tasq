@@ -864,7 +864,7 @@ pub const Sema = struct {
     ) Error!ir.Target(T) {
         switch (target.classify()) {
             .name => |name| {
-                const ident_text = name.string().?;
+                const ident_text = name.string() orelse return Error.Incomplete;
 
                 const ident_name = if (std.mem.eql(u8, ident_text, "_"))
                     null
