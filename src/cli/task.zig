@@ -1,7 +1,6 @@
 const std = @import("std");
 
-const inter = @import("interpreter");
-const Scope = inter.symbol.Scope;
+const interpreter = @import("interpreter");
 
 const compiler = @import("compiler");
 const ir = compiler.ir;
@@ -845,14 +844,14 @@ pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []cons
         return TaskError.TaskNotFound;
     };
 
-    var interpreter: inter.Interpreter = try .init(
+    var runtime: interpreter.Runtime = try .init(
         ctx.allocator,
         ctx.invokation_dir,
         ctx.io,
         ctx.printer,
         &file.options,
     );
-    defer interpreter.deinit();
+    defer runtime.deinit();
 
     var parser: TaskArgumentParser = try .init(
         ctx.allocator,
@@ -866,7 +865,7 @@ pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []cons
 
     const values = try parser.parseArguments(&arena, args);
 
-    try interpreter.run(
+    try runtime.run(
         task,
         ctx.environ,
         values,

@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const lib = @import("lib");
+
 const type_mod = @import("type.zig");
 const Type = type_mod.Type;
 const FuncType = type_mod.FuncType;
@@ -9,7 +11,7 @@ const ir = @import("ir.zig");
 pub const ValueMapContext = struct {
     pub fn hash(_: @This(), value: Value) u64 {
         var hasher = std.hash.Wyhash.init(0);
-        hashValue(&hasher, value);
+        updateHasher(.from(&hasher), value);
         return hasher.final();
     }
 
@@ -17,7 +19,7 @@ pub const ValueMapContext = struct {
         return Value.eql(a, b);
     }
 
-    fn hashValue(hasher: *std.hash.Wyhash, value: Value) void {
+    pub fn updateHasher(hasher: lib.hash.Hasher, value: Value) void {
         const tag = std.meta.activeTag(value);
         hasher.update(@tagName(tag));
         switch (value) {
@@ -27,8 +29,8 @@ pub const ValueMapContext = struct {
                 std.debug.assert(n == 0 or std.math.isNormal(n));
                 hasher.update(std.mem.asBytes(&n));
             },
-            .list => |l| for (l.items) |item| hashValue(hasher, item),
-            .tuple => |t| for (t.elements) |elem| hashValue(hasher, elem),
+            .list => |l| for (l.items) |item| updateHasher(hasher, item),
+            .tuple => |t| for (t.elements) |elem| updateHasher(hasher, elem),
             else => unreachable,
         }
     }

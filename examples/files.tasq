@@ -1,3 +1,5 @@
+// lambda as pipelines to do advanced operations
+
 parse_repo := |line|
     with(@split(line, ";")) |parts| (
         @at(parts, 0) fallback @error("missing repo name"),

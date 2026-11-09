@@ -1,22 +1,22 @@
 const std = @import("std");
 
-const lib = @import("lib");
-
-const compiler = @import("compiler");
-const ir = compiler.ir;
-const Value = compiler.Value;
-
-const binary_mod = @import("binary.zig");
-
-const Scope = @import("Scope.zig");
-
 const conzole = @import("conzole");
 const Style = conzole.terminal.Style;
 const Printer = conzole.terminal.Printer;
 
 const builtin = @import("builtin.zig");
 
-pub const Interpreter = @This();
+const compiler = @import("compiler");
+const ir = compiler.ir;
+const Value = compiler.Value;
+
+const lib = @import("lib");
+
+const binary_mod = @import("binary.zig");
+const TaskRunner = @import("TaskRunner.zig");
+const Scope = @import("Scope.zig");
+
+pub const Runtime = @This();
 
 pub const Error = error{
     Abort,
@@ -43,7 +43,7 @@ pub fn init(
     io: std.Io,
     printer: *Printer,
     options: *const ir.Options,
-) !Interpreter {
+) !Runtime {
 
     // TODO: read dotenv,
 
@@ -63,12 +63,12 @@ pub fn init(
     };
 }
 
-pub fn deinit(self: *Interpreter) void {
+pub fn deinit(self: *Runtime) void {
     self.cwd.close(self.io);
 }
 
 pub fn run(
-    self: *Interpreter,
+    self: *Runtime,
     initial_task: *const ir.Task,
     environ: *const std.process.Environ.Map,
     values: std.array_hash_map.String(Value),
@@ -101,126 +101,26 @@ pub fn run(
     );
 }
 
-pub fn runTask(self: *Interpreter, scope: *Scope, task: *const ir.Task, values: std.array_hash_map.String(Value), same_group: bool) !void {
-    const group_scope: ?*Scope = blk: {
-        if (task.group) |group| {
+pub fn runTask(self: *Runtime, scope: *Scope, task: *const ir.Task, values: std.array_hash_map.String(Value), same_group: bool) !void {
+    var runner: TaskRunner = .init(self);
+    defer runner.deinit();
 
-            // if another group call => find by static group scope parent
-            // if same group => find by static group scope,
-            const actual_parent = p: {
-                if (same_group) {
-                    break :p scope.findByStatic(group.scope).?;
-                }
-
-                break :p if (group.scope.parent) |p| scope.findByStatic(p).? else scope.root();
-            };
-            const group_scope = try Scope.create(actual_parent, self.allocator, group.scope);
-            errdefer group_scope.destroy();
-
-            for (group.args) |arg| {
-                // if same group and group arguments are optional
-                const value = values.get(arg.name) orelse {
-                    if (same_group == false) {
-                        std.debug.panic(
-                            \\internal error: missing argument '{s}';
-                            \\this should have been caught during IR validation.
-                        ,
-                            .{arg.name},
-                        );
-                    }
-                    continue;
-                };
-                try group_scope.define(arg, .{
-                    .name = arg.name,
-                    .value = try value.clone(group_scope.arena.allocator()),
-                }, same_group);
-            }
-
-            break :blk group_scope;
-        }
-
-        break :blk null;
-    };
-    defer {
-        if (group_scope) |gs|
-            gs.destroy();
-    }
-
-    const task_scope = try Scope.create(
-        group_scope orelse scope,
-        self.allocator,
-        task.scope,
+    try runner.run(
+        scope,
+        task,
+        values,
+        same_group,
+        false,
     );
-    defer task_scope.destroy();
-
-    for (task.args) |arg| {
-        const value = values.get(arg.name) orelse {
-            std.debug.panic(
-                \\internal error: missing argument '{s}';
-                \\this should have been caught during IR validation.
-            ,
-                .{arg.name},
-            );
-        };
-        try task_scope.define(arg, .{
-            .name = arg.name,
-            .value = try value.clone(task_scope.arena.allocator()),
-        }, false);
-    }
-
-    for (task.envs) |env| {
-        try task_scope.environ.put(
-            env.key,
-            env.value,
-        );
-    }
-
-    const target_working_dir, const new = blk: {
-        const group_working_dir = if (task.group) |group|
-            if (group.cwd) |cwd|
-                cwd
-            else
-                null
-        else
-            null;
-
-        if (group_working_dir == null and task.cwd == null)
-            break :blk .{ self.cwd, false };
-
-        const path = try std.fs.path.join(
-            self.allocator,
-            &.{
-                group_working_dir orelse "",
-                task.cwd orelse "",
-            },
-        );
-        defer self.allocator.free(path);
-        break :blk .{
-            try self.cwd.openDir(self.io, path, .{}),
-            true,
-        };
-    };
-    defer if (new) target_working_dir.close(self.io);
-
-    for (task.dependecies) |*dep| {
-        try self.handleTaskCall(target_working_dir, task_scope, dep);
-    }
-
-    const task_body_scope = try Scope.create(task_scope, self.allocator, task.body.scope);
-    defer task_body_scope.destroy();
-
-    // cd into cwd
-
-    try self.runBlock(target_working_dir, task_body_scope, task.body.statements);
 }
 
-pub fn runBlock(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, statements: []const ir.Statement) Error!void {
+pub fn runBlock(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, statements: []const ir.Statement) Error!void {
     for (statements) |*stmt| {
         try self.main(cwd, scope, stmt);
     }
 }
 
-fn main(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statement) Error!void {
+fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statement) Error!void {
     switch (stmt.*) {
         .decl => |decl| {
             _ = try self.handleDecl(cwd, scope, decl, null);
@@ -372,7 +272,7 @@ fn main(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Stat
     }
 }
 
-fn handleTaskCall(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, task_call: *const ir.TaskCall) Error!void {
+fn handleTaskCall(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, task_call: *const ir.TaskCall) Error!void {
     const task = task_call.task;
 
     var values: std.array_hash_map.String(Value) = .empty;
@@ -390,7 +290,7 @@ fn handleTaskCall(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, task_call:
 }
 
 fn handleDecl(
-    self: *Interpreter,
+    self: *Runtime,
     cwd: std.Io.Dir,
     scope: *Scope,
     decl: *const ir.Decl,
@@ -411,7 +311,7 @@ fn handleDecl(
 }
 
 pub fn destructure(
-    self: *Interpreter,
+    self: *Runtime,
     comptime T: type,
     cwd: std.Io.Dir,
     scope: *Scope,
@@ -454,7 +354,7 @@ const ProcessOptions = struct {
     out: ?*std.Io.Writer = null,
 };
 
-fn handleProcess(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, options: ProcessOptions) Error!u8 {
+fn handleProcess(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, options: ProcessOptions) Error!u8 {
     const shell_len = self.options.shell.len;
 
     var argv = try self.allocator.alloc([]const u8, shell_len + 1);
@@ -513,7 +413,7 @@ fn handleProcess(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, options: Pr
     };
 }
 
-pub fn evaluateExpr(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, expr: *const ir.Expr) Error!Value {
+pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const ir.Expr) Error!Value {
     return switch (expr.*) {
         .bool_lit => |lit| .{ .bool = lit },
         .number_lit => |lit| .{ .number = lit },
@@ -906,7 +806,7 @@ pub fn integerize(value: f64) i64 {
     return @ceil(value);
 }
 
-fn evaluateRange(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, range: *const ir.Range) Error!Range {
+fn evaluateRange(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, range: *const ir.Range) Error!Range {
     const left: i64 = blk: {
         const value = try self.evaluateExpr(
             cwd,
@@ -935,7 +835,7 @@ fn evaluateRange(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, range: *con
     };
 }
 
-fn resolveString(self: *Interpreter, cwd: std.Io.Dir, scope: *Scope, string: ir.String) Error![]const u8 {
+fn resolveString(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, string: ir.String) Error![]const u8 {
     var aw = std.Io.Writer.Allocating.init(scope.arena.allocator());
     const writer = &aw.writer;
     errdefer aw.deinit();
