@@ -24,6 +24,13 @@ export default defineConfig({
 						{ label: 'Quick start', slug: 'getting-started/quick-start' },
 					],
 				},
+				// {
+				// 	label: 'Learn',
+				// 	items: [
+				// 		{ label: 'Tasks and arguments', slug: 'learn/tasks-and-arguments' },
+				// 		{label: 'Values', slug: 'learn/values'}
+				// 	],
+				// },
 			],
 			expressiveCode: {
 				shiki: {
