@@ -4,7 +4,6 @@ const lib = @import("lib");
 
 const type_mod = @import("type.zig");
 const Type = type_mod.Type;
-const FuncType = type_mod.FuncType;
 const ast = @import("ast.zig");
 const ir = @import("ir.zig");
 

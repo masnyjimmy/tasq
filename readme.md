@@ -10,6 +10,8 @@
 
 1. [File Layout](#1-file-layout)
    - [1.1 Reserved Words](#11-reserved-words)
+   - [1.2 Comments and Layout](#12-comments-and-layout)
+   - [1.3 Namespaces](#13-namespaces)
 2. [Type System](#2-type-system)
    - [2.1 Runtime Types](#21-runtime-types)
    - [2.2 Special Types](#22-special-types)
@@ -61,6 +63,8 @@
     - [12.2 Documentation Attributes](#122-documentation-attributes)
     - [12.3 Argument Attributes](#123-argument-attributes)
     - [12.4 Environment Attributes](#124-environment-attributes)
+    - [12.5 Working Directory Attribute](#125-working-directory-attribute)
+    - [12.6 Environment and Working Directory at a Glance](#126-environment-and-working-directory-at-a-glance)
 13. [Quick Reference](#13-quick-reference)
 14. [Planned Features](#14-planned-features)
 
@@ -93,6 +97,26 @@ true  false
 
 The name `_` is also special: it is never defined and only discards a value ([§3](#3-bindings), [§8.4](#84-task-body)).
 
+### 1.2 Comments and Layout
+
+- **Comments.** `//` starts a comment that runs to the end of the line. It is the only comment form; there are no block comments.
+- **Trailing commas.** Wherever elements are separated by commas (list and tuple literals, task and group parameter lists, call arguments, `switch` branches, attribute lists, and so on), a trailing comma is allowed.
+- **Multi-line expressions.** An expression may span several lines. The one exception is the opening `[` of a slice, which must be on the same line as the end of the sliced value ([§4.9](#49-ranges-and-slices)).
+
+### 1.3 Namespaces
+
+tasq has three independent namespaces:
+
+| Namespace | Contains |
+|-----------|----------|
+| **Groups** | Group names |
+| **Tasks** | Task names |
+| **Values** | Everything that holds a value: bindings, task and group arguments, lambda parameters, `for` and `with` captures, and names introduced by destructuring |
+
+Names in different namespaces never conflict: a binding may share its name with a task, and a task may share its name with a group. Within a namespace, names must be unique within their scope, and the no-shadowing rule of [§3](#3-bindings) applies to the values namespace. Reserved words ([§1.1](#11-reserved-words)) cannot be used in any of them.
+
+The namespaces are also why `name(...)` is unambiguous: as a statement it is looked up in the tasks namespace ([§9](#9-task-calls)), and as an expression in the values namespace, where it can only be a lambda ([§4.8](#48-lambdas)).
+
 ---
 
 ## 2. Type System
@@ -101,7 +125,7 @@ tasq uses three distinct type systems, each serving a different context. They ar
 
 | Context | Type system |
 |---------|-------------|
-| Bindings and expressions (including values inside a task body, and lambda parameters) | Runtime types ([§2.1](#21-runtime-types), [§2.2](#22-special-types)) |
+| Bindings and expressions (including values inside a task body, and lambda parameters and results) | Runtime types ([§2.1](#21-runtime-types), [§2.2](#22-special-types)) |
 | Attribute values and setting values | Meta types ([§2.3](#23-meta-types)) |
 | Task and group parameter declarations | Argument types ([§2.4](#24-argument-types)) |
 
@@ -124,13 +148,19 @@ The types `void`, `noreturn` and `!T` also exist at runtime but have no literal 
 - There is **no implicit type casting**. Use built-in functions for any conversion.
 - Binding types are **inferred** from the assigned expression. Bindings never carry a type annotation.
 - `[]T` may be **nested** (e.g. `[][]number`). All elements must share the same type.
-- A list literal must **not be empty** where its element type cannot be determined from context.
+- An empty list literal `[]` is allowed wherever its element type can be inferred from the surrounding context, for example from the other branches of an `if` or `switch`; where nothing determines the type (such as `x := []`) it is a compile-time error.
+
+  ```
+  task test(v: flag) {
+      list := if (v)
+          [1, 2, 3, 4, 5]
+      else
+          []              // an empty []number: the type is known from the other branch
+  }
+  ```
 - **Whole-number contexts.** Wherever a `number` is used in a place where a fractional value has no meaning (range bounds and slice bounds ([§4.9](#49-ranges-and-slices)), the position argument of `@at` ([§5](#5-built-in-functions)), and any similar place), it is first **rounded up to the next whole number** (ceiling): `1.2` becomes `2`, `2.0` stays `2`, `-1.5` becomes `-1`. This is not a type conversion and never raises an error; the value is still a `number`.
 - A **tuple** has at least two elements, and each element has its own type. Its type is the ordered list of its element types, so `(string, number)` and `(number, string)` are different types. An element may be a `bool`, `char`, `number`, `string`, list, tuple or `lambda`; it cannot be `void`, `noreturn` or `!T`. Tuples may be nested and may be list elements (all elements of such a list must then have the identical tuple type). A tuple is created with a literal and taken apart by destructuring ([§4.10](#410-tuples-and-destructuring)).
-- A `lambda` is a **template**: `|<params>| <expr>` has no fixed signature, and its parameter and result types are inferred from each use ([§4.8](#48-lambdas)). A lambda can be bound, aliased, passed to other lambdas, stored in a tuple and passed to built-ins that take a lambda ([§5](#5-built-in-functions)).
-  - Every lambda literal has its own type, so two different lambdas cannot be mixed where a single type is required (for example as the elements of one list).
-  - A lambda cannot return a lambda, or a tuple that contains a lambda, and cannot be a task or group argument ([§2.4](#24-argument-types)).
-  - Lambdas can be compared and interpolated like other values ([§4.1](#41-operators), [§4.2](#42-strings-and-interpolation)), although this is rarely useful.
+- A `lambda` is a **template**: its parameter and result types are inferred from each use. Lambdas can be bound, aliased, passed around, stored in a tuple and passed to the built-ins that take a lambda. The full rules and limits are in [§4.8](#48-lambdas).
 
 ### 2.2 Special Types
 
@@ -212,7 +242,7 @@ label, (x, y) := <nested tuple expression>
 
 - A binding cannot be reassigned. Its type is inferred from the right-hand side.
 - Bindings may be declared at file root, in a group body, or in a task body.
-- Within one scope, binding names must be unique.
+- **Unique names and no shadowing.** Within one scope, binding names must be unique, and a name cannot be declared if the same name is already visible at that point in the values namespace ([§1.3](#13-namespaces)). This *no-shadowing rule* applies equally to lambda parameters ([§4.8](#48-lambdas)), `for` and `with` captures ([§4.5](#45-for-expression), [§4.12](#412-with-expression)) and the names introduced by destructuring patterns ([§4.10](#410-tuples-and-destructuring)). Violations are compile-time errors.
 - Inside a task body, task arguments behave as immutable bindings of their runtime type.
 - A binding named `_` is never defined; it only discards its value ([§8.4](#84-task-body)). Inside a destructuring pattern, `_` discards just that element.
 - A binding is a declaration, not an expression. To name a value **inside** an expression (for example in the body of a lambda, which cannot contain declarations), use `with` ([§4.12](#412-with-expression)).
@@ -223,13 +253,15 @@ label, (x, y) := <nested tuple expression>
 |---|---|---|
 | When | **Lazily**, on first reference | **Eagerly**, in statement order |
 | How often | At most once per run; the result is cached | Every time the task runs |
-| Environment | The environment of the scope they are **declared in**, never that of whichever task triggers them ([§12.4](#124-environment-attributes)) | The task's effective environment |
+| Environment | The environment of the scope they are **declared in** (the `.env` file, if enabled, and the OS environment), never that of whichever task triggers them | The task's effective environment |
 | Working directory | The root working directory (the `working_dir` setting, [§7](#7-settings)), never that of whichever task or `in` block triggers them | The working directory in effect at that point of the task, including any enclosing `in` ([§8.9](#89-in-statement)) |
+
+The complete picture of which construct sees which environment and working directory is in [§12.6](#126-environment-and-working-directory-at-a-glance).
 
 Consequences:
 
 - A static binding whose expression would diverge (e.g. calls `@error(...)`) only does so if something references it. An unused static binding is never evaluated.
-- A static binding containing a process expression ([§6](#6-process-calls)) runs its command only on first reference, and only once. This makes it a convenient place to store a value such as a tool version that several tasks need.
+- A static binding containing a process expression ([§6](#6-process-calls)) runs its command only on first reference, and only once. This makes it a convenient place to store a value such as a tool version that several tasks need. Because every process call updates `@status_code()` ([§5](#5-built-in-functions)), that first reference can change the value `@status_code()` reports in the task that triggered it.
 - A **destructuring** static binding is one unit: referencing **any** of its names evaluates the whole right-hand side once, and every name of that binding then has its cached value.
 
 **Examples:**
@@ -279,10 +311,9 @@ Expressions produce a typed value. They are used in bindings, task call argument
 **Rules:**
 
 - There is **no implicit type coercion**; operands must match the expected types exactly.
-- Precedence follows mathematical convention (`*`, `/`, `%` before `+`, `-`). Boolean operators bind more loosely than comparisons.
-- **Boolean operator precedence.** From tightest to loosest: comparison and equality, then `not`, then `and`, then `or`. So `not a == b` means `not (a == b)`, `not a and b` means `(not a) and b`, and `a or b and c` means `a or (b and c)`. `not` may be repeated (`not not x`).
+- **Arithmetic precedence** follows mathematical convention (`*`, `/`, `%` before `+`, `-`). The slice postfix `[...]` binds tighter than every operator. The range operator `..` binds more loosely than every arithmetic operator, so `a + 1..b * 2` means `(a + 1)..(b * 2)`.
+- **Boolean precedence**, from tightest to loosest: comparison and equality, then `not`, then `and`, then `or`. So `not a == b` means `not (a == b)`, `not a and b` means `(not a) and b`, and `a or b and c` means `a or (b and c)`. `not` may be repeated (`not not x`).
 - There is **no `!` operator**. Boolean negation is always written `not`. The `!` of `!=` belongs to that operator only.
-- The slice postfix `[...]` binds tighter than every operator. The range operator `..` binds more loosely than every arithmetic operator, so `a + 1..b * 2` means `(a + 1)..(b * 2)`.
 
 ```
 if (not @exists("config.toml")) @error("missing config.toml")
@@ -342,7 +373,7 @@ Output of `tasq test`:
 | `` `text {<expr>}` `` | `string` | Yes | **Interpolated string.** Any expression may be embedded using single curly braces. |
 | `'c'` | `char` | No | A single character. |
 
-Process calls are written `` $`command` `` ([§6](#6-process-calls)). There is no `$"..."` form.
+Process calls use a related literal, `` $`command` `` ([§6](#6-process-calls)).
 
 **Interpolation.** Inside an interpolated string or a process call, `{<expression>}` is evaluated at runtime and converted to its string representation:
 
@@ -406,6 +437,7 @@ switch(<subject>) {
 ```
 
 - `<subject>` is evaluated once.
+- **Patterns are literals.** A pattern may be any literal (`bool`, `char`, `number`, `string`, or a list or tuple literal), and must have the same type as the subject. Expressions are not allowed as patterns, and neither are ranges.
 - **Every pattern in a `switch` must be unique**; a duplicate is a compile-time error.
 - The `else` branch is **required** in expression form, since every subject value must produce a result.
 - Branches are unified as described in [§2.2](#22-special-types). This is how `@error(...)` can serve as an `else` branch when there is no sensible fallback value.
@@ -429,7 +461,7 @@ A `for` expression maps, filters or otherwise processes one or more lists (or ra
 for(<subjects>) |<captures>| <expr>
 ```
 
-- `<subjects>` are one or more comma-separated subjects, each a list expression or a range ([§4.9](#49-ranges-and-slices)). They are iterated in lock-step over a shared window of indices: the **intersection** of the subjects' index intervals, where a list covers `0..@len(list)` and a range covers its own bounds. With only list subjects this is the length of the **shortest** subject; no error is raised. The full rules are in [§4.9](#49-ranges-and-slices).
+- `<subjects>` are one or more comma-separated subjects, each a list expression or a range. They are iterated in lock-step over a shared window of indices. The iteration rules (window, clamping, unbounded ranges) are defined once, in [§4.9](#49-ranges-and-slices); in short, with only list subjects the loop runs for the length of the **shortest** one, with no error.
 - `<captures>` binds one capture to each subject, in order. A capture is an identifier (the current element of a list subject, or the current index of a range subject), `_` for a value you don't need, or a destructuring pattern `(a, b)` when the elements are tuples ([§4.10](#410-tuples-and-destructuring)). The number of captures **must equal** the number of subjects.
 - `<expr>` is evaluated once per iteration, and its result becomes the corresponding element of the produced list. The result type is `[]T`, where `T` is the type of `<expr>`. If there are no iterations the result is an empty `[]T`.
 - `<expr>` may be an `if`, `switch`, `in` or `with` expression containing `break` or `continue` branches ([§4.6](#46-break-and-continue)); these are `noreturn` and unify with the surviving branches ([§2.2](#22-special-types)).
@@ -494,9 +526,7 @@ positives := for(numbers) |n| if (n < 0) continue else n
 
 **After a built-in call.** Built-ins that can fail return `!T` ([§2.2](#22-special-types)), which is unusable until unwrapped, so `fallback` is **mandatory** for `@env`, `@which`, `@parse_number`, `@at` and `@read`. Using `fallback` after a built-in that cannot fail (e.g. `@len`) is a compile-time error.
 
-**After a process expression.** A process expression aborts when its command exits non-zero ([§6.2](#62-failure-handling)), so `fallback` is **optional** there. On a non-zero exit, the fallback value replaces the process's output entirely. `fallback` cannot be combined with `nofail` (compile-time error).
-
-`fallback` exists only on built-in calls and process expressions. A process **statement** has no `fallback` form.
+**After a process expression.** A process expression aborts when its command exits non-zero ([§6.2](#62-failure-handling)), so `fallback` is **optional** there. On a non-zero exit, the fallback value replaces the process's output entirely. `fallback` cannot be combined with `nofail` (compile-time error). A process **statement** has no `fallback` form.
 
 **Rules:**
 
@@ -542,7 +572,7 @@ double := |x| x * 2
 add    := |a, b| a + b
 ```
 
-Parameters are comma-separated names between the bars, with **no type annotations**. The body is one expression and extends as far right as possible.
+Parameters are comma-separated names between the bars, with **no type annotations**. The body is one expression and extends as far right as possible. Parameters are plain names; they cannot be destructuring patterns, and they follow the no-shadowing rule ([§3](#3-bindings)).
 
 **Binding.** Binding a lambda evaluates nothing; it creates a lambda value. Lambda bindings follow the ordinary binding rules ([§3](#3-bindings)): they may appear at file root, in a group body or in a task body, are immutable, and can be aliased (`twice := double`).
 
@@ -575,7 +605,7 @@ task demo {
 1. **At the definition.** The body is analysed with parameters of *unknown* type. Everything that can be diagnosed without knowing the parameter types is reported right there (for example unknown names and other errors that do not depend on the parameter types); an operation whose validity depends on a parameter's type is deferred. A lambda that is never used is therefore still checked for these errors.
 2. **At each instantiation.** The body is checked again with the concrete parameter types of that use. An error found here is reported with a trace: it points at the failing expression in the body, at the call that instantiated the lambda, and at the lambda's definition.
 
-**Scope.** A lambda body is **lexically scoped**: it sees its own parameters and the names visible where the lambda is **written**, never the locals of its caller. (This concerns names only; the working directory is not a name, and a lambda is evaluated in the working directory in effect where it is called, see [§4.11](#411-in-expression).)
+**Scope.** A lambda body is **lexically scoped**: it sees its own parameters and the names visible where the lambda is **written**, never the locals of its caller. (This concerns names only; the working directory and the environment are not names, and a lambda is evaluated in the working directory and the environment in effect where it is **called**, see [§4.11](#411-in-expression) and [§12.6](#126-environment-and-working-directory-at-a-glance).)
 
 ```
 g := |k, h| h(k)
@@ -587,9 +617,7 @@ task test {
 }
 ```
 
-Parameters follow the no-shadowing rule of bindings: a parameter cannot share a name with an already visible name (compile-time error). Lambda parameters are plain names; they cannot be destructuring patterns.
-
-**Lambdas as values.** A lambda can be bound, aliased, passed around and stored in a tuple:
+**Lambdas as values.** A lambda can be bound, aliased, passed to other lambdas, stored in a tuple and passed to the built-ins that take a lambda ([§5](#5-built-in-functions)):
 
 ```
 apply := |fn, x| fn(x)
@@ -599,7 +627,7 @@ task demo {
 }
 ```
 
-It can also be passed to the built-ins that take a lambda ([§5](#5-built-in-functions)).
+Every lambda literal has its own type, so two different lambdas cannot be mixed where a single type is required (for example as the elements of one list).
 
 **Naming intermediate values.** A lambda body is one expression, so it cannot contain bindings. Use `with` ([§4.12](#412-with-expression)) to compute a value once and use it several times inside the body:
 
@@ -640,6 +668,8 @@ range := <expr> '..' [<expr>]       // a..b    or    a..
 
 #### Range loops
 
+This section is the single definition of how `for` iterates, for both the expression and the statement form.
+
 Every `for` subject contributes an interval of indices, and the loop runs over the **intersection** of all of them:
 
 | Subject | Interval | Capture receives |
@@ -649,10 +679,10 @@ Every `for` subject contributes an interval of indices, and the loop runs over t
 | Range `a..` | `a..` (no upper end) | The current index, as a `number` |
 
 - The loop's **window** starts at the largest start and ends at the smallest end of all intervals, and iterates one index at a time. List elements are always read at their **absolute index**, which is what makes `for(list, 0..) |item, i|` bind `i` to the element's index.
+- With only list subjects the window is `0..@len(shortest)`: iteration stops at the end of the **shortest** subject, the extra elements of longer subjects are never visited, and there is no out-of-bounds access and no error.
 - Because a list's interval starts at `0`, a range bound below `0` is **clamped to `0` whenever at least one subject is a list**. When **no** subject is a list, negative bounds are kept, which is useful for generating lists.
 - If the window has **no finite end** (every subject is a range without a right bound), the loop runs **zero times**. A range loop can never be infinite; infinite loops do not exist in tasq.
 - If the window's start is not below its end, the loop runs zero times. This is never an error.
-- With only list subjects the window is `0..@len(shortest)`, which is the lock-step rule of earlier versions.
 
 ```
 list := [0, 1, 2, 3, 4]
@@ -750,7 +780,7 @@ It is allowed in three places:
 
 - The pattern's shape must match the tuple's type **exactly**: the same number of elements at every level (compile-time error otherwise), and the right-hand side must be a tuple.
 - `_` discards one element. It is never defined and may appear any number of times.
-- The names a pattern introduces are ordinary bindings: they are immutable, must be unique within their scope and follow the no-shadowing rule of [§3](#3-bindings). A name bound by a `for` or `with` capture is visible only in that construct's body.
+- The names a pattern introduces are ordinary bindings: they are immutable and follow the uniqueness and no-shadowing rules of [§3](#3-bindings). A name bound by a `for` or `with` capture is visible only in that construct's body.
 - Destructuring bindings are valid at file root, in a group body and in a task body. Evaluation is as in [§3](#3-bindings): task-local bindings run eagerly in statement order, and static bindings run **lazily and once**, when **any** of their names is first referenced.
 - Destructuring is not available for lambda parameters or task and group arguments.
 
@@ -792,7 +822,7 @@ task test {
 in(<path>) <expression> else <expression>
 ```
 
-`in` is a keyword ([§1.1](#11-reserved-words)). The statement form is described in [§8.9](#89-in-statement).
+`in` is a keyword ([§1.1](#11-reserved-words)). The statement form is described in [§8.9](#89-in-statement); the semantics below are shared by both forms.
 
 **Evaluation:**
 
@@ -805,19 +835,14 @@ in(<path>) <expression> else <expression>
 sources := in("src") @sort(@glob("*.zig"), |a, b| a < b) else @error("src/ is missing")
 ```
 
-**What the working directory affects.** Inside `in`, the new working directory is used by:
-
-- every process call ([§6](#6-process-calls));
-- the built-ins `@glob`, `@exists`, `@read`, `@is_file`, `@is_dir` and `@cwd` ([§5](#5-built-in-functions)).
-
-`@invocation_dir` is not affected. `in` also does not touch the **environment**: the body runs in the effective environment inherited from the enclosing context ([§12.4](#124-environment-attributes)), exactly as it would outside `in`, and the `.env` file ([§7](#7-settings)) is neither re-read nor re-located.
+**What the working directory affects.** Inside `in`, the new working directory is used by every process call and by the file-system built-ins and `@cwd` (the full list is in [§12.5](#125-working-directory-attribute)). `@invocation_dir` is not affected. `in` also does not touch the **environment**: the body runs in the effective environment inherited from the enclosing context ([§12.4](#124-environment-attributes)), and the `.env` file ([§7](#7-settings)) is neither re-read nor re-located.
 
 **Inheritance and restoration:**
 
 - The previous working directory is **restored** when the `in` is left, however that happens: normally, through `break` or `continue` ([§4.6](#46-break-and-continue)), or by an abort (`@error(...)` or a failed process).
-- A task called from inside an `in` block inherits the working directory, which reverts when the call returns; this is the same dynamic scoping as `[env]` ([§12.4](#124-environment-attributes)).
-- A lambda is evaluated in the working directory in effect **where it is called**, not where it is written ([§4.8](#48-lambdas)).
-- **Static bindings** ([§3](#3-bindings)) never see the working directory of whatever triggers them; they start from the root working directory (the `working_dir` setting, [§7](#7-settings)).
+- A task called from inside an `in` block does **not** inherit the block's directory: every task runs in its own working directory ([§12.5](#125-working-directory-attribute)), whoever calls it. This differs from `[env]`, which a callee does inherit ([§12.4](#124-environment-attributes)).
+- A lambda is evaluated in the working directory (and environment) in effect **where it is called**, not where it is written ([§4.8](#48-lambdas)).
+- **Static bindings** never see the working directory of whatever triggers them ([§3](#3-bindings)).
 
 ### 4.12 With Expression
 
@@ -838,7 +863,7 @@ with(<subjects>) |<captures>| <expr>
 **Scope.**
 
 - Captured names are visible **only in the body**, never in the other subjects of the same `with`. To build a value from an earlier one, nest the expressions: `with(a) |x| with(f(x)) |y| ...`.
-- Captured names follow the no-shadowing rule of bindings ([§3](#3-bindings)) and must be unique within one `with`. `_` may appear any number of times and is never defined.
+- Captured names follow the uniqueness and no-shadowing rules of [§3](#3-bindings) and must be unique within one `with`. `_` may appear any number of times and is never defined.
 - `with` does not change the working directory or the environment; unlike `in` ([§4.11](#411-in-expression)), the body runs exactly as it would outside the `with`.
 - `break` and `continue` inside the body refer to the nearest enclosing `for`, as in a branch of `if` ([§4.6](#46-break-and-continue)).
 - Inside a lambda, a `with` follows the two-stage checking of [§4.8](#48-lambdas): captured types are known only per instance.
@@ -890,13 +915,13 @@ Built-in functions are called with an `@` prefix and may appear in any expressio
 | `@which(name: string)` | `!string` | Path of program `name`, found like the unix `which` command: it is looked up in the `PATH` of the current scope's environment (so a `PATH` set with `[env]` is honored). Errors if not found. |
 | `@os()` | `string` | The current platform: `"windows"`, `"linux"` or `"macos"`. |
 | `@arch()` | `string` | The architecture **family** of the current platform. Its values are those of Zig's `builtin.target.cpu.arch.family()`, for example `"x86"` (both 32-bit and 64-bit x86), `"arm"`, `"aarch64"` or `"riscv"`. The exact set of values is that of the Zig version tasq is built with. |
-| `@cwd()` | `string` | The absolute path of the working directory in effect: the `working_dir` setting ([§7](#7-settings)), or the directory entered by an enclosing `in` ([§4.11](#411-in-expression)). |
+| `@cwd()` | `string` | The absolute path of the working directory in effect: the task's working directory ([§12.5](#125-working-directory-attribute)), or the directory entered by an enclosing `in` ([§4.11](#411-in-expression)). |
 | `@invocation_dir()` | `string` | The directory from which tasq was called. Unlike `@cwd()` it is not affected by the `working_dir` setting or by `in`. |
 | `@status_code()` | `number` | Exit status of the most recently executed process. Every process call, statement or expression, updates it, including a process expression evaluated as part of a lazily evaluated static binding ([§3](#3-bindings)). After a process that failed without aborting (`nofail`, or a taken `fallback`) it holds that non-zero status. Errors if no process has run yet in the current task. |
 
 **File system**
 
-Relative paths given to `@exists`, `@is_file`, `@is_dir`, `@read` and `@glob` are resolved against the working directory in effect ([§7](#7-settings), [§4.11](#411-in-expression)), the same one process calls run in. `@basename` and `@join_path` only work on strings and never touch the file system.
+Relative paths given to `@exists`, `@is_file`, `@is_dir`, `@read` and `@glob` are resolved against the working directory in effect ([§12.5](#125-working-directory-attribute), [§4.11](#411-in-expression)), the same one process calls run in. `@basename` and `@join_path` only work on strings and never touch the file system.
 
 | Signature | Returns | Description |
 |-----------|---------|-------------|
@@ -1006,7 +1031,7 @@ $[<attributes>]`<command>`
 
 - Only `$` followed by a backtick literal is a process call; there is no `$"..."` form.
 - `{<expr>}` interpolation and escape sequences work as in interpolated strings ([§4.2](#42-strings-and-interpolation)).
-- Each `` $`...` `` literal is **one process invocation**. It runs using the interpreter from the `script` setting, in the working directory in effect (the `working_dir` setting ([§7](#7-settings)), or the directory entered by an enclosing `in` ([§8.9](#89-in-statement))), and in the environment described in [§12.4](#124-environment-attributes).
+- Each `` $`...` `` literal is **one process invocation**. It runs using the interpreter from the `script` setting ([§7](#7-settings)), in the working directory in effect and in the environment in effect ([§12.6](#126-environment-and-working-directory-at-a-glance)).
 - Because every process call is its own invocation, a `cd` inside one does not carry over to later process calls or to built-in functions. To change the working directory, use `in` ([§4.11](#411-in-expression), [§8.9](#89-in-statement)).
 
 ### 6.1 Statements and Expressions
@@ -1023,11 +1048,12 @@ A process call is a **statement** when it stands alone as a line of a task body,
 | Non-zero exit | Aborts execution | Aborts execution |
 | `@status_code()` | Updated | Updated |
 | `fallback` | None | Optional ([§4.7](#47-fallback)) |
-| Valid attributes | `nofail`, `noecho` | `nofail` |
+
+The attributes valid on each form are listed in [§6.3](#63-process-attributes).
 
 **Captured output.** For a process expression, every newline (`\n` or `\r\n`) at the **end** of the captured output is removed. Nothing else is trimmed: leading whitespace, trailing spaces and tabs, and newlines inside the output are preserved.
 
-**Static bindings.** A process expression in a static binding runs lazily on first reference, once, and the result is cached ([§3](#3-bindings)). It runs in the environment and the working directory of the declaring scope ([§12.4](#124-environment-attributes), [§7](#7-settings)). Because every process updates `@status_code()`, that first reference can change the value `@status_code()` reports in the task that triggered it.
+**Static bindings.** A process expression in a static binding runs lazily on first reference, once, and the result is cached, in the environment and working directory of the declaring scope ([§3](#3-bindings)).
 
 ### 6.2 Failure Handling
 
@@ -1065,10 +1091,10 @@ task example {
 
 Process attributes are written inline, in a single bracket pair, comma-separated: `` $[nofail, noecho]`cmd` ``.
 
-| Attribute | Valid on | Unique | Description |
-|-----------|----------|:------:|-------------|
-| `[nofail]` | statement, expression | Yes | A non-zero exit status does not abort execution ([§6.2](#62-failure-handling)). |
-| `[noecho]` | statement | Yes | Do not echo the command before running it. The command's own output is unaffected. |
+| Attribute | Valid on | Description |
+|-----------|----------|-------------|
+| `[nofail]` | statement, expression | A non-zero exit status does not abort execution ([§6.2](#62-failure-handling)). |
+| `[noecho]` | statement | Do not echo the command before running it. The command's own output is unaffected. |
 
 - Both are presence flags and take no value.
 - Using an attribute where it is not valid (e.g. `noecho` on a process expression, where there is nothing to echo) is a compile-time error.
@@ -1120,7 +1146,7 @@ set script = ["zsh", "-c"]
 |---------|-----------|-------------|
 | `script` | `[]string` | Command and arguments used to invoke each process call, e.g. `["sh", "-c"]`. |
 | `dotenv` | `bool \| string` | Whether to read a `.env` file into the environment. `set dotenv` enables the default `.env` file in `working_dir`; `set dotenv = "path/to/file"` enables it using that file instead. Default: `false`. See [§12.4](#124-environment-attributes) for how loaded values interact with `[env]` and the OS environment. |
-| `working_dir` | `string` | The root working directory: the working directory of tasq's spawned processes and of the file-system built-ins ([§5](#5-built-in-functions)); also used to resolve the default `.env` path. Defaults to the directory `tasq` was invoked from. Inside a task, `in` temporarily replaces it for a block ([§8.9](#89-in-statement)). |
+| `working_dir` | `string` | The root working directory. Defaults to the directory `tasq` was invoked from. It is the base of every task's working directory ([§12.5](#125-working-directory-attribute)), the working directory of static bindings ([§3](#3-bindings)), and the base for the default `.env` path. |
 
 > There is no setting to ignore process failures; see [§6.2](#62-failure-handling).
 > Additional settings will be added in future versions.
@@ -1193,7 +1219,7 @@ Arguments in a task or group declaration **must appear in this order**; violatin
 - its type is `flag`, `string_list` or `number_list`. These are inherently non-positional and are named required unless a default is given;
 - it is a `group` argument. All group arguments are implicitly named required.
 
-Positional arguments cannot have a default value (compile-time error).
+Positional arguments cannot have a default value (compile-time error). A `flag` is placed in the named-required phase even though its implicit default (`false`) lets a caller omit it ([§9](#9-task-calls)).
 
 ```
 task deploy(
@@ -1291,7 +1317,7 @@ switch(color) {
 ```
 
 - `<subject>` is evaluated once.
-- **Every pattern must be unique** (compile-time error), as in the expression form ([§4.4](#44-switch-expression)).
+- Patterns are literals only and must be unique (compile-time errors), as in the expression form ([§4.4](#44-switch-expression)).
 - `else` is **optional**. If nothing matches and there is no `else`, execution continues after the `switch`.
 
 ### 8.7 For Statement
@@ -1302,8 +1328,7 @@ switch(color) {
 for(<subjects>) |<captures>| <stmt_block>
 ```
 
-- `<subjects>` are one or more comma-separated subjects, each a list expression or a range ([§4.9](#49-ranges-and-slices)). They are iterated in lock-step over a shared window of indices: the **intersection** of the subjects' index intervals, where a list covers `0..@len(list)` and a range covers its own bounds. With only list subjects, iteration runs only for the length of the **shortest** subject; there is no out-of-bounds access and no error. The extra elements of longer subjects are never visited. A window with no finite end (only unbounded ranges) runs zero times. The full rules are in [§4.9](#49-ranges-and-slices).
-- `<captures>` binds one capture to each subject, in order. A capture is an identifier (the current element of a list subject, or the current index of a range subject), `_` to ignore the value, or a destructuring pattern `(a, b)` when the elements are tuples ([§4.10](#410-tuples-and-destructuring)). The number of captures **must equal** the number of subjects.
+- `<subjects>`, `<captures>` and the iteration rules (shared window, shortest-subject bound, clamping, unbounded ranges) are exactly those of the `for` expression ([§4.5](#45-for-expression)), defined in [§4.9](#49-ranges-and-slices).
 - `<stmt_block>` is a `{ }` block or a single statement ([§8.4](#84-task-body)).
 - `break` and `continue` ([§4.6](#46-break-and-continue)) may be used inside, including from a nested `if`, `switch` or `in`.
 
@@ -1369,7 +1394,7 @@ task other [dep_a()] {
 - Dependencies run before the body, one after another, **in the order listed**. They never run in parallel.
 - A dependency's arguments are ordinary expressions. They may use the task's **own arguments** (e.g. `[compile(target)]`), the group's shared arguments, static bindings and built-ins. The task body has not run yet, so its task-local bindings do not exist and cannot be used.
 - The task's `[env]` attributes ([§12.4](#124-environment-attributes)) **apply to its dependencies**, as if the task had called them itself.
-- Dependencies run in the working directory in which the task itself was called ([§9](#9-task-calls)).
+- Each dependency runs in its own working directory ([§12.5](#125-working-directory-attribute)), like any task.
 - The list sits after the signature, so it is never confused with an attribute list ([§12](#12-attributes)), which precedes the `task` keyword.
 - A task with dependencies may also have a brace-less body ([§8.4](#84-task-body)).
 - Dependencies only **order** tasks. tasq never skips a task because its outputs are up to date.
@@ -1380,7 +1405,7 @@ A dependency that has already run is not run again. This is what makes a shared 
 
 **Call trees.** Every *call* starts a new **call tree**: the task named on the command line ([§11](#11-command-line-interface)) and every task call statement in a body ([§9](#9-task-calls)) is the root of its own tree. A tree consists of the called task, its dependencies, their dependencies, and so on. Deduplication happens **inside one tree** and never across trees.
 
-- **Identity.** A run is identified by the task together with its **resolved arguments**: defaults are filled in first, and for a task in a group the group's shared arguments are included. Arguments are compared by value, and lists element by element, in order. So `build()` and `build(release: false)` are the same run when `release` defaults to `false`, while `deploy("staging")` and `deploy("prod")` are different runs.
+- **Identity.** A run is identified by the task together with its **resolved arguments**: defaults are filled in first, and for a task in a group the group's shared arguments are included. Arguments are compared by value, and lists element by element, in order. So `build()` and `build(release: false)` are the same run when `release` defaults to `false`, while `deploy("staging")` and `deploy("prod")` are different runs. The working directory is not part of the identity, because it depends only on the task itself ([§12.5](#125-working-directory-attribute)).
 - **Skipping.** When a dependency's identity matches a run that already **finished** in the same tree, the dependency is skipped, silently.
 - **The root is never skipped.** The task that starts a tree always runs.
 - **Arguments are evaluated first.** A dependency's identity depends on its arguments, so they are evaluated even if the dependency then turns out to be skipped. Keep dependency arguments free of side effects.
@@ -1393,17 +1418,16 @@ A dependency that has already run is not run again. This is what makes a shared 
 
 **Failure.** The first failure aborts the whole run: the remaining dependencies and the body do not run, and tasq exits with a non-zero status.
 
-**Cycles.** A task cannot depend on itself, directly or through other tasks. The compiler follows both dependency lists and task call statements in bodies, so each of the following is a compile-time error, and `tasq --check` reports the cycle:
+**Cycles.** A task cannot depend on itself, directly or through other tasks. Each of the following is a compile-time error, and `tasq --check` reports the cycle:
 
 ```
-task a [b()] { ... }
-task b [a()] { ... }
+task a [a()] { ... }
 
-task c { d() }
-task d { c() }
+task b [c()] { ... }
+task c [b()] { ... }
 ```
 
-A call that sits in a branch which never executes (for example inside `if (false)`) still counts.
+Only dependency lists are checked. A cycle through task call statements ([§9](#9-task-calls)), such as two tasks that call each other from their bodies, is **not detected** yet ([§14](#14-planned-features)); running one never terminates normally.
 
 **Examples:**
 
@@ -1465,7 +1489,7 @@ task a [b(), c()] { @print("A") }
 
 Output of `tasq a`: `D`, `B`, `C`, `A`, one per line.
 
-A task call statement is not a dependency: it starts a new tree, so it runs even if the same task already ran. To share a run, list both tasks as dependencies of the same task ([§9](#9-task-calls)).
+A task call *statement* is not a dependency: it starts a new tree and always runs ([§9](#9-task-calls)).
 
 **Passing arguments and environment to a dependency:**
 
@@ -1501,7 +1525,7 @@ task test(name: string) [build()]
 
 ### 8.9 In Statement
 
-`in` as a **statement** changes the working directory for a block of statements. The semantics, which are shared with the expression form, are described in [§4.11](#411-in-expression): the path is resolved against the working directory in effect, the previous directory is restored however the block is left, and the environment is not changed.
+`in` as a **statement** changes the working directory for a block of statements. The semantics are shared with the expression form and described in [§4.11](#411-in-expression): the path is resolved against the working directory in effect, the previous directory is restored however the block is left, the environment is not changed, and a called task does not inherit the directory.
 
 ```
 in(<path>) <stmt_block>
@@ -1514,7 +1538,6 @@ in(<path>) <stmt_block>
 - Both bodies are statement blocks, so single statements may omit their braces ([§8.4](#84-task-body)).
 - `break` and `continue` ([§4.6](#46-break-and-continue)) may be used inside and refer to the nearest enclosing `for`; the working directory is restored first.
 - `else` takes a statement block, and `in` is itself a statement, so chains such as `in("a") { ... } else in("b") { ... } else { ... }` need no extra syntax.
-- Task calls inside the block inherit the working directory, which reverts when the call returns ([§9](#9-task-calls)).
 
 ```
 task frontend {
@@ -1583,7 +1606,7 @@ Names in task calls are the **argument identifiers** as declared in the signatur
 
 When calling a task in a group from outside that group, the group's shared arguments must also be passed by identifier. A task called from inside its own group may omit them ([§10.1](#101-named-groups)).
 
-**Inherited context.** A called task runs in the context of its caller: it inherits the effective environment ([§12.4](#124-environment-attributes)) and the working directory ([§4.11](#411-in-expression)) in effect at the call. Both revert when the call returns.
+**Inherited context.** A called task inherits the effective environment in effect at the call, which reverts when the call returns. The working directory is **not** inherited: a task always runs in its own working directory, no matter who calls it or from inside which `in` block ([§12.6](#126-environment-and-working-directory-at-a-glance)).
 
 **Calls and dependencies.** A task call statement **always runs** the task, even if the same task with the same arguments already ran earlier in the invocation. It starts a new call tree ([§8.8](#88-task-dependencies)): the called task's own dependencies are deduplicated among themselves, but not against tasks that ran before the call. Calling `build()` twice in a body runs `build` twice. To run a shared task once, list it as a dependency instead.
 
@@ -1599,6 +1622,8 @@ task release [build()] {
 ```
 
 Output of `tasq release`: `build`, `build`, `test`, `release`. Writing `task release [build(), test()]` instead puts both in one call tree, and `build` runs once.
+
+**Cycles.** A task must not call itself, directly or through other tasks. Cycles through call statements are not detected ([§8.8](#88-task-dependencies)).
 
 **Compile-time call errors:**
 
@@ -1640,8 +1665,9 @@ group group_name(
 **Rules:**
 
 - Groups **cannot be nested**.
-- Group arguments are **promoted to named**: they implicitly receive CLI names following the same rules as non-positional argument types ([§11.4](#114-implicit-cli-names)).
+- Group arguments are **promoted to named**: they implicitly receive CLI names following the same rules as other named arguments ([§11.4](#114-implicit-cli-names)).
 - Group arguments are shared by every task in the group.
+- A group may carry `[cwd]`, which applies to every task in it ([§12.5](#125-working-directory-attribute)).
 - Tasks in a named group are called from outside as `group_name::task_name(...)`.
 
 **Calling tasks within a named group:**
@@ -1710,7 +1736,7 @@ tasq <task_name> [arguments...] [-f <file>]
 | Option | Description |
 |--------|-------------|
 | `-f <file>`, `--file <file>` | Target file; overrides the default `tasq` ([§11.6](#116-choosing-the-file-and-option-placement)). |
-| `-h`, `--help` | Show the help message. |
+| `-h`, `--help` | Show the help message ([§11.6](#116-choosing-the-file-and-option-placement) for placement). |
 
 ### 11.2 Checking Without Running (`--check`)
 
@@ -1753,7 +1779,7 @@ tasq task_name -v
 
 ### 11.4 Implicit CLI Names
 
-Non-positional types (`string_list`, `number_list`, `flag`) automatically receive CLI names derived from their identifier:
+Every **named** argument ([§8.3](#83-argument-ordering)) that is not given explicit names automatically receives CLI names derived from its identifier. This covers the non-positional types (`string_list`, `number_list`, `flag`), arguments with a default value, and group arguments.
 
 | Implicit attribute | Default value |
 |--------------------|---------------|
@@ -1820,15 +1846,16 @@ Several attributes may share one bracket pair, comma-separated, or be spread ove
 
 - Attribute values are **meta types**: compile-time literals ([§2.3](#23-meta-types)).
 - **Process-call attributes** are the one exception to the placement rule: they are written inline between the `$` and the backtick ([§6.3](#63-process-attributes)).
-- **Uniqueness** is a property of each attribute. A *unique* attribute may be applied at most once per element (twice is a compile-time error); a *repeatable* attribute may be applied multiple times. Each table below has a **Unique** column.
+- **Uniqueness** is a property of each attribute. A *unique* attribute may be applied at most once per element (twice is a compile-time error); a *repeatable* attribute may be applied multiple times.
 
-**Where each attribute is valid:**
+**Where each attribute is valid** (this table is the single reference for validity and uniqueness; the subsections below describe meaning):
 
 | Attribute | `task` | `group` | argument | `set` | process stmt | process expr | Unique |
 |-----------|:------:|:-------:|:--------:|:-----:|:------------:|:------------:|:------:|
 | `[windows]` `[linux]` `[macos]` | ✓ | ✓ | | ✓ | | | Yes |
 | `[desc]` | ✓ | ✓ | ✓ | | | | Yes |
 | `[private]` | ✓ | ✓ | | | | | Yes |
+| `[cwd]` | ✓ | ✓ | | | | | Yes |
 | `[long]` `[short]` | | | ✓ | | | | Yes |
 | `[int]` `[min]` `[max]` `[pattern]` `[max_items]` | | | ✓ | | | | Yes |
 | `[env]` | ✓ | | | | | | No (repeatable) |
@@ -1839,13 +1866,11 @@ Several attributes may share one bracket pair, comma-separated, or be spread ove
 
 Restrict the element to one operating system. Elements with no platform attribute apply to **all** platforms.
 
-| Attribute | Platform | Unique |
-|-----------|----------|:------:|
-| `[windows]` | Windows | Yes |
-| `[linux]` | Linux | Yes |
-| `[macos]` | macOS | Yes |
-
-**Valid on:** `set` declarations, `group` definitions, `task` definitions.
+| Attribute | Platform |
+|-----------|----------|
+| `[windows]` | Windows |
+| `[linux]` | Linux |
+| `[macos]` | macOS |
 
 ```
 [windows]
@@ -1866,10 +1891,10 @@ task open {
 
 ### 12.2 Documentation Attributes
 
-| Attribute | Meta type | Valid on | Unique | Description |
-|-----------|-----------|----------|:------:|-------------|
-| `[desc: "text"]` | `string` | `task`, `group`, argument | Yes | Human-readable description shown by `tasq --list` and `tasq --usage` ([§11.5](#115-listing-tasks-and-showing-usage)). |
-| `[private]` | *(none)* | `task`, `group` | Yes | Hides the task or group from `tasq --list` output. A private task can still be called normally, by name from another task or directly from the command line; it is only omitted from generated documentation. |
+| Attribute | Meta type | Description |
+|-----------|-----------|-------------|
+| `[desc: "text"]` | `string` | Human-readable description shown by `tasq --list` and `tasq --usage` ([§11.5](#115-listing-tasks-and-showing-usage)). |
+| `[private]` | *(none)* | Hides the task or group from `tasq --list` output. A private task can still be called normally, by name from another task or directly from the command line; it is only omitted from generated documentation. |
 
 ```
 [desc: "Compile and package the project for distribution"]
@@ -1910,7 +1935,7 @@ Valid only on individual argument declarations inside tasks or groups.
 | `[short: 'c']` | `char` | Use a custom short name |
 | `[short: null]` | `null` | Remove the short name |
 
-**Validation.** All are unique.
+**Validation.**
 
 | Attribute | Meta type | Applies to | Description |
 |-----------|-----------|------------|-------------|
@@ -1949,9 +1974,9 @@ task create_user(
 
 ### 12.4 Environment Attributes
 
-| Attribute | Meta type | Valid on | Unique | Description |
-|-----------|-----------|----------|:------:|-------------|
-| `[env: (string,string)]` | `(string,string)` | `task` | No (repeatable) | Sets an environment variable for the task: the first tuple element is the name, the second the value. Write it once per variable to set several. |
+| Attribute | Meta type | Description |
+|-----------|-----------|-------------|
+| `[env: (string,string)]` | `(string,string)` | Sets an environment variable for the task: the first tuple element is the name, the second the value. Write it once per variable to set several. |
 
 **Scope:**
 
@@ -1960,7 +1985,7 @@ task create_user(
 - If a called task declares its own `[env]` for the same name, that value takes precedence for the duration of that call, and the earlier one resumes on return (ordinary nested shadowing).
 - **Static bindings** ([§3](#3-bindings)) never see the `[env]` of the task that triggers them. They are evaluated in the environment of the scope they are declared in: the `.env` file (if enabled) and the OS environment.
 - **Task-local bindings** see the task's effective environment: its own `[env]` plus whatever it inherited.
-- `in` ([§4.11](#411-in-expression), [§8.9](#89-in-statement)) does not change the environment: its body inherits the effective environment of the enclosing context, like everything else.
+- `in` ([§4.11](#411-in-expression), [§8.9](#89-in-statement)) does not change the environment.
 
 **Precedence.** When a variable could come from several sources, the most specific wins:
 
@@ -1993,6 +2018,68 @@ task show {
 }
 ```
 
+### 12.5 Working Directory Attribute
+
+| Attribute | Meta type | Description |
+|-----------|-----------|-------------|
+| `[cwd: "path"]` | `string` | Sets the directory a task runs in. On a group it applies to every task of the group, named or anonymous. |
+
+**Working directory of a task.** The directory a task starts in is always:
+
+```
+working_dir (setting)  +  group cwd  +  task cwd
+```
+
+Each part is optional. `working_dir` ([§7](#7-settings)) defaults to the directory tasq was invoked from. A group's `cwd` is relative to it, and a task's `cwd` is relative to the result so far. A task with no `cwd`, in a group with no `cwd`, runs in `working_dir`.
+
+- **Independent of the caller.** The result depends only on the task's own definition. It is the same whether the task is run from the command line, listed as a dependency or called from a body, and a call made from inside an `in` block does not change it ([§4.11](#411-in-expression)). This is why the working directory is not part of a dependency's identity ([§8.8](#88-task-dependencies)).
+- **What it affects.** Every process call and the file-system built-ins (`@glob`, `@exists`, `@read`, `@is_file`, `@is_dir`, [§5](#5-built-in-functions)) in the task body start in this directory, and so does `@cwd()`. `in` replaces it for a block, and a relative `in` path is resolved against it ([§4.11](#411-in-expression)).
+- **What it does not affect.** Static bindings are evaluated in the root working directory, never in the `cwd` of whatever task triggers them ([§3](#3-bindings)). `@invocation_dir()` is unchanged.
+- The `cwd` value is a meta `string` and must be a basic `"..."` literal ([§2.3](#23-meta-types)).
+- If the resulting directory does not exist when the task runs, the run aborts with an error.
+
+```
+[cwd: "services"]
+group {
+    [cwd: "api"]
+    task test {
+        $`go test ./...`           // runs in <working_dir>/services/api
+    }
+
+    task lint {
+        $`golangci-lint run`       // runs in <working_dir>/services
+    }
+}
+
+task whereami {
+    @print(@cwd())
+}
+
+[cwd: "docs"]
+task docs {
+    @print(@cwd())                 // <working_dir>/docs
+    in("build") {
+        @print(@cwd())             // <working_dir>/docs/build
+        whereami()                 // prints <working_dir>: the called task uses its own directory
+    }
+}
+```
+
+### 12.6 Environment and Working Directory at a Glance
+
+This table summarizes the rules of [§3](#3-bindings), [§4.8](#48-lambdas), [§4.11](#411-in-expression), [§8.8](#88-task-dependencies), [§9](#9-task-calls), [§12.4](#124-environment-attributes) and [§12.5](#125-working-directory-attribute) in one place. Where it differs from those sections, they are authoritative.
+
+| Where code runs | Environment | Working directory |
+|-----------------|-------------|-------------------|
+| Task body, including task-local bindings | The task's effective environment: its own `[env]` plus what it inherited | The task's own directory ([§12.5](#125-working-directory-attribute)), or the directory entered by an enclosing `in` |
+| Static binding (file root, group body) | `.env` file (if enabled) and OS environment; never a task's `[env]` | The root working directory (`working_dir`); never a task's `cwd` or an `in` |
+| Task called by a call statement | Inherits the caller's effective environment; reverts on return | Always its own directory |
+| Dependency | Inherits the declaring task's effective environment, including its `[env]` | Always its own directory |
+| Block inside `in` | Unchanged | The entered directory; restored when the block is left |
+| Lambda body | The environment in effect where the lambda is **called** | The directory in effect where the lambda is **called** |
+
+`@invocation_dir()` is never affected by any of the above.
+
 ---
 
 ## 13. Quick Reference
@@ -2010,18 +2097,11 @@ task show {
 
 Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` `` `\0` `\xNN` `\u{NNNN...}` `\{` `\}`
 
-### Boolean Operators
-
-| Form | Meaning | See |
-|------|---------|-----|
-| `a and b`, `a or b` | Logical and / or | [§4.1](#41-operators) |
-| `not a` | Logical negation (there is no `!` operator) | [§4.1](#41-operators) |
-| precedence | comparison, then `not`, then `and`, then `or` | [§4.1](#41-operators) |
-
 ### Expression Forms
 
 | Form | Meaning | See |
 |------|---------|-----|
+| `a and b`, `a or b`, `not a` | Boolean operators; there is no `!` operator. Precedence: comparison, then `not`, then `and`, then `or` | [§4.1](#41-operators) |
 | `if (c) a else b` | Conditional expression | [§4.3](#43-if-expression) |
 | `switch(x) { p => a, else => b }` | Multi-way expression | [§4.4](#44-switch-expression) |
 | `for(list) \|x\| expr` | Builds a list: map, filter (`continue`), take-while (`break`), validate (`@error`) | [§4.5](#45-for-expression) |
@@ -2047,6 +2127,7 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 |------|---------|-----|
 | `in(path) { ... } else { ... }` | Statement: run a block in `path`; `else` optional | [§8.9](#89-in-statement) |
 | `in(path) expr else expr` | Expression: evaluate in `path`; `else` required | [§4.11](#411-in-expression) |
+| `[cwd: "dir"]` on a task or group | Task working directory: `working_dir` + group `cwd` + task `cwd`; independent of the caller | [§12.5](#125-working-directory-attribute) |
 | `@cwd()` | Working directory in effect | [§5](#5-built-in-functions) |
 | `@invocation_dir()` | Directory tasq was called from | [§5](#5-built-in-functions) |
 
@@ -2057,7 +2138,7 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 | `task t [a(), b(1)] { ... }` | Run `a`, then `b(1)`, before the body; sequential, in order | [§8.8](#88-task-dependencies) |
 | same task and same arguments, once per call tree | Runs once; later occurrences are skipped | [§8.8](#88-task-dependencies) |
 | `a()` as a statement in a body | Always runs; starts a new call tree | [§9](#9-task-calls) |
-| `a` depends on `b` and `b` on `a` | Compile-time error (also through call statements) | [§8.8](#88-task-dependencies) |
+| `a` depends on `b` and `b` on `a` | Compile-time error (cycles through call statements are not detected) | [§8.8](#88-task-dependencies) |
 
 ### Scope Resolution
 
@@ -2066,32 +2147,6 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 | `name(...)` | Nearest enclosing scope |
 | `::name(...)` | File root scope |
 | `group_name::name(...)` | Specific named group |
-
-### Which Type System Applies
-
-| Context | Type system |
-|---------|-------------|
-| Binding values, expressions, values inside a task body, lambda parameters and results | Runtime types ([§2.1](#21-runtime-types), [§2.2](#22-special-types)) |
-| Attribute values, setting values | Meta types ([§2.3](#23-meta-types)) |
-| Task/group parameter declarations | Argument types ([§2.4](#24-argument-types)) |
-| Result of a fallible built-in call | `!T`, unusable until unwrapped to `T` via `fallback` ([§4.7](#47-fallback)) |
-
-### Where to Find Things
-
-| Looking for | See |
-|-------------|-----|
-| Operators, precedence, `not` | [§4.1](#41-operators) |
-| Reserved words | [§1.1](#11-reserved-words) |
-| Ranges, range loops, slices | [§4.9](#49-ranges-and-slices) |
-| Tuples, destructuring | [§4.10](#410-tuples-and-destructuring) |
-| Changing the working directory (`in`) | [§4.11](#411-in-expression), [§8.9](#89-in-statement) |
-| Naming values inside an expression (`with`) | [§4.12](#412-with-expression) |
-| Process call defaults (echo, stdout, stdin, failure) | [§6.1](#61-statements-and-expressions) |
-| Built-in function list | [§5](#5-built-in-functions) |
-| Dependencies: order, deduplication, cycles | [§8.8](#88-task-dependencies) |
-| Calling a task from a body | [§9](#9-task-calls) |
-| Which attributes go where | [§12](#12-attributes) |
-| CLI commands and options (`--check`, `--list`, `--usage`, `-f`, ...) | [§11](#11-command-line-interface) |
 
 ---
 
@@ -2107,4 +2162,5 @@ Reserved for future versions; not currently part of the language:
 - **Isolated `@status_code()` for static bindings.** Today a lazily evaluated static binding that runs a process updates `@status_code()` like any other process; this may change so that evaluating a static binding leaves it untouched.
 - **Eager evaluation of selected static bindings.** A way to force chosen static bindings to be evaluated at startup instead of on first reference.
 - **Configurable stdin for process expressions.** They currently read an empty stdin.
-- **Dependency identity.** Today a run is identified by the task and its resolved arguments only ([§8.8](#88-task-dependencies)). Two dependencies on the same task with the same arguments count as one run even if they sit under different `[env]` attributes or different `in` directories. A future version may make the effective `[env]` and the working directory part of the identity.
+- **Dependency identity.** Today a run is identified by the task and its resolved arguments only ([§8.8](#88-task-dependencies)). Two dependencies on the same task with the same arguments count as one run even if they sit under different `[env]` attributes. A future version may make the effective `[env]` part of the identity. (The working directory needs no such handling: it depends only on the task, [§12.5](#125-working-directory-attribute).)
+- **Cycle detection for task call statements.** Dependency cycles are rejected at compile time, but cycles through task call statements are not detected today ([§8.8](#88-task-dependencies), [§9](#9-task-calls)). A future version may report them.
