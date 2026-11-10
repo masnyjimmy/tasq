@@ -882,10 +882,13 @@ pub const Parser = struct {
             .lparen,
             .rparen,
             .comma,
-            follow,
+            follow.with(&.{.parallel_kw}),
             parseExpr,
         );
         try self.close(.subjects);
+
+        if (try self.at(.parallel_kw))
+            try self.parseParallel(follow.with(&.{.pipe}));
 
         try self.parseCaptures(follow);
 

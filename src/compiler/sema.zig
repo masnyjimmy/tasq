@@ -2342,6 +2342,11 @@ pub const Sema = struct {
             subjects[idx] = result.expr;
         }
 
+        const parallel = if (with_expr.parallel) |parallel|
+            try self.analyseParallel(parallel, scope)
+        else
+            null;
+
         const result = try self.analyseExprPartial(
             with_expr.expr orelse return Error.Incomplete,
             with_scope,
@@ -2350,6 +2355,7 @@ pub const Sema = struct {
         return .{
             .expr = .{
                 .scope = with_scope,
+                .parallel = parallel,
                 .subjects = subjects,
                 .captures = captures,
                 .expr = result.expr,

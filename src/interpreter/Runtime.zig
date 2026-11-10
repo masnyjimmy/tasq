@@ -903,21 +903,73 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             );
             defer with_scope.destroy();
 
-            for (with.subjects, with.captures) |*sub, cap| {
-                const value = try self.evaluateExpr(
-                    cwd,
-                    scope,
-                    sub,
-                );
+            if (with.parallel) |p| {
+                const jobs_count: usize = blk: {
+                    if (p.jobs) |*jobs_expr| {
+                        const jobs_value = try self.evaluateExpr(cwd, scope, jobs_expr);
+                        break :blk @intCast(integerize(jobs_value.number));
+                    }
+                    break :blk self.options.jobs;
+                };
 
-                _ = try self.destructure(
-                    ir.Capture,
-                    cwd,
-                    with_scope,
-                    cap.target,
-                    value,
-                    null,
-                );
+                var threaded: std.Io.Threaded = .init(self.allocator, .{
+                    .async_limit = .limited(jobs_count),
+                });
+                defer threaded.deinit();
+
+                const threaded_io = threaded.io();
+
+                const Job = struct {
+                    fn process(runtime: *Runtime, dir: std.Io.Dir, s: *Scope, subject: *const ir.Expr) Error!Value {
+                        return try runtime.evaluateExpr(
+                            dir,
+                            s,
+                            subject,
+                        );
+                    }
+                };
+
+                const results = try self.allocator.alloc(std.Io.Future(Error!Value), with.subjects.len);
+                defer self.allocator.free(results);
+
+                for (with.subjects, 0..) |*subject, idx| {
+                    results[idx] = threaded_io.async(Job.process, .{
+                        self,
+                        cwd,
+                        scope,
+                        subject,
+                    });
+                }
+
+                for (results, with.captures) |*result, cap| {
+                    const value = try result.await(threaded_io);
+
+                    _ = try self.destructure(
+                        ir.Capture,
+                        cwd,
+                        with_scope,
+                        cap.target,
+                        value,
+                        null,
+                    );
+                }
+            } else {
+                for (with.subjects, with.captures) |*sub, cap| {
+                    const value = try self.evaluateExpr(
+                        cwd,
+                        scope,
+                        sub,
+                    );
+
+                    _ = try self.destructure(
+                        ir.Capture,
+                        cwd,
+                        with_scope,
+                        cap.target,
+                        value,
+                        null,
+                    );
+                }
             }
 
             const result = try self.evaluateExpr(cwd, with_scope, &with.expr);

@@ -255,6 +255,7 @@ pub const InExpr = struct {
 
 pub const WithExpr = struct {
     scope: *Scope,
+    parallel: ?Parallel,
     subjects: []const Expr,
     captures: []const Capture,
     expr: Expr,

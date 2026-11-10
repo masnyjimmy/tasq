@@ -356,6 +356,7 @@ pub const InExpr = struct {
 pub const WithExpr = struct {
     node: *const cst.Node,
     subjects: Subjects,
+    parallel: ?Parallel,
     captures: Captures,
     expr: ?Expr,
 
@@ -363,12 +364,14 @@ pub const WithExpr = struct {
         var it = node.iter();
 
         const subjects = expectNode(&it, Subjects, .subjects) orelse unreachable;
+        const parallel = eatNode(&it, Parallel, .parallel);
         const captures = expectNode(&it, Captures, .captures) orelse unreachable;
         const expr = expectAnyNode(&it, Expr, Expr.KINDS);
 
         return .{
             .node = node,
             .subjects = subjects,
+            .parallel = parallel,
             .captures = captures,
             .expr = expr,
         };
