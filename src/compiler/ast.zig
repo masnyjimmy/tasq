@@ -356,6 +356,7 @@ pub const InExpr = struct {
 pub const WithExpr = struct {
     node: *const cst.Node,
     subjects: Subjects,
+    parallel: ?Parallel,
     captures: Captures,
     expr: ?Expr,
 
@@ -363,12 +364,14 @@ pub const WithExpr = struct {
         var it = node.iter();
 
         const subjects = expectNode(&it, Subjects, .subjects) orelse unreachable;
+        const parallel = eatNode(&it, Parallel, .parallel);
         const captures = expectNode(&it, Captures, .captures) orelse unreachable;
         const expr = expectAnyNode(&it, Expr, Expr.KINDS);
 
         return .{
             .node = node,
             .subjects = subjects,
+            .parallel = parallel,
             .captures = captures,
             .expr = expr,
         };
@@ -1121,9 +1124,9 @@ pub const Statements = AnyKindIterable(.loose, Statement, Statement.KINDS);
 
 pub const Statement = struct {
     const KINDS: []const cst.NodeKind = &.{
-        .binding, .process_stmt, .task_call,
-        .@"for",  .@"if",        .@"switch",
-        .in,      .expr_stmt,
+        .binding, .process_stmt,   .task_call,
+        .@"for",  .@"if",          .@"switch",
+        .in,      .parallel_block, .expr_stmt,
     };
     node: *const cst.Node,
 
@@ -1135,6 +1138,7 @@ pub const Statement = struct {
         @"if": IfStmt,
         @"switch": SwitchStmt,
         in: InStmt,
+        parallel_block: ParallelBlock,
         expr: ?Expr,
     };
 
@@ -1151,10 +1155,30 @@ pub const Statement = struct {
             .@"if" => .{ .@"if" = .from(self.node) },
             .@"switch" => .{ .@"switch" = .from(self.node) },
             .in => .{ .in = .from(self.node) },
+            .parallel_block => .{ .parallel_block = .from(self.node) },
             .expr_stmt => .{
                 .expr = if (self.node.childNodeOf(Expr.KINDS)) |n| .from(n) else null,
             },
             else => unreachable,
+        };
+    }
+};
+
+pub const ParallelBlock = struct {
+    node: *const cst.Node,
+    parallel: Parallel,
+    statements: Statements,
+
+    pub fn from(node: *const cst.Node) ParallelBlock {
+        var it = node.iter();
+
+        const parallel = expectNode(&it, Parallel, .parallel) orelse unreachable;
+        const statements = expectNode(&it, Statements, .stmt_block) orelse unreachable;
+
+        return .{
+            .node = node,
+            .parallel = parallel,
+            .statements = statements,
         };
     }
 };
