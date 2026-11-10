@@ -364,6 +364,7 @@ pub const Collector = struct {
             .fallback_kw,
             .with_kw,
             .in_kw,
+            .parallel_kw,
             => .keyword,
 
             // constants

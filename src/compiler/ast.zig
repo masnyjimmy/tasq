@@ -682,15 +682,40 @@ const SwitchPattern = struct {
 pub const ForExpr = struct {
     node: *const cst.Node,
     subjects: ForSubjects,
+    parallel: ?Parallel,
     captures: Captures,
     body: ?Expr,
 
     pub fn from(node: *const cst.Node) ForExpr {
         var it = node.iter();
         const subjects = expectNode(&it, ForSubjects, .subjects) orelse unreachable;
+        const parallel = eatNode(&it, Parallel, .parallel);
         const captures = expectNode(&it, Captures, .captures) orelse unreachable;
         const body = expectAnyNode(&it, Expr, Expr.KINDS);
-        return .{ .node = node, .subjects = subjects, .captures = captures, .body = body };
+
+        return .{
+            .node = node,
+            .subjects = subjects,
+            .parallel = parallel,
+            .captures = captures,
+            .body = body,
+        };
+    }
+};
+
+pub const Parallel = struct {
+    node: *const cst.Node,
+    jobs: ?Expr,
+
+    pub fn from(node: *const cst.Node) Parallel {
+        var it = node.iter();
+
+        const jobs = expectAnyNode(&it, Expr, Expr.KINDS);
+
+        return .{
+            .node = node,
+            .jobs = jobs,
+        };
     }
 };
 
@@ -1220,6 +1245,7 @@ pub const IfStmt = struct {
 pub const ForStmt = struct {
     node: *const cst.Node,
     subjects: ForSubjects,
+    parallel: ?Parallel,
     captures: Captures,
     body: Statements,
 
@@ -1227,12 +1253,14 @@ pub const ForStmt = struct {
         var it = node.iter();
 
         const subjects = expectNode(&it, ForSubjects, .subjects) orelse unreachable;
+        const parallel = eatNode(&it, Parallel, .parallel);
         const captures = expectNode(&it, Captures, .captures) orelse unreachable;
         const body = expectNode(&it, Statements, .stmt_block) orelse unreachable;
 
         return .{
             .node = node,
             .subjects = subjects,
+            .parallel = parallel,
             .captures = captures,
             .body = body,
         };

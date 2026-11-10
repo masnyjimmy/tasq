@@ -60,6 +60,7 @@ pub const NodeKind = enum {
     builtin_call,
     call_args, // builtin or lambda call args
     fallback,
+    parallel,
 
     @"switch",
     switch_body,

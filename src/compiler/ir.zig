@@ -1,11 +1,10 @@
-// src/compiler/ir.zig
-
 const std = @import("std");
+const lib = @import("lib");
+
 const hst = @import("cst.zig");
 const ast = @import("ast.zig");
 const functions = @import("functions.zig");
 
-const lib = @import("lib");
 const @"type" = @import("type.zig");
 const Type = @"type".Type;
 const ArgType = @"type".ArgType;
@@ -158,7 +157,12 @@ pub const ForSubject = union(enum) {
     expr: Expr,
 };
 
+pub const Parallel = struct {
+    jobs: ?Expr,
+};
+
 pub const ForStmt = struct {
+    parallel: ?Parallel,
     subjects: []ForSubject,
     captures: []*Capture,
     body: StatementBlock,
@@ -339,6 +343,7 @@ pub const LambdaCall = struct {
 };
 
 pub const ForExpr = struct {
+    parallel: ?Parallel,
     subjects: []ForSubject,
     captures: []*Capture,
     scope: *Scope,

@@ -650,6 +650,8 @@ pub const Parser = struct {
 
         try self.expect(.for_kw, follow.with(&.{.lparen}));
         try self.parseForSubjects(follow.with(&.{.pipe}));
+        if (try self.at(.parallel_kw))
+            try self.parseParallel(follow.with(&.{.pipe}));
         try self.parseCaptures(follow.withSet(body_type.bodyStart()));
         try body_type.parse(self, follow);
 
@@ -921,6 +923,18 @@ pub const Parser = struct {
         try self.parseExpr(follow);
 
         try self.close(.fallback);
+    }
+
+    fn parseParallel(self: *Parser, follow: FollowSet) Error!void {
+        try self.open();
+
+        try self.expect(.parallel_kw, follow.with(&.{.lparen}));
+        if (try self.eat(.lparen)) {
+            try self.parseExpr(follow.with(&.{.rparen}));
+            try self.expect(.rparen, follow);
+        }
+
+        try self.close(.parallel);
     }
 
     fn parseLambdaExpr(self: *Parser, follow: FollowSet) Error!void {

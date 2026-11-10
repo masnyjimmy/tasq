@@ -42,6 +42,16 @@ fn skipIncomplete(result: anytype) Error!?@typeInfo(@TypeOf(result)).error_union
     return value;
 }
 
+const LoopContext = struct {
+    continuable: bool,
+    breakable: bool,
+
+    const default: LoopContext = .{
+        .breakable = false,
+        .continuable = false,
+    };
+};
+
 pub const Sema = struct {
     arena: *std.heap.ArenaAllocator,
     diagnostics: *Diagnostics,
@@ -52,7 +62,7 @@ pub const Sema = struct {
         ir.LambdaInstance.Key.MapContext,
         80,
     ) = .empty,
-    loop_depth: usize = 0,
+    loop_context: LoopContext = .default,
 
     /// True while the body of a lambda is analysed once, at its definition, with `unknown`
     /// parameters. Everything depends on `unknown` there, so incomplete types are expected and
@@ -64,6 +74,15 @@ pub const Sema = struct {
             .arena = arena,
             .diagnostics = diagnostics,
         };
+    }
+
+    fn setLoopContext(self: *Sema, ctx: LoopContext) LoopContext {
+        const old = self.loop_context;
+        self.loop_context = ctx;
+        return old;
+    }
+    fn restoreLoopContext(self: *Sema, ctx: LoopContext) void {
+        self.loop_context = ctx;
     }
 
     // Results in partially analysed file, all symbols collected but elements which can contain reference to some can be missing
@@ -1275,13 +1294,21 @@ pub const Sema = struct {
     fn analyseForStmt(self: *Sema, for_stmt: ast.ForStmt, scope: *Scope) Error!ir.ForStmt {
         const header = try self.analyseForHeader(.stmt, for_stmt, scope);
 
-        // only the body is inside the loop: a `break` in a subject belongs to an enclosing loop
-        self.loop_depth += 1;
-        defer self.loop_depth -= 1;
+        const parallel: ?ir.Parallel = if (for_stmt.parallel) |parallel|
+            try self.analyseParallel(parallel, scope)
+        else
+            null;
+
+        const prev_loop_context = self.setLoopContext(.{
+            .continuable = parallel == null,
+            .breakable = true,
+        });
+        defer self.restoreLoopContext(prev_loop_context);
 
         const body = try self.analyseStatements(for_stmt.body, header.scope);
 
         return .{
+            .parallel = parallel,
             .subjects = header.subjects,
             .captures = header.captures,
             .body = .{
@@ -1330,9 +1357,8 @@ pub const Sema = struct {
         }
         errdefer self.lambda_instances.getPtr(key).?.* = .failed;
 
-        const prev_loop_depth = self.loop_depth;
-        self.loop_depth = 0;
-        defer self.loop_depth = prev_loop_depth;
+        const prev_loop_context = self.setLoopContext(.default);
+        defer self.restoreLoopContext(prev_loop_context);
 
         // the body of an instance is real code (concrete parameter types), even when the instance
         // is requested from inside another lambda's template
@@ -2181,17 +2207,31 @@ pub const Sema = struct {
                     .type = result.type,
                 };
             },
-            inline .@"continue", .@"break" => |token, tag| {
-                if (self.loop_depth == 0) {
+            .@"continue" => |token| {
+                if (self.loop_context.continuable == false) {
                     try self.diagnostics.err(
                         token.span,
-                        "'{t}' outside of a loop",
-                        .{tag},
+                        "continue outside continuable context",
+                        .{},
+                    );
+                }
+                return .{
+                    .expr = .@"continue",
+                    .type = .noreturn,
+                    .is_static = true,
+                };
+            },
+            .@"break" => |token| {
+                if (self.loop_context.breakable == false) {
+                    try self.diagnostics.err(
+                        token.span,
+                        "'break' outside breakable context",
+                        .{},
                     );
                 }
 
                 return .{
-                    .expr = @unionInit(ir.Expr, @tagName(tag), {}),
+                    .expr = .@"break",
                     .type = .noreturn,
                     .is_static = true,
                 };
@@ -2319,13 +2359,38 @@ pub const Sema = struct {
             .is_static = is_static,
         };
     }
+    pub fn analyseParallel(self: *Sema, parallel: ast.Parallel, scope: *Scope) Error!ir.Parallel {
+        if (parallel.jobs) |jobs_node| {
+            var result = try self.analyseExprPartial(jobs_node, scope);
+            _ = try self.rejectNoreturn(jobs_node, &result, "parallel jobs number", .{});
+
+            if (result.type != .number and result.type != .unknown) {
+                try self.diagnostics.err(
+                    jobs_node.node.trimmedSpan(),
+                    "jobs number must be a number: expected '{f}', got '{f}'",
+                    .{ @as(Type, .number), result.type },
+                );
+            }
+
+            return .{ .jobs = result.expr };
+        }
+
+        return .{ .jobs = null };
+    }
 
     fn analyseForExpr(self: *Sema, for_expr: ast.ForExpr, scope: *Scope) Error!ExprResult(ir.ForExpr) {
         const header = try self.analyseForHeader(.expr, for_expr, scope);
 
-        // only the body is inside the loop: a `break` in a subject belongs to an enclosing loop
-        self.loop_depth += 1;
-        defer self.loop_depth -= 1;
+        const parallel: ?ir.Parallel = if (for_expr.parallel) |parallel|
+            try self.analyseParallel(parallel, scope)
+        else
+            null;
+
+        const prev_loop_ctx = self.setLoopContext(.{
+            .continuable = true,
+            .breakable = parallel == null,
+        });
+        defer self.restoreLoopContext(prev_loop_ctx);
 
         // the body may be an incomplete list too (`for(xs) |x| []`), which the context of the
         // whole `for` can complete, so it is analysed as partial
@@ -2340,6 +2405,7 @@ pub const Sema = struct {
 
         return .{
             .expr = .{
+                .parallel = parallel,
                 .subjects = header.subjects,
                 .captures = header.captures,
                 .scope = header.scope,
