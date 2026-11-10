@@ -208,14 +208,12 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
             if (final_range.right) |right| {
                 const iterations_count: usize = @intCast(right - final_range.left);
 
-                if (for_stmt.parallel) |p| {
-                    const jobs_count: usize = blk: {
-                        if (p.jobs) |*jobs_expr| {
-                            const jobs_value = try self.evaluateExpr(cwd, scope, jobs_expr);
-                            break :blk @intCast(integerize(jobs_value.number));
-                        }
-                        break :blk self.options.jobs;
-                    };
+                if (for_stmt.parallel) |*p| {
+                    const jobs_count: usize = try self.evaluateParallelJobsCount(
+                        cwd,
+                        scope,
+                        p,
+                    );
                     var threaded: std.Io.Threaded = .init(self.allocator, .{
                         .async_limit = .limited(jobs_count),
                     });
@@ -352,10 +350,76 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                 in_stmt.body.statements,
             );
         },
+        .parallel_block => |parallel_block| {
+            const jobs_count: usize = try self.evaluateParallelJobsCount(
+                cwd,
+                scope,
+                &parallel_block.parallel,
+            );
+
+            var threaded: std.Io.Threaded = .init(self.allocator, .{
+                .async_limit = .limited(jobs_count),
+            });
+            defer threaded.deinit();
+
+            const threaded_io = threaded.io();
+
+            const Job = struct {
+                stmt_scope: *Scope,
+
+                fn deinit(s: *@This()) void {
+                    s.stmt_scope.destroy();
+                }
+
+                fn process(runtime: *Runtime, dir: std.Io.Dir, stmt_scope: *Scope, target_stmt: *const ir.Statement) Error!void {
+                    try runtime.main(
+                        dir,
+                        stmt_scope,
+                        target_stmt,
+                    );
+                }
+            };
+            const jobs = try self.allocator.alloc(Job, parallel_block.statements.len);
+            defer self.allocator.free(jobs);
+
+            const results = try self.allocator.alloc(std.Io.Future(Error!void), parallel_block.statements.len);
+            defer self.allocator.free(results);
+
+            for (parallel_block.statements, 0..) |*parallel_stmt, idx| {
+                const stmt_scope = try Scope.create(
+                    scope,
+                    self.allocator,
+                    parallel_stmt.scope,
+                );
+
+                results[idx] = threaded_io.async(Job.process, .{
+                    self,
+                    cwd,
+                    stmt_scope,
+                    &parallel_stmt.statement,
+                });
+
+                jobs[idx] = .{ .stmt_scope = stmt_scope };
+            }
+            defer for (jobs) |*j| j.deinit();
+
+            for (results) |*r| {
+                try r.await(threaded_io);
+            }
+        },
         .expr => |*expr| {
             _ = try self.evaluateExpr(cwd, scope, expr);
         },
     }
+}
+
+fn evaluateParallelJobsCount(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, parallel: *const ir.Parallel) Error!usize {
+    if (parallel.jobs) |*jobs_expr| {
+        const value = try self.evaluateExpr(cwd, scope, jobs_expr);
+        return @intCast(integerize(value.number));
+    }
+
+    return self.options.jobs;
 }
 
 fn handleTaskCall(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, task_call: *const ir.TaskCall) Error!void {
@@ -604,15 +668,12 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                 const iterations_count: usize = @intCast(right - final_range.left);
 
                 // handle parallel for expr
-                if (for_expr.parallel) |p| {
-                    const jobs_count: usize = blk: {
-                        if (p.jobs) |*jobs_expr| {
-                            const jobs_value = try self.evaluateExpr(cwd, scope, jobs_expr);
-                            break :blk @intCast(integerize(jobs_value.number));
-                        }
-                        break :blk self.options.jobs;
-                    };
-
+                if (for_expr.parallel) |*p| {
+                    const jobs_count: usize = try self.evaluateParallelJobsCount(
+                        cwd,
+                        scope,
+                        p,
+                    );
                     var threaded = std.Io.Threaded.init(self.allocator, .{
                         .async_limit = .limited(jobs_count),
                     });

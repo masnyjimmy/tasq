@@ -1005,6 +1005,9 @@ pub const Sema = struct {
             .in => |in_stmt| .{
                 .in_stmt = try self.analyseInStmt(in_stmt, scope),
             },
+            .parallel_block => |parallel_block| .{
+                .parallel_block = try self.analyseParallelBlock(parallel_block, scope),
+            },
             .expr => |inner| {
                 const expr = inner orelse return Error.Incomplete;
                 const result = try self.analyseExpr(expr, scope);
@@ -1021,6 +1024,33 @@ pub const Sema = struct {
 
                 return .{ .expr = result.expr };
             },
+        };
+    }
+
+    fn analyseParallelBlock(self: *Sema, parallel_block: ast.ParallelBlock, scope: *Scope) Error!ir.ParallelBlock {
+        const parallel = try self.analyseParallel(parallel_block.parallel, scope);
+
+        var statements: std.ArrayList(ir.ParallelBlockStatement) = try .initCapacity(self.arena.allocator(), parallel_block.statements.count());
+
+        var it = parallel_block.statements.iter();
+
+        while (it.next()) |stmt_node| {
+            //TODO: add warining, if its non value discard binding
+            const stmt_scope = try self.createScope(scope, stmt_node.node);
+            const stmt = self.analyseStatement(stmt_node, scope) catch |err| switch (err) {
+                Error.Incomplete => continue,
+                else => return err,
+            };
+
+            statements.appendAssumeCapacity(.{
+                .scope = stmt_scope,
+                .statement = stmt,
+            });
+        }
+
+        return .{
+            .parallel = parallel,
+            .statements = statements.items,
         };
     }
 

@@ -123,7 +123,18 @@ pub const Statement = union(enum) {
     switch_stmt: SwitchStmt,
     if_stmt: IfStmt,
     in_stmt: InStmt,
+    parallel_block: ParallelBlock,
     expr: Expr, // else
+};
+
+pub const ParallelBlock = struct {
+    parallel: Parallel,
+    statements: []const ParallelBlockStatement,
+};
+
+pub const ParallelBlockStatement = struct {
+    scope: *Scope,
+    statement: Statement,
 };
 
 pub const InStmt = struct {

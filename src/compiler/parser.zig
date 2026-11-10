@@ -30,8 +30,9 @@ const EXPR_START: FollowSet = .set(&.{
 // a list literal, not anywhere an expression may appear.
 const LIST_ELEM_START: FollowSet = EXPR_START.with(&.{.triple_dot});
 const STMT_START: FollowSet = FollowSet.set(&.{
-    .ident,  .if_kw,  .switch_kw,
-    .for_kw, .dcolon, .dollar,
+    .ident,       .if_kw,  .switch_kw,
+    .for_kw,      .dcolon, .dollar,
+    .parallel_kw,
 }).withSet(EXPR_START);
 
 const SWITCH_CASE_START: FollowSet = EXPR_START.with(&.{.else_kw});
@@ -117,6 +118,7 @@ pub const Parser = struct {
         @"switch",
         @"for",
         in,
+        parallel,
         expr,
     };
     fn classifyStmt(self: *Parser) Error!StmtKind {
@@ -126,6 +128,7 @@ pub const Parser = struct {
             .switch_kw => .@"switch",
             .for_kw => .@"for",
             .in_kw => .in,
+            .parallel_kw => .parallel,
             .dcolon => .task_call,
             .ident, .lparen => blk: {
                 if (try self.atBinding()) break :blk .binding;
@@ -454,6 +457,7 @@ pub const Parser = struct {
             .@"switch" => try self.parseSwitch(.stmt, follow),
             .@"for" => try self.parseFor(.stmt, follow),
             .in => try self.parseIn(.stmt, follow),
+            .parallel => try self.parseParallelBlock(follow),
             .expr => {
                 try self.open();
                 try self.parseExpr(follow);
@@ -490,6 +494,23 @@ pub const Parser = struct {
             //     try self.close(.expr_stmt);
             // },
         }
+    }
+
+    fn parseParallelBlock(self: *Parser, follow: FollowSet) Error!void {
+        try self.open();
+
+        try self.parseParallel(follow.with(&.{.lbrace}));
+
+        try self.open();
+        {
+            try self.expect(.lbrace, follow.withSet(STMT_START));
+            while (!try self.atHardStop())
+                try self.parseStatement(follow.with(&.{.rbrace}));
+            try self.expect(.rbrace, follow);
+        }
+        try self.close(.stmt_block);
+
+        try self.close(.parallel_block);
     }
 
     fn parseProcess(self: *Parser, follow: FollowSet, comptime target: enum { stmt, expr }) Error!void {
