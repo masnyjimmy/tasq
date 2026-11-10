@@ -80,7 +80,7 @@ pub fn sortTokens(tokens: []RawToken) !void {
 }
 
 const CURRENT_PLATFORM_ATTRIBUTE_ID = blk: {
-    const attr_def = compiler.attributes.definitions.get(@tagName(compiler.platform.tag), null).?;
+    const attr_def = compiler.attributes.definitions.get(@tagName(lib.platform.tag), null).?;
     break :blk attr_def.type;
 };
 
@@ -364,6 +364,7 @@ pub const Collector = struct {
             .fallback_kw,
             .with_kw,
             .in_kw,
+            .parallel_kw,
             => .keyword,
 
             // constants

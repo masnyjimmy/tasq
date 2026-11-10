@@ -4,8 +4,6 @@ const lib = @import("lib");
 pub const Diagnostics = @import("Diagnostics.zig");
 pub const Span = @import("Span.zig");
 
-pub const platform = @import("platform.zig");
-
 const lexer_mod = @import("lexer.zig");
 pub const Lexer = lexer_mod.Lexer;
 

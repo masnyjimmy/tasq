@@ -205,36 +205,114 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
 
             const final_range = clampRanges(ranges);
 
-            const for_scope = try Scope.create(scope, self.allocator, for_stmt.body.scope);
-            defer for_scope.destroy();
-
-            var idx = final_range.left;
             if (final_range.right) |right| {
-                while (idx < right) : (idx += 1) {
-                    defer for_scope.clearSymbols();
-                    for (for_stmt.captures, 0..) |capture, j| {
-                        const value: Value = if (values[j]) |value|
-                            value.list.items[@intCast(idx)]
-                        else
-                            .{ .number = @floatFromInt(idx) };
+                const iterations_count: usize = @intCast(right - final_range.left);
 
-                        _ = try self.destructure(
-                            ir.Capture,
-                            cwd,
-                            for_scope,
-                            capture.target,
-                            value,
-                            null,
-                        );
-                    }
+                if (for_stmt.parallel) |p| {
+                    const jobs_count: usize = blk: {
+                        if (p.jobs) |*jobs_expr| {
+                            const jobs_value = try self.evaluateExpr(cwd, scope, jobs_expr);
+                            break :blk @intCast(integerize(jobs_value.number));
+                        }
+                        break :blk self.options.jobs;
+                    };
+                    var threaded: std.Io.Threaded = .init(self.allocator, .{
+                        .async_limit = .limited(jobs_count),
+                    });
+                    defer threaded.deinit();
 
-                    self.runBlock(cwd, for_scope, for_stmt.body.statements) catch |err| switch (err) {
-                        Error.Continue => continue,
-                        Error.Break => break,
-                        else => return err,
+                    const threaded_io = threaded.io();
+
+                    const Job = struct {
+                        iter_scope: *Scope,
+
+                        fn deinit(s: *@This()) void {
+                            s.iter_scope.destroy();
+                        }
+
+                        fn process(runtime: *Runtime, dir: std.Io.Dir, iter_scope: *Scope, statements: []const ir.Statement) Error!void {
+                            try runtime.runBlock(dir, iter_scope, statements);
+                        }
                     };
 
-                    for_scope.clearSymbols();
+                    const jobs = try self.allocator.alloc(Job, iterations_count);
+                    defer self.allocator.free(jobs);
+
+                    const results = try self.allocator.alloc(std.Io.Future(Error!void), iterations_count);
+                    defer self.allocator.free(results);
+
+                    for (0..iterations_count) |i| {
+                        const item_index = @as(usize, @intCast(final_range.left)) + i;
+                        const iter_scope = try Scope.create(
+                            scope,
+                            self.allocator,
+                            for_stmt.body.scope,
+                        );
+                        for (for_stmt.captures, 0..) |capture, j| {
+                            const value: Value = if (values[j]) |value|
+                                value.list.items[@intCast(item_index)]
+                            else
+                                .{ .number = @floatFromInt(item_index) };
+
+                            _ = try self.destructure(
+                                ir.Capture,
+                                cwd,
+                                iter_scope,
+                                capture.target,
+                                value,
+                                null,
+                            );
+
+                            jobs[i] = .{ .iter_scope = iter_scope };
+                            results[i] = threaded_io.async(
+                                Job.process,
+                                .{
+                                    self,
+                                    cwd,
+                                    iter_scope,
+                                    for_stmt.body.statements,
+                                },
+                            );
+                        }
+                    }
+                    defer for (jobs) |*j| j.deinit();
+
+                    for (results) |*r| {
+                        r.await(threaded_io) catch |err| switch (err) {
+                            Error.Break => continue,
+                            Error.Continue => unreachable,
+                            else => return err,
+                        };
+                    }
+                } else {
+                    const for_scope = try Scope.create(scope, self.allocator, for_stmt.body.scope);
+                    defer for_scope.destroy();
+
+                    for (0..iterations_count) |i| {
+                        const item_index = @as(usize, @intCast(final_range.left)) + i;
+                        defer for_scope.clearSymbols();
+
+                        for (for_stmt.captures, 0..) |capture, j| {
+                            const value: Value = if (values[j]) |value|
+                                value.list.items[item_index]
+                            else
+                                .{ .number = @floatFromInt(item_index) };
+
+                            _ = try self.destructure(
+                                ir.Capture,
+                                cwd,
+                                for_scope,
+                                capture.target,
+                                value,
+                                null,
+                            );
+                        }
+                        self.runBlock(cwd, for_scope, for_stmt.body.statements) catch |err| switch (err) {
+                            Error.Continue => continue,
+                            Error.Break => break,
+                            else => return err,
+                        };
+                    }
                 }
             }
         },
@@ -522,40 +600,134 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
 
             var result: std.ArrayList(Value) = .empty;
 
-            const for_scope = try Scope.create(scope, self.allocator, for_expr.scope);
-            defer for_scope.destroy();
-
-            var idx = final_range.left;
-
             if (final_range.right) |right| {
-                while (idx < right) : (idx += 1) {
-                    defer for_scope.clearSymbols();
-                    for (for_expr.captures, 0..) |capture, j| {
-                        const value: Value = if (values[j]) |value|
-                            value.list.items[@intCast(idx)]
-                        else
-                            .{ .number = @floatFromInt(idx) };
+                const iterations_count: usize = @intCast(right - final_range.left);
 
-                        _ = try self.destructure(
-                            ir.Capture,
-                            cwd,
-                            for_scope,
-                            capture.target,
-                            value,
-                            null,
-                        );
-                    }
-
-                    const item = self.evaluateExpr(cwd, for_scope, &for_expr.body) catch |err| switch (err) {
-                        Error.Continue => continue,
-                        Error.Break => break,
-                        else => return err,
+                // handle parallel for expr
+                if (for_expr.parallel) |p| {
+                    const jobs_count: usize = blk: {
+                        if (p.jobs) |*jobs_expr| {
+                            const jobs_value = try self.evaluateExpr(cwd, scope, jobs_expr);
+                            break :blk @intCast(integerize(jobs_value.number));
+                        }
+                        break :blk self.options.jobs;
                     };
 
-                    try result.append(
-                        scope.arena.allocator(),
-                        try item.clone(scope.arena.allocator()),
-                    );
+                    var threaded = std.Io.Threaded.init(self.allocator, .{
+                        .async_limit = .limited(jobs_count),
+                    });
+                    defer threaded.deinit();
+
+                    const threaded_io = threaded.io();
+
+                    const Job = struct {
+                        iter_scope: *Scope,
+
+                        fn deinit(s: *@This()) void {
+                            s.iter_scope.destroy();
+                        }
+
+                        fn process(runtime: *Runtime, dir: std.Io.Dir, iter_scope: *Scope, iter_expr: *const ir.Expr) Error!Value {
+                            return try runtime.evaluateExpr(
+                                dir,
+                                iter_scope,
+                                iter_expr,
+                            );
+                        }
+                    };
+
+                    const jobs = try self.allocator.alloc(Job, iterations_count);
+                    defer self.allocator.free(jobs);
+
+                    const results = try self.allocator.alloc(std.Io.Future(Error!Value), iterations_count);
+                    defer self.allocator.free(results);
+
+                    for (0..iterations_count) |i| {
+                        const item_index = @as(usize, @intCast(final_range.left)) + i;
+                        const iter_scope = try Scope.create(
+                            scope,
+                            self.allocator,
+                            for_expr.scope,
+                        );
+                        for (for_expr.captures, 0..) |capture, j| {
+                            const value: Value = if (values[j]) |value|
+                                value.list.items[@intCast(item_index)]
+                            else
+                                .{ .number = @floatFromInt(item_index) };
+
+                            _ = try self.destructure(
+                                ir.Capture,
+                                cwd,
+                                iter_scope,
+                                capture.target,
+                                value,
+                                null,
+                            );
+                        }
+
+                        jobs[i] = .{ .iter_scope = iter_scope };
+                        results[i] = threaded_io.async(
+                            Job.process,
+                            .{
+                                self,
+                                cwd,
+                                iter_scope,
+                                &for_expr.body,
+                            },
+                        );
+                    }
+                    defer for (jobs) |*j| j.deinit();
+
+                    for (results) |*r| {
+                        const value = r.await(threaded_io);
+
+                        if (value) |v| {
+                            try result.append(scope.arena.allocator(), v);
+                        } else |err| switch (err) {
+                            Error.Continue => continue,
+                            Error.Break => unreachable,
+                            else => return err,
+                        }
+                    }
+                } else {
+                    const for_scope = try Scope.create(scope, self.allocator, for_expr.scope);
+                    defer for_scope.destroy();
+
+                    for (0..iterations_count) |i| {
+                        const item_index = @as(usize, @intCast(final_range.left)) + i;
+                        defer for_scope.clearSymbols();
+
+                        for (for_expr.captures, 0..) |capture, j| {
+                            const value: Value = if (values[j]) |value|
+                                value.list.items[item_index]
+                            else
+                                .{ .number = @floatFromInt(item_index) };
+
+                            _ = try self.destructure(
+                                ir.Capture,
+                                cwd,
+                                for_scope,
+                                capture.target,
+                                value,
+                                null,
+                            );
+                        }
+
+                        const item = self.evaluateExpr(
+                            cwd,
+                            for_scope,
+                            &for_expr.body,
+                        ) catch |err| switch (err) {
+                            Error.Continue => continue,
+                            Error.Break => break,
+                            else => return err,
+                        };
+
+                        try result.append(
+                            scope.arena.allocator(),
+                            try item.clone(scope.arena.allocator()),
+                        );
+                    }
                 }
             }
             return .{
