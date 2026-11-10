@@ -1,10 +1,10 @@
 const std = @import("std");
 
 const lib = @import("lib");
+const platform = lib.platform;
 const program = lib.program;
 
 const compiler = @import("compiler");
-const platform = compiler.platform;
 const functions = compiler.functions;
 const Type = compiler.Type;
 const ir = compiler.ir;

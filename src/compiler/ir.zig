@@ -20,6 +20,9 @@ const Scope = @import("scope.zig").Scope;
 
 const TaskId = @import("taskId.zig");
 
+/// compiled settings
+pub const Options = opt.Options;
+
 pub const File = struct {
     scope: *Scope,
     options: Options,
@@ -49,13 +52,6 @@ pub const File = struct {
 
         return null;
     }
-};
-
-/// compiled settings
-pub const Options = struct {
-    shell: []const []const u8,
-    dotenv: ?[]const u8 = null,
-    working_dir: ?[]const u8 = null,
 };
 
 pub const Group = struct {

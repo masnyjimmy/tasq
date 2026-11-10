@@ -1,10 +1,33 @@
 const std = @import("std");
-const meta = @import("meta.zig");
-const MetaType = meta.Type;
 
 const lib = @import("lib");
 const enums = lib.enums;
 const ct = lib.@"comptime";
+
+const meta = @import("meta.zig");
+const MetaType = meta.Type;
+
+const ir = @import("ir.zig");
+
+pub const Options = struct {
+    shell: []const []const u8,
+    dotenv: ?[]const u8 = null,
+    working_dir: ?[]const u8 = null,
+    jobs: usize = 1,
+
+    pub fn getDefaults() Options {
+        return switch (lib.platform.tag) {
+            .windows => .{
+                .shell = &.{ "cmd", "/C" },
+                .jobs = std.Thread.getCpuCount() catch unreachable,
+            },
+            .linux => .{
+                .shell = &.{ "/bin/bash", "-c" },
+                .jobs = std.Thread.getCpuCount() catch 1,
+            },
+        };
+    }
+};
 
 pub fn formatValueTypes(allocator: std.mem.Allocator, def: definitions.DefinitionT) ![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
@@ -61,7 +84,7 @@ fn OptionsGroup(comptime specs: []const Spec) type {
         for (specs, 0..) |spec, idx| {
             defs[idx] = def: {
                 var out = ct.copyFields(Definition, spec);
-                out.id = @enumFromInt(idx);
+                out.id = @fromBackingInt(@intCast(idx));
 
                 break :def out;
             };
@@ -78,7 +101,7 @@ fn OptionsGroup(comptime specs: []const Spec) type {
 
         pub fn get(name: []const u8) ?Definition {
             const t = name_map.get(name) orelse return null;
-            return defs[@intFromEnum(t)];
+            return defs[@backingInt(t)];
         }
     };
 }

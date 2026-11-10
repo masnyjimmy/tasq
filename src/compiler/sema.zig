@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const lib = @import("lib");
+const platform = lib.platform;
 
 const ast = @import("ast.zig");
 
@@ -23,7 +24,6 @@ const attrib = @import("attributes.zig");
 const functions = @import("functions.zig");
 
 const options = @import("options.zig");
-const platform = @import("platform.zig");
 
 const Diagnostics = @import("Diagnostics.zig");
 
@@ -3291,7 +3291,7 @@ const OptionsResolver = struct {
     }
 
     fn final(self: *OptionsResolver) ir.Options {
-        var out: ir.Options = platform.default_options;
+        var out: ir.Options = .getDefaults();
 
         var it = self.resolved.iterator();
 
