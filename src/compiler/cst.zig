@@ -2,6 +2,16 @@ const std = @import("std");
 pub const Token = @import("Token.zig");
 const Span = @import("Span.zig");
 
+// Slot shapes. These are the only shapes the parser may produce:
+//
+//   token slot:  [skipped]? ( Token | Missing )
+//   node slot:   ( Node | error_tree )
+//
+// Consumer rules:
+//   - `.skipped` is invisible to every scan.
+//   - `.error_tree` is NEVER invisible; it is a failed node slot.
+//   - `.missing` only ever appears in a token slot.
+//   - Anything else unexpected is an AST-definition bug, so assert.
 pub const NodeKind = enum {
     source_file,
     group,
@@ -77,12 +87,46 @@ pub const NodeKind = enum {
 
     with,
 
+    /// Junk tokens skipped while hunting for an expected TOKEN.
+    ///
+    /// Emitted ONLY by `Parser.expectOneOf`. Never stands in for a node.
+    ///
+    /// Invariants:
+    ///   - never empty: contains at least one non-trivia token
+    ///   - directly followed (ignoring trivia) by either the wanted token
+    ///     or a `.missing` marker, so the two form ONE failed token slot
+    ///   - semantically transparent: iterators skip it entirely, as if the
+    ///     junk weren't there
+    ///
+    /// Example: `"parallel" = }` where `=>` was expected gives
+    ///   [pattern, skipped[`=`], Missing, ...]
+    skipped,
+    /// A NODE that should be here but couldn't be parsed.
+    ///
+    /// Emitted by `Parser.unexpectedNode` (and stray-element recovery such as
+    /// in `parseSetBody`). It occupies the slot a real node would have
+    /// occupied, so `Iterator.expectNode` reports it as a failed slot
+    /// (returns null, `state = .error`).
+    ///
+    /// Invariants:
+    ///   - never emitted while hunting for a token (that's `.skipped`)
+    ///   - may be EMPTY (zero-width) when the follow set matched immediately
+    ///   - never transparent: one error_tree = one failed node slot
+    ///   - appears only where a node is expected
     error_tree,
 };
 
 pub const Element = union(enum) {
     token: Token,
     node: *Node,
+    /// Zero-width marker for ONE expected TOKEN that is absent.
+    ///
+    /// Emitted by `Parser.missing()` (and by `advance()` if the cursor is
+    /// exhausted). Never stands in for a node; a failed node is an
+    /// `.error_tree`, or a real node whose contents are `.missing`
+    /// (e.g. `stmt_block` with no body).
+    ///
+    /// May be preceded by a `.skipped` node: "found junk, expected token".
     missing: Span,
 
     pub fn span(self: *const Element) Span {
@@ -262,15 +306,20 @@ pub const Iterator = struct {
     /// Index of the next non-trivia element that is a `.node`, skipping
     /// over any interleaved tokens or `.missing` markers along the way.
     ///
-    /// Safe because, in this grammar, `.missing` only ever stands in for
-    /// a failed TOKEN — a failed node always shows up as a real `.node`
-    /// of kind `.error_tree` instead, never as `.missing`. If that
-    /// invariant ever changes, this needs revisiting.
+    /// Safe because, in this grammar:
+    ///   - `.missing` only ever stands in for a failed TOKEN
+    ///   - junk in a token slot is wrapped in `.skipped`, which is skipped here
+    ///   - a failed NODE always shows up as a real `.node` of kind
+    ///     `.error_tree`, which is NOT skipped.
+    /// If any of these change, this needs revisiting.
     fn skipToNode(self: *Iterator) ?usize {
         var i = self.idx;
         while (i < self.items.len) : (i += 1) {
             switch (self.items[i]) {
-                .node => return i,
+                .node => |n| switch (n.kind) {
+                    .skipped => {},
+                    else => return i,
+                },
                 else => {},
             }
         }
@@ -407,6 +456,10 @@ pub const Iterator = struct {
         return switch (element) {
             .token => |t| switch (t.kind) {
                 .whitespace, .comment => true,
+                else => false,
+            },
+            .node => |n| switch (n.kind) {
+                .skipped => true,
                 else => false,
             },
             else => false,

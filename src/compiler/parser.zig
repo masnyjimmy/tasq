@@ -1111,7 +1111,7 @@ pub const Parser = struct {
         while (!try self.atHardStop() and !try self.atAny(wanted) and !follow.contains(try self.peek()))
             try self.skipOne();
 
-        try self.close(.error_tree);
+        try self.close(.skipped);
 
         if (try self.atAny(wanted)) {
             try self.advance();
