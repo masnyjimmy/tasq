@@ -1,0 +1,346 @@
+// =====================================================================
+// Parallelism tests for tasq
+//
+// Run everything:        tasq all -f parallel_tests
+// Run a single test:     tasq t_block -f parallel_tests
+// Known-gap tests:       tasq gaps -f parallel_tests   (expected to FAIL for now)
+//
+// Requirements: a unix shell (sleep, touch, mktemp, date, rm), and `tasq`
+// on PATH for t_failure_drains (it runs tasq recursively).
+// If you rename this file, change `self_file` below.
+//
+// Timing: `date +%s` truncates to whole seconds, so a measured duration can
+// be 1s longer than the real one. Every expectation is therefore a band
+// (for example "2-3s"), and the sleeps are 2s so the bands do not overlap:
+//     fully parallel   -> 2-3s
+//     two at a time    -> 4-5s
+//     one at a time    -> 6-7s
+// Total runtime of `all` is roughly 45 seconds.
+// =====================================================================
+
+self_file := "parallel_tests"
+
+// A static binding with a process: must be evaluated lazily, exactly once,
+// even when several parallel branches reference it at the same moment.
+// (`mktemp -u` prints a different random name on every evaluation.)
+slow_static := $`sleep 1 && mktemp -u`
+
+
+// ---------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------
+
+[private]
+task assert_between(name: string, elapsed: number, lo: number, hi: number) {
+    if (elapsed >= lo and elapsed <= hi) {
+        @print(`PASS  {name} ({elapsed}s, expected {lo}-{hi}s)`)
+    } else {
+        @error(`FAIL  {name}: took {elapsed}s, expected {lo}-{hi}s`)
+    }
+}
+
+[private]
+task assert_equal(name: string, actual: string, expected: string) {
+    if (actual == expected) {
+        @print(`PASS  {name}: {actual}`)
+    } else {
+        @error(`FAIL  {name}: got {actual}, expected {expected}`)
+    }
+}
+
+[private]
+task reset_tmp {
+    $[noecho]`rm -rf tasq_parallel_tmp && mkdir tasq_parallel_tmp`
+}
+
+[private]
+task touch_later(id: string) {
+    $`sleep 2 && touch tasq_parallel_tmp/{id}`
+}
+
+
+// ---------------------------------------------------------------------
+// 0. Baseline: the same work, sequential
+// ---------------------------------------------------------------------
+
+task t_sequential_baseline {
+    start := @parse_number($`date +%s`) fallback @error("unable to parse number")
+    _ := for([1, 2, 3]) |n| $`sleep 2 && echo {n}`
+    end := @parse_number($`date +%s`) fallback @error("unable to parse number")
+
+    assert_between("sequential baseline", end - start, 6, 7)
+}
+
+
+// ---------------------------------------------------------------------
+// 1. parallel for (expression)
+// ---------------------------------------------------------------------
+
+// Everything overlaps. The results are strings produced inside iteration
+// scopes that are already destroyed when the loop ends, so this also checks
+// that values are cloned out correctly.
+task t_for_expr_parallel {
+    start := @parse_number($`date +%s`) fallback @error("unable to parse number")
+    list := for([1, 2, 3]) parallel |n| $`sleep 2 && echo {n}`
+    end := @parse_number($`date +%s`) fallback @error("unable to parse number")
+
+    assert_between("parallel for expression", end - start, 2, 3)
+    assert_equal("parallel for expression result", `{list}`, "[1, 2, 3]")
+}
+
+// The first element finishes last; the result must still be in input order.
+task t_for_expr_order {
+    list := for([3, 1, 2]) parallel |n| $`sleep {n} && echo {n}`
+
+    assert_equal("results keep input order", `{list}`, "[3, 1, 2]")
+}
+
+// `continue` drops the element and the order of the rest is kept.
+task t_for_expr_continue {
+    list := for([1, 2, 3, 4, 5, 6]) parallel |n| if (n % 2 == 0) continue else n * 10
+
+    assert_equal("continue filters in a parallel for", `{list}`, "[10, 30, 50]")
+}
+
+// parallel(2) over 3 items: two run together, then the third.
+task t_for_expr_limit {
+    start := @parse_number($`date +%s`) fallback @error("unable to parse number")
+    _ := for([1, 2, 3]) parallel(2) |n| $`sleep 2 && echo {n}`
+    end := @parse_number($`date +%s`) fallback @error("unable to parse number")
+
+    assert_between("parallel(2) over 3 items", end - start, 4, 5)
+}
+
+// The limit is a normal expression.
+task t_for_expr_computed_limit {
+    limit := 1
+    start := @parse_number($`date +%s`) fallback @error("unable to parse number")
+    _ := for([1, 2]) parallel(limit) |n| $`sleep 2 && echo {n}`
+    end := @parse_number($`date +%s`) fallback @error("unable to parse number")
+
+    assert_between("parallel(limit) with limit = 1", end - start, 4, 5)
+}
+
+// Whole-number contexts round up (spec 2.1): 1.2 becomes 2.
+task t_for_expr_limit_rounding {
+    start := @parse_number($`date +%s`) fallback @error("unable to parse number")
+    _ := for([1, 2]) parallel(1.2) |n| $`sleep 2 && echo {n}`
+    end := @parse_number($`date +%s`) fallback @error("unable to parse number")
+
+    assert_between("parallel(1.2) rounds up to 2", end - start, 2, 3)
+}
+
+// Parallel loops inside parallel loops. Result is a list of lists.
+task t_nested {
+    start := @parse_number($`date +%s`) fallback @error("unable to parse number")
+    grid := for(["a", "b"]) parallel(2) |x| for([1, 2]) parallel(2) |y| $`sleep 2 && echo {x}{y}`
+    end := @parse_number($`date +%s`) fallback @error("unable to parse number")
+
+    assert_between("nested parallel for", end - start, 2, 3)
+    assert_equal("nested result", `{grid}`, "[[a1, a2], [b1, b2]]")
+}
+
+// Branches see the task's [env].
+[env: ("TASQ_MARK", "hello")]
+task t_env_in_branches {
+    list := for(["a", "b"]) parallel |s| $`echo $TASQ_MARK-{s}`
+
+    assert_equal("env is visible in parallel branches", `{list}`, "[hello-a, hello-b]")
+}
+
+// Four branches reference the same lazy static binding at the same moment.
+// If it is evaluated more than once, the values differ.
+task t_static_binding_once {
+    values := for([1, 2, 3, 4]) parallel |_| slow_static
+
+    assert_equal("static binding evaluated once", `{@len(@unique(values))}`, "1")
+}
+
+
+// ---------------------------------------------------------------------
+// 2. parallel for (statement)
+// ---------------------------------------------------------------------
+
+task t_for_stmt_parallel {
+    reset_tmp()
+    start := @parse_number($`date +%s`) fallback @error("unable to parse number")
+    for([1, 2, 3]) parallel |n| $`sleep 2 && touch tasq_parallel_tmp/item_{n}`
+    end := @parse_number($`date +%s`) fallback @error("unable to parse number")
+
+    assert_between("parallel for statement", end - start, 2, 3)
+    assert_equal("every iteration ran", `{@len(@glob("tasq_parallel_tmp/*"))}`, "3")
+}
+
+// Lock-step with an index, block body, and `continue` (skips n == 2).
+task t_for_stmt_continue {
+    reset_tmp()
+    for([1, 2, 3, 4], 0..) parallel |n, i| {
+        if (n == 2) continue
+        $`touch tasq_parallel_tmp/n{n}_i{i}`
+    }
+
+    assert_equal("continue skipped one iteration", `{@len(@glob("tasq_parallel_tmp/*"))}`, "3")
+    assert_equal("skipped iteration left no file", `{@exists("tasq_parallel_tmp/n2_i1")}`, "false")
+    assert_equal("index capture is correct", `{@exists("tasq_parallel_tmp/n3_i2")}`, "true")
+}
+
+
+// ---------------------------------------------------------------------
+// 3. parallel with
+// ---------------------------------------------------------------------
+
+task t_with_parallel {
+    start := @parse_number($`date +%s`) fallback @error("unable to parse number")
+    result := with(
+        $`sleep 2 && echo one`,
+        $`sleep 2 && echo two`,
+        $`sleep 2 && echo three`
+    ) parallel |a, b, c| `{a},{b},{c}`
+    end := @parse_number($`date +%s`) fallback @error("unable to parse number")
+
+    assert_between("parallel with", end - start, 2, 3)
+    assert_equal("parallel with result", result, "one,two,three")
+}
+
+task t_with_parallel_limit {
+    start := @parse_number($`date +%s`) fallback @error("unable to parse number")
+    _ := with($`sleep 2`, $`sleep 2`, $`sleep 2`) parallel(1) |a, _, _| a
+    end := @parse_number($`date +%s`) fallback @error("unable to parse number")
+
+    assert_between("parallel(1) with 3 subjects", end - start, 6, 7)
+}
+
+// Gather concurrently, then continue with ordinary statements.
+task t_with_tuple_idiom {
+    start := @parse_number($`date +%s`) fallback @error("unable to parse number")
+    x, y := with($`sleep 2 && echo X`, $`sleep 2 && echo Y`) parallel |a, b| (a, b)
+    end := @parse_number($`date +%s`) fallback @error("unable to parse number")
+
+    assert_between("tuple + destructuring idiom", end - start, 2, 3)
+    assert_equal("destructured values", `{x}{y}`, "XY")
+}
+
+// A tuple subject taken apart by a destructuring capture.
+task t_with_destructuring_capture {
+    label := with(("a", 1), $`echo hi`) parallel |(name, n), greeting| `{name}{n}-{greeting}`
+
+    assert_equal("destructuring capture in parallel with", label, "a1-hi")
+}
+
+
+// ---------------------------------------------------------------------
+// 4. parallel block
+// ---------------------------------------------------------------------
+
+// Six different statement kinds as branches: process statements, a task call,
+// `in` (changes only its own branch's directory), `if`, and a nested parallel for.
+task t_block {
+    reset_tmp()
+    $[noecho]`rm -f root_marker`
+
+    start := @parse_number($`date +%s`) fallback @error("unable to parse number")
+    parallel {
+        $`sleep 2 && touch tasq_parallel_tmp/a`
+        $`sleep 2 && touch tasq_parallel_tmp/b`
+        touch_later("c")
+        in("tasq_parallel_tmp") $`sleep 2 && touch from_in`
+        $`sleep 2 && touch root_marker`
+        if (@os() != "windows") $`sleep 2 && touch tasq_parallel_tmp/from_if`
+        for([1, 2]) parallel |n| $`sleep 2 && touch tasq_parallel_tmp/nested_{n}`
+    }
+    end := @parse_number($`date +%s`) fallback @error("unable to parse number")
+
+    assert_between("parallel block", end - start, 2, 3)
+    assert_equal("all branches ran", `{@len(@glob("tasq_parallel_tmp/*"))}`, "7")
+    assert_equal("`in` branch wrote into its directory", `{@exists("tasq_parallel_tmp/from_in")}`, "true")
+    assert_equal("other branch kept the original directory", `{@exists("root_marker")}`, "true")
+    assert_equal("`in` did not leak into the other branch", `{@exists("tasq_parallel_tmp/root_marker")}`, "false")
+
+    $[noecho]`rm -f root_marker`
+}
+
+task t_block_limit {
+    reset_tmp()
+    start := @parse_number($`date +%s`) fallback @error("unable to parse number")
+    parallel(2) {
+        touch_later("a")
+        touch_later("b")
+        touch_later("c")
+    }
+    end := @parse_number($`date +%s`) fallback @error("unable to parse number")
+
+    assert_between("parallel(2) block with 3 branches", end - start, 4, 5)
+    assert_equal("all branches ran", `{@len(@glob("tasq_parallel_tmp/*"))}`, "3")
+}
+
+
+// ---------------------------------------------------------------------
+// Everything that should pass today
+// ---------------------------------------------------------------------
+
+task all {
+    t_sequential_baseline()
+    t_for_expr_parallel()
+    t_for_expr_order()
+    t_for_expr_continue()
+    t_for_expr_limit()
+    t_for_expr_computed_limit()
+    t_for_expr_limit_rounding()
+    t_nested()
+    t_env_in_branches()
+    t_static_binding_once()
+    t_for_stmt_parallel()
+    t_for_stmt_continue()
+    t_with_parallel()
+    t_with_parallel_limit()
+    t_with_tuple_idiom()
+    t_with_destructuring_capture()
+    t_block()
+    t_block_limit()
+
+    $[noecho]`rm -rf tasq_parallel_tmp root_marker`
+    @print("ALL PARALLEL TESTS PASSED")
+}
+
+
+// ---------------------------------------------------------------------
+// Known gaps: expected to FAIL (or crash) until fixed.
+// These test the behavior proposed in tasq-parallelism.md, not what the
+// interpreter does today.
+// ---------------------------------------------------------------------
+
+// Branches must not change the parent's @status_code(). Today the status is
+// a single shared field, so the last finished branch overwrites it.
+task g_status_code_isolation {
+    $[nofail]`exit 7`
+    for([1, 2, 3]) parallel |n| $`true`
+
+    assert_equal("status code is not changed by parallel branches", `{@status_code()}`, "7")
+}
+
+// A limit below 1 should behave like 1 (no crash, no error).
+task g_limit_clamping {
+    start := @parse_number($`date +%s`) fallback @error("unable to parse number")
+    _ := for([1, 2]) parallel(-5) |n| $`sleep 2 && echo {n}`
+    end := @parse_number($`date +%s`) fallback @error("unable to parse number")
+
+    assert_between("parallel(-5) behaves like parallel(1)", end - start, 4, 5)
+}
+
+task gaps {
+    g_status_code_isolation()
+    g_limit_clamping()
+}
+
+
+// ---------------------------------------------------------------------
+// Manual checks (look at the output yourself)
+// ---------------------------------------------------------------------
+
+// Echoed commands and outputs should not be garbled mid-line. Right now they
+// can interleave between branches; grouped per-branch output is the later fix.
+task m_output_interleaving {
+    for(0..4) parallel |i| {
+        $`echo start {i} && sleep 1 && echo end {i}`
+    }
+}
