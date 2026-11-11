@@ -15,7 +15,7 @@ const lib = @import("lib");
 const binary_mod = @import("binary.zig");
 const TaskRunner = @import("TaskRunner.zig");
 const Scope = @import("Scope.zig");
-
+const parallelization = @import("parallelization.zig");
 pub const Runtime = @This();
 
 pub const Error = error{
@@ -133,13 +133,14 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
             else
                 false;
 
-            self.status_code = try self.handleProcess(cwd, scope, .{
+            const status_code = try self.handleProcess(cwd, scope, .{
                 .process = process,
                 .echo = !noecho,
                 .allow_input = true,
             });
+            self.status_code = status_code;
 
-            if (self.status_code != 0 and proc_expr.nofail == false) {
+            if (status_code != 0 and proc_expr.nofail == false) {
                 try self.printer.printStyled(
                     self.allocator,
                     style.@"error",
@@ -147,7 +148,7 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                     \\  on '{s}'
                     \\
                 ,
-                    .{ self.status_code, process },
+                    .{ status_code, process },
                 );
                 return Error.Abort;
             }
@@ -209,79 +210,74 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                 const iterations_count: usize = @intCast(right - final_range.left);
 
                 if (for_stmt.parallel) |*p| {
-                    const jobs_count: usize = try self.evaluateParallelJobsCount(
+                    const jobs_limit: usize = try self.evaluateParallelJobsLimit(
                         cwd,
                         scope,
                         p,
                     );
-                    var threaded: std.Io.Threaded = .init(self.allocator, .{
-                        .async_limit = .limited(jobs_count),
-                    });
-                    defer threaded.deinit();
 
-                    const threaded_io = threaded.io();
+                    const Context = struct {
+                        const Self = @This();
+                        runtime: *Runtime,
+                        dir: std.Io.Dir,
+                        parent_scope: *Scope,
+                        target: *const ir.ForStmt,
+                        values: []?Value,
+                        left: usize,
 
-                    const Job = struct {
-                        iter_scope: *Scope,
+                        fn iteration(ctx: *Self, idx: usize) Error!void {
+                            const item_index = ctx.left + idx;
 
-                        fn deinit(s: *@This()) void {
-                            s.iter_scope.destroy();
-                        }
+                            const iter_scope = try Scope.create(
+                                ctx.parent_scope,
+                                ctx.runtime.allocator,
+                                ctx.target.body.scope,
+                            );
+                            defer iter_scope.destroy();
 
-                        fn process(runtime: *Runtime, dir: std.Io.Dir, iter_scope: *Scope, statements: []const ir.Statement) Error!void {
-                            try runtime.runBlock(dir, iter_scope, statements);
+                            for (ctx.target.captures, 0..) |capture, j| {
+                                const value: Value = if (ctx.values[j]) |value|
+                                    value.list.items[item_index]
+                                else
+                                    .{ .number = @floatFromInt(item_index) };
+                                _ = try ctx.runtime.destructure(
+                                    ir.Capture,
+                                    ctx.dir,
+                                    iter_scope,
+                                    capture.target,
+                                    value,
+                                    null,
+                                );
+                            }
+
+                            ctx.runtime.runBlock(
+                                ctx.dir,
+                                iter_scope,
+                                ctx.target.body.statements,
+                            ) catch |err| switch (err) {
+                                Error.Continue => return,
+                                Error.Break => unreachable,
+                                else => return err,
+                            };
                         }
                     };
 
-                    const jobs = try self.allocator.alloc(Job, iterations_count);
-                    defer self.allocator.free(jobs);
+                    var context: Context = .{
+                        .runtime = self,
+                        .dir = cwd,
+                        .parent_scope = scope,
+                        .target = for_stmt,
+                        .values = values,
+                        .left = @intCast(final_range.left),
+                    };
 
-                    const results = try self.allocator.alloc(std.Io.Future(Error!void), iterations_count);
-                    defer self.allocator.free(results);
-
-                    for (0..iterations_count) |i| {
-                        const item_index = @as(usize, @intCast(final_range.left)) + i;
-                        const iter_scope = try Scope.create(
-                            scope,
-                            self.allocator,
-                            for_stmt.body.scope,
-                        );
-                        for (for_stmt.captures, 0..) |capture, j| {
-                            const value: Value = if (values[j]) |value|
-                                value.list.items[@intCast(item_index)]
-                            else
-                                .{ .number = @floatFromInt(item_index) };
-
-                            _ = try self.destructure(
-                                ir.Capture,
-                                cwd,
-                                iter_scope,
-                                capture.target,
-                                value,
-                                null,
-                            );
-
-                            jobs[i] = .{ .iter_scope = iter_scope };
-                            results[i] = threaded_io.async(
-                                Job.process,
-                                .{
-                                    self,
-                                    cwd,
-                                    iter_scope,
-                                    for_stmt.body.statements,
-                                },
-                            );
-                        }
-                    }
-                    defer for (jobs) |*j| j.deinit();
-
-                    for (results) |*r| {
-                        r.await(threaded_io) catch |err| switch (err) {
-                            Error.Break => continue,
-                            Error.Continue => unreachable,
-                            else => return err,
-                        };
-                    }
+                    try parallelization.runIndexed(
+                        self,
+                        iterations_count,
+                        jobs_limit,
+                        &context,
+                        Context.iteration,
+                    );
                 } else {
                     const for_scope = try Scope.create(scope, self.allocator, for_stmt.body.scope);
                     defer for_scope.destroy();
@@ -350,62 +346,51 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                 in_stmt.body.statements,
             );
         },
-        .parallel_block => |parallel_block| {
-            const jobs_count: usize = try self.evaluateParallelJobsCount(
+        .parallel_block => |*parallel_block| {
+            const jobs_limit: usize = try self.evaluateParallelJobsLimit(
                 cwd,
                 scope,
                 &parallel_block.parallel,
             );
 
-            var threaded: std.Io.Threaded = .init(self.allocator, .{
-                .async_limit = .limited(jobs_count),
-            });
-            defer threaded.deinit();
+            const Context = struct {
+                const Self = @This();
+                runtime: *Runtime,
+                dir: std.Io.Dir,
+                parent_scope: *Scope,
+                block: *const ir.ParallelBlock,
 
-            const threaded_io = threaded.io();
+                fn runStatement(ctx: *Self, idx: usize) Error!void {
+                    const par_stmt = &ctx.block.statements[idx];
+                    const stmt_scope = try Scope.create(
+                        ctx.parent_scope,
+                        ctx.runtime.allocator,
+                        par_stmt.scope,
+                    );
+                    defer stmt_scope.destroy();
 
-            const Job = struct {
-                stmt_scope: *Scope,
-
-                fn deinit(s: *@This()) void {
-                    s.stmt_scope.destroy();
-                }
-
-                fn process(runtime: *Runtime, dir: std.Io.Dir, stmt_scope: *Scope, target_stmt: *const ir.Statement) Error!void {
-                    try runtime.main(
-                        dir,
+                    try ctx.runtime.main(
+                        ctx.dir,
                         stmt_scope,
-                        target_stmt,
+                        &par_stmt.statement,
                     );
                 }
             };
-            const jobs = try self.allocator.alloc(Job, parallel_block.statements.len);
-            defer self.allocator.free(jobs);
 
-            const results = try self.allocator.alloc(std.Io.Future(Error!void), parallel_block.statements.len);
-            defer self.allocator.free(results);
+            var context: Context = .{
+                .runtime = self,
+                .dir = cwd,
+                .parent_scope = scope,
+                .block = parallel_block,
+            };
 
-            for (parallel_block.statements, 0..) |*parallel_stmt, idx| {
-                const stmt_scope = try Scope.create(
-                    scope,
-                    self.allocator,
-                    parallel_stmt.scope,
-                );
-
-                results[idx] = threaded_io.async(Job.process, .{
-                    self,
-                    cwd,
-                    stmt_scope,
-                    &parallel_stmt.statement,
-                });
-
-                jobs[idx] = .{ .stmt_scope = stmt_scope };
-            }
-            defer for (jobs) |*j| j.deinit();
-
-            for (results) |*r| {
-                try r.await(threaded_io);
-            }
+            try parallelization.runIndexed(
+                self,
+                parallel_block.statements.len,
+                jobs_limit,
+                &context,
+                Context.runStatement,
+            );
         },
         .expr => |*expr| {
             _ = try self.evaluateExpr(cwd, scope, expr);
@@ -413,7 +398,7 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
     }
 }
 
-fn evaluateParallelJobsCount(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, parallel: *const ir.Parallel) Error!usize {
+fn evaluateParallelJobsLimit(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, parallel: *const ir.Parallel) Error!usize {
     if (parallel.jobs) |*jobs_expr| {
         const value = try self.evaluateExpr(cwd, scope, jobs_expr);
         return @intCast(integerize(value.number));
@@ -666,90 +651,89 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
 
             if (final_range.right) |right| {
                 const iterations_count: usize = @intCast(right - final_range.left);
-
+                try result.ensureTotalCapacityPrecise(
+                    scope.arena.allocator(),
+                    iterations_count,
+                );
                 // handle parallel for expr
                 if (for_expr.parallel) |*p| {
-                    const jobs_count: usize = try self.evaluateParallelJobsCount(
+                    const jobs_limit: usize = try self.evaluateParallelJobsLimit(
                         cwd,
                         scope,
                         p,
                     );
-                    var threaded = std.Io.Threaded.init(self.allocator, .{
-                        .async_limit = .limited(jobs_count),
-                    });
-                    defer threaded.deinit();
 
-                    const threaded_io = threaded.io();
+                    const Context = struct {
+                        const Self = @This();
+                        runtime: *Runtime,
+                        dir: std.Io.Dir,
+                        parent_scope: *Scope,
+                        target: *const ir.ForExpr,
+                        values: []?Value,
+                        left: usize,
+                        slots: []?Value,
 
-                    const Job = struct {
-                        iter_scope: *Scope,
+                        fn iteration(ctx: *Self, idx: usize) Error!void {
+                            const item_index = ctx.left + idx;
 
-                        fn deinit(s: *@This()) void {
-                            s.iter_scope.destroy();
-                        }
-
-                        fn process(runtime: *Runtime, dir: std.Io.Dir, iter_scope: *Scope, iter_expr: *const ir.Expr) Error!Value {
-                            return try runtime.evaluateExpr(
-                                dir,
-                                iter_scope,
-                                iter_expr,
+                            const iter_scope = try Scope.create(
+                                ctx.parent_scope,
+                                ctx.runtime.allocator,
+                                ctx.target.scope,
                             );
+                            defer iter_scope.destroy();
+
+                            for (ctx.target.captures, 0..) |capture, j| {
+                                const value: Value = if (ctx.values[j]) |value|
+                                    value.list.items[item_index]
+                                else
+                                    .{ .number = @floatFromInt(item_index) };
+                                _ = try ctx.runtime.destructure(
+                                    ir.Capture,
+                                    ctx.dir,
+                                    iter_scope,
+                                    capture.target,
+                                    value,
+                                    null,
+                                );
+                            }
+
+                            const value = ctx.runtime.evaluateExpr(
+                                ctx.dir,
+                                iter_scope,
+                                &ctx.target.body,
+                            ) catch |err| switch (err) {
+                                Error.Continue => return,
+                                Error.Break => unreachable,
+                                else => return err,
+                            };
+                            ctx.slots[idx] = try value.clone(ctx.parent_scope.arena.allocator());
                         }
                     };
 
-                    const jobs = try self.allocator.alloc(Job, iterations_count);
-                    defer self.allocator.free(jobs);
+                    const slots = try self.allocator.alloc(?Value, iterations_count);
+                    defer self.allocator.free(slots);
+                    @memset(slots, null);
 
-                    const results = try self.allocator.alloc(std.Io.Future(Error!Value), iterations_count);
-                    defer self.allocator.free(results);
+                    var context: Context = .{
+                        .runtime = self,
+                        .dir = cwd,
+                        .parent_scope = scope,
+                        .target = for_expr,
+                        .values = values,
+                        .left = @intCast(final_range.left),
+                        .slots = slots,
+                    };
 
-                    for (0..iterations_count) |i| {
-                        const item_index = @as(usize, @intCast(final_range.left)) + i;
-                        const iter_scope = try Scope.create(
-                            scope,
-                            self.allocator,
-                            for_expr.scope,
-                        );
-                        for (for_expr.captures, 0..) |capture, j| {
-                            const value: Value = if (values[j]) |value|
-                                value.list.items[@intCast(item_index)]
-                            else
-                                .{ .number = @floatFromInt(item_index) };
+                    try parallelization.runIndexed(
+                        self,
+                        iterations_count,
+                        jobs_limit,
+                        &context,
+                        Context.iteration,
+                    );
 
-                            _ = try self.destructure(
-                                ir.Capture,
-                                cwd,
-                                iter_scope,
-                                capture.target,
-                                value,
-                                null,
-                            );
-                        }
-
-                        jobs[i] = .{ .iter_scope = iter_scope };
-                        results[i] = threaded_io.async(
-                            Job.process,
-                            .{
-                                self,
-                                cwd,
-                                iter_scope,
-                                &for_expr.body,
-                            },
-                        );
-                    }
-                    defer for (jobs) |*j| j.deinit();
-
-                    for (results) |*r| {
-                        const value = r.await(threaded_io);
-
-                        if (value) |v| {
-                            try result.append(scope.arena.allocator(), v);
-                        } else |err| switch (err) {
-                            Error.Continue => continue,
-                            Error.Break => unreachable,
-                            else => return err,
-                        }
-                    }
+                    for (slots) |slot| if (slot) |v| result.appendAssumeCapacity(v);
                 } else {
                     const for_scope = try Scope.create(scope, self.allocator, for_expr.scope);
                     defer for_scope.destroy();
@@ -794,7 +778,7 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             return .{
                 .list = .{
                     .items_type = &for_expr.type,
-                    .items = try result.toOwnedSlice(scope.arena.allocator()),
+                    .items = result.items,
                 },
             };
         },
@@ -886,14 +870,15 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             const process = try self.resolveString(cwd, scope, process_expr.command);
             var aw: std.Io.Writer.Allocating = .init(scope.arena.allocator());
 
-            self.status_code = try self.handleProcess(cwd, scope, .{
+            const status_code = try self.handleProcess(cwd, scope, .{
                 .process = process,
                 .echo = false,
                 .allow_input = false,
                 .out = &aw.writer,
             });
+            self.status_code = status_code;
 
-            if (self.status_code != 0) {
+            if (status_code != 0) {
                 if (process_expr.fallback) |*value| {
                     return try self.evaluateExpr(cwd, scope, value);
                 }
@@ -905,7 +890,7 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                         \\tasq: error: command failed with exit code {}
                         \\  on binding evaluation '{s}'
                     ,
-                        .{ self.status_code, process },
+                        .{ status_code, process },
                     );
                     return Error.Abort;
                 }
@@ -964,52 +949,54 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             );
             defer with_scope.destroy();
 
-            if (with.parallel) |p| {
-                const jobs_count: usize = blk: {
-                    if (p.jobs) |*jobs_expr| {
-                        const jobs_value = try self.evaluateExpr(cwd, scope, jobs_expr);
-                        break :blk @intCast(integerize(jobs_value.number));
-                    }
-                    break :blk self.options.jobs;
-                };
+            if (with.parallel) |*p| {
+                const jobs_limit: usize = try self.evaluateParallelJobsLimit(cwd, scope, p);
 
-                var threaded: std.Io.Threaded = .init(self.allocator, .{
-                    .async_limit = .limited(jobs_count),
-                });
-                defer threaded.deinit();
+                const Context = struct {
+                    const Self = @This();
+                    runtime: *Runtime,
+                    dir: std.Io.Dir,
+                    parent_scope: *Scope,
+                    target: *const ir.WithExpr,
+                    slots: []Value,
 
-                const threaded_io = threaded.io();
-
-                const Job = struct {
-                    fn process(runtime: *Runtime, dir: std.Io.Dir, s: *Scope, subject: *const ir.Expr) Error!Value {
-                        return try runtime.evaluateExpr(
-                            dir,
-                            s,
-                            subject,
+                    fn evaluate(ctx: *Self, idx: usize) Error!void {
+                        ctx.slots[idx] = try ctx.runtime.evaluateExpr(
+                            ctx.dir,
+                            ctx.parent_scope,
+                            &ctx.target.subjects[idx],
                         );
                     }
                 };
 
-                const results = try self.allocator.alloc(std.Io.Future(Error!Value), with.subjects.len);
-                defer self.allocator.free(results);
+                const slots = try self.allocator.alloc(
+                    Value,
+                    with.subjects.len,
+                );
+                defer self.allocator.free(slots);
 
-                for (with.subjects, 0..) |*subject, idx| {
-                    results[idx] = threaded_io.async(Job.process, .{
-                        self,
-                        cwd,
-                        scope,
-                        subject,
-                    });
-                }
+                var context: Context = .{
+                    .runtime = self,
+                    .dir = cwd,
+                    .parent_scope = scope,
+                    .target = with,
+                    .slots = slots,
+                };
 
-                for (results, with.captures) |*result, cap| {
-                    const value = try result.await(threaded_io);
+                try parallelization.runIndexed(
+                    self,
+                    with.subjects.len,
+                    jobs_limit,
+                    &context,
+                    Context.evaluate,
+                );
 
+                for (slots, with.captures) |value, *capture| {
                     _ = try self.destructure(
                         ir.Capture,
                         cwd,
                         with_scope,
-                        cap.target,
+                        capture.target,
                         value,
                         null,
                     );

@@ -1034,10 +1034,13 @@ pub const Sema = struct {
 
         var it = parallel_block.statements.iter();
 
+        const prev_loop_context = self.setLoopContext(.default);
+        self.restoreLoopContext(prev_loop_context);
+
         while (it.next()) |stmt_node| {
             //TODO: add warining, if its non value discard binding
             const stmt_scope = try self.createScope(scope, stmt_node.node);
-            const stmt = self.analyseStatement(stmt_node, scope) catch |err| switch (err) {
+            const stmt = self.analyseStatement(stmt_node, stmt_scope) catch |err| switch (err) {
                 Error.Incomplete => continue,
                 else => return err,
             };
@@ -1074,7 +1077,7 @@ pub const Sema = struct {
         }
 
         const body = try self.analyseBlock(
-            in_stmt.node,
+            in_stmt.body.node,
             in_stmt.body,
             scope,
         );
@@ -1330,8 +1333,8 @@ pub const Sema = struct {
             null;
 
         const prev_loop_context = self.setLoopContext(.{
-            .continuable = parallel == null,
-            .breakable = true,
+            .continuable = true,
+            .breakable = parallel == null,
         });
         defer self.restoreLoopContext(prev_loop_context);
 
@@ -3315,6 +3318,7 @@ const OptionsResolver = struct {
         shell: []const []const u8,
         dotenv: ?[]const u8,
         working_dir: []const u8,
+        jobs: usize,
     };
 
     const ResolvedOptions = std.EnumMap(options.definitions.Type, OptionValue);
@@ -3335,6 +3339,7 @@ const OptionsResolver = struct {
             .shell => |shell| out.shell = shell,
             .dotenv => |dotenv| out.dotenv = dotenv,
             .working_dir => |wd| out.working_dir = wd,
+            .jobs => |jobs| out.jobs = jobs,
         };
 
         return out;
@@ -3398,11 +3403,12 @@ const OptionsResolver = struct {
             try self.getOptionValue(
                 def.id,
                 value,
+                decl.value,
             ),
         );
     }
 
-    fn getOptionValue(self: *OptionsResolver, id: options.definitions.Type, value: meta.Value) !OptionValue {
+    fn getOptionValue(self: *OptionsResolver, id: options.definitions.Type, value: meta.Value, value_node: ?ast.Meta) !OptionValue {
         return switch (id) {
             .shell => {
                 var out: std.ArrayList([]const u8) = try .initCapacity(
@@ -3432,6 +3438,20 @@ const OptionsResolver = struct {
                 else => unreachable,
             },
             .working_dir => .{ .working_dir = value.string },
+            .jobs => {
+                const number = value.number;
+                const val: usize = @trunc(number);
+
+                if (number != @as(f64, @floatFromInt(val))) {
+                    try self.sema.diagnostics.err(
+                        value_node.?.node.trimmedSpan(),
+                        "expected integer value",
+                        .{},
+                    );
+                }
+
+                return .{ .jobs = val };
+            },
         };
     }
 };
