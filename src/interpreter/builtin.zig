@@ -247,8 +247,8 @@ const handlers = struct {
         };
     }
 
-    fn status_code(self: *Runtime, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
-        return .{ .number = @floatFromInt(self.status_code) };
+    fn status_code(_: *Runtime, _: std.Io.Dir, s: *Scope, _: []const Value) Error!Value {
+        return .{ .number = @floatFromInt(s.statusCode()) };
     }
 
     fn which(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {

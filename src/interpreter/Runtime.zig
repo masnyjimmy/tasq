@@ -34,7 +34,6 @@ invokation_dir: []const u8,
 io: std.Io,
 printer: *Printer,
 options: *const ir.Options,
-status_code: u8 = 0,
 cwd: std.Io.Dir,
 
 pub fn init(
@@ -138,7 +137,7 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                 .echo = !noecho,
                 .allow_input = true,
             });
-            self.status_code = status_code;
+            scope.setStatusCode(status_code);
 
             if (status_code != 0 and proc_expr.nofail == false) {
                 try self.printer.printStyled(
@@ -889,7 +888,7 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                 .allow_input = false,
                 .out = &aw.writer,
             });
-            self.status_code = status_code;
+            scope.setStatusCode(status_code);
 
             if (status_code != 0) {
                 if (process_expr.fallback) |*value| {

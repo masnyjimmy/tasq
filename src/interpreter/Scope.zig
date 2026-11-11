@@ -29,6 +29,8 @@ pending: PendingMap = .empty,
 arena: std.heap.ArenaAllocator,
 environ: std.process.Environ.Map,
 
+status_code: std.atomic.Value(u8) = .init(0),
+
 pub fn create(parent: ?*Scope, allocator: std.mem.Allocator, ss: *static_scope.Scope) !*Scope {
     const ptr = try allocator.create(Scope);
     errdefer allocator.destroy(ptr);
@@ -45,9 +47,20 @@ pub fn create(parent: ?*Scope, allocator: std.mem.Allocator, ss: *static_scope.S
     return ptr;
 }
 
+pub fn setStatusCode(self: *Scope, code: u8) void {
+    self.status_code.store(code, .release);
+}
+
+pub fn statusCode(self: *Scope) u8 {
+    return self.status_code.load(.acquire);
+}
+
 /// Only call this after every thread that uses the scope has joined, so no locking is needed.
 pub fn destroy(self: *Scope) void {
     const allocator = self.arena.child_allocator;
+    if (self.parent) |p|
+        p.setStatusCode(self.statusCode());
+
     self.arena.deinit();
     self.environ.deinit();
     allocator.destroy(self);
