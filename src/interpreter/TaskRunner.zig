@@ -52,20 +52,20 @@ const MapContext = struct {
 };
 
 run_set: std.HashMapUnmanaged(Key, State, MapContext, 80),
-interpreter: *Runtime,
+runtime: *Runtime,
 key_arena: std.heap.ArenaAllocator,
 
 pub fn init(interpreter: *Runtime) TaskRunner {
     return .{
         .run_set = .empty,
-        .interpreter = interpreter,
+        .runtime = interpreter,
         .key_arena = .init(interpreter.allocator),
     };
 }
 
 pub fn deinit(self: *TaskRunner) void {
     self.key_arena.deinit();
-    self.run_set.deinit(self.interpreter.allocator);
+    self.run_set.deinit(self.runtime.allocator);
 }
 
 pub fn run(
@@ -76,7 +76,7 @@ pub fn run(
     same_group: bool,
     is_dependency: bool,
 ) Runtime.Error!void {
-    const allocator = self.interpreter.allocator;
+    const allocator = self.runtime.allocator;
 
     var key_args: std.ArrayList(Value) = .empty;
     errdefer key_args.deinit(allocator);
@@ -103,7 +103,7 @@ pub fn run(
     defer task_scope.destroy();
 
     const target_working_dir = try self.openTaskTargetDir(task);
-    defer target_working_dir.close(self.interpreter.io);
+    defer target_working_dir.close(self.runtime.io);
 
     //===== update current call graph ======//
 
@@ -131,12 +131,12 @@ pub fn run(
 
     const task_body_scope = try Scope.create(
         task_scope,
-        self.interpreter.allocator,
+        self.runtime.allocator,
         task.body.scope,
     );
     defer task_body_scope.destroy();
 
-    try self.interpreter.runBlock(target_working_dir, task_body_scope, task.body.statements);
+    try self.runtime.runBlock(target_working_dir, task_body_scope, task.body.statements);
 
     try self.run_set.put(allocator, key, .done);
 }
@@ -147,7 +147,7 @@ fn handleDependency(
     scope: *Scope,
     call: *const ir.TaskCall,
 ) Runtime.Error!void {
-    const allocator = self.interpreter.allocator;
+    const allocator = self.runtime.allocator;
     var it = call.args.iterator();
 
     var values: std.array_hash_map.String(Value) = .empty;
@@ -156,7 +156,7 @@ fn handleDependency(
     while (it.next()) |arg| {
         const value = switch (arg.value_ptr.*) {
             .default => |def| def,
-            .value => |*expr| try self.interpreter.evaluateExpr(cwd, scope, expr),
+            .value => |*expr| try self.runtime.evaluateExpr(cwd, scope, expr),
         };
 
         try values.put(
@@ -176,7 +176,7 @@ fn handleDependency(
 }
 
 fn openTaskTargetDir(self: *TaskRunner, task: *const ir.Task) !std.Io.Dir {
-    const allocator = self.interpreter.allocator;
+    const allocator = self.runtime.allocator;
 
     const group_working_dir: ?[]const u8 = blk: {
         const group = task.group orelse break :blk null;
@@ -184,8 +184,8 @@ fn openTaskTargetDir(self: *TaskRunner, task: *const ir.Task) !std.Io.Dir {
     };
 
     if (group_working_dir == null and task.cwd == null)
-        return try self.interpreter.cwd.openDir(
-            self.interpreter.io,
+        return try self.runtime.cwd.openDir(
+            self.runtime.io,
             ".",
             .{},
         );
@@ -199,8 +199,8 @@ fn openTaskTargetDir(self: *TaskRunner, task: *const ir.Task) !std.Io.Dir {
     );
     defer allocator.free(path);
 
-    return try self.interpreter.cwd.openDir(
-        self.interpreter.io,
+    return try self.runtime.cwd.openDir(
+        self.runtime.io,
         path,
         .{},
     );
@@ -213,7 +213,7 @@ fn createTaskScope(
     values: std.array_hash_map.String(Value),
     key_args: *std.ArrayList(Value),
 ) !*Scope {
-    const allocator = self.interpreter.allocator;
+    const allocator = self.runtime.allocator;
 
     const task_scope = try Scope.create(
         scope,
@@ -232,7 +232,7 @@ fn createTaskScope(
             );
         };
         try self.addKeyArg(key_args, value);
-        try task_scope.define(arg, .{
+        try task_scope.define(self.runtime.io, arg, .{
             .name = arg.name,
             .value = try value.clone(task_scope.arena.allocator()),
         }, false);
@@ -256,7 +256,7 @@ fn createGroupScope(
     same_group: bool,
     key_args: *std.ArrayList(Value),
 ) !*Scope {
-    const allocator = self.interpreter.allocator;
+    const allocator = self.runtime.allocator;
 
     const parent_scope = blk: {
         if (same_group) break :blk scope.findByStatic(group.scope);
@@ -282,7 +282,7 @@ fn createGroupScope(
                 );
             }
 
-            if (group_scope.resolve(arg)) |symbol|
+            if (group_scope.resolve(self.runtime.io, arg)) |symbol|
                 break :blk symbol.value;
 
             if (arg.default) |v|
@@ -296,7 +296,7 @@ fn createGroupScope(
             );
         };
         try self.addKeyArg(key_args, value);
-        try group_scope.define(arg, .{
+        try group_scope.define(self.runtime.io, arg, .{
             .name = arg.name,
             .value = try value.clone(group_scope.arena.allocator()),
         }, same_group);

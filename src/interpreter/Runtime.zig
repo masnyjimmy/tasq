@@ -284,7 +284,7 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
 
                     for (0..iterations_count) |i| {
                         const item_index = @as(usize, @intCast(final_range.left)) + i;
-                        defer for_scope.clearSymbols();
+                        defer for_scope.clearSymbols(self.io);
 
                         for (for_stmt.captures, 0..) |capture, j| {
                             const value: Value = if (values[j]) |value|
@@ -457,7 +457,7 @@ pub fn destructure(
     switch (targets) {
         .exact => |target| {
             if (target.name) |name| {
-                try scope.define(target, .{
+                try scope.define(self.io, target, .{
                     .name = name,
                     .value = value,
                 }, false);
@@ -588,22 +588,35 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             };
         },
         .ident => |id| {
+            const identity = id.symbol.identity();
             // get resolved
-            if (scope.resolve(id.symbol.identity())) |sym| {
-                return sym.value;
+            while (true) {
+                if (scope.resolve(self.io, identity)) |sym| {
+                    return sym.value;
+                }
+                // resolve if not already (lazy resolution)
+                return switch (id.symbol.origin) {
+                    .decl => |target| {
+                        const decl = target.parent;
+                        const decl_scope = scope.findByStatic(decl.scope) orelse unreachable;
+
+                        switch (try decl_scope.beginStatic(self.io, decl, identity)) {
+                            .done => continue,
+                            .wait => |event| {
+                                event.waitUncancelable(self.io);
+                                continue;
+                            },
+                            .owner => {
+                                defer decl_scope.endStatic(self.io, decl);
+                                return try self.handleDecl(cwd, scope, decl, target) orelse unreachable;
+                            },
+                        }
+                    },
+                    .capture => std.debug.panic("Capture value not resolved? The flip?", .{}),
+                    .argument => unreachable, // should be already resolved by runtime builder,
+                    else => unreachable, // group and task cannot be used in expression
+                };
             }
-            // resolve if not already (lazy resolution)
-            return switch (id.symbol.origin) {
-                .decl => |target| try self.handleDecl(
-                    cwd,
-                    scope,
-                    target.parent,
-                    target,
-                ) orelse unreachable,
-                .capture => std.debug.panic("Capture value not resolved? The flip?", .{}),
-                .argument => unreachable, // should be already resolved by runtime builder,
-                else => unreachable, // group and task cannot be used in expression
-            };
         },
         .if_expr => |if_expr| {
             const cond = try self.evaluateExpr(cwd, scope, &if_expr.cond);
@@ -740,7 +753,7 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
 
                     for (0..iterations_count) |i| {
                         const item_index = @as(usize, @intCast(final_range.left)) + i;
-                        defer for_scope.clearSymbols();
+                        defer for_scope.clearSymbols(self.io);
 
                         for (for_expr.captures, 0..) |capture, j| {
                             const value: Value = if (values[j]) |value|
