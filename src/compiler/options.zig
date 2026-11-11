@@ -57,6 +57,10 @@ pub const definitions = OptionsGroup(&.{
         .name = "working_dir",
         .value_types = &.{.string},
     },
+    .{
+        .name = "jobs",
+        .value_types = &.{.number},
+    },
 });
 
 fn OptionsGroup(comptime specs: []const Spec) type {

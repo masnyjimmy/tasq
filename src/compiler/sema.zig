@@ -3315,6 +3315,7 @@ const OptionsResolver = struct {
         shell: []const []const u8,
         dotenv: ?[]const u8,
         working_dir: []const u8,
+        jobs: usize,
     };
 
     const ResolvedOptions = std.EnumMap(options.definitions.Type, OptionValue);
@@ -3335,6 +3336,7 @@ const OptionsResolver = struct {
             .shell => |shell| out.shell = shell,
             .dotenv => |dotenv| out.dotenv = dotenv,
             .working_dir => |wd| out.working_dir = wd,
+            .jobs => |jobs| out.jobs = jobs,
         };
 
         return out;
@@ -3398,11 +3400,12 @@ const OptionsResolver = struct {
             try self.getOptionValue(
                 def.id,
                 value,
+                decl.value,
             ),
         );
     }
 
-    fn getOptionValue(self: *OptionsResolver, id: options.definitions.Type, value: meta.Value) !OptionValue {
+    fn getOptionValue(self: *OptionsResolver, id: options.definitions.Type, value: meta.Value, value_node: ?ast.Meta) !OptionValue {
         return switch (id) {
             .shell => {
                 var out: std.ArrayList([]const u8) = try .initCapacity(
@@ -3432,6 +3435,20 @@ const OptionsResolver = struct {
                 else => unreachable,
             },
             .working_dir => .{ .working_dir = value.string },
+            .jobs => {
+                const number = value.number;
+                const val: usize = @trunc(number);
+
+                if (number != @as(f64, @floatFromInt(val))) {
+                    try self.sema.diagnostics.err(
+                        value_node.?.node.trimmedSpan(),
+                        "expected integer value",
+                        .{},
+                    );
+                }
+
+                return .{ .jobs = val };
+            },
         };
     }
 };
