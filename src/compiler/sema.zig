@@ -1034,10 +1034,13 @@ pub const Sema = struct {
 
         var it = parallel_block.statements.iter();
 
+        const prev_loop_context = self.setLoopContext(.default);
+        self.restoreLoopContext(prev_loop_context);
+
         while (it.next()) |stmt_node| {
             //TODO: add warining, if its non value discard binding
             const stmt_scope = try self.createScope(scope, stmt_node.node);
-            const stmt = self.analyseStatement(stmt_node, scope) catch |err| switch (err) {
+            const stmt = self.analyseStatement(stmt_node, stmt_scope) catch |err| switch (err) {
                 Error.Incomplete => continue,
                 else => return err,
             };
@@ -1074,7 +1077,7 @@ pub const Sema = struct {
         }
 
         const body = try self.analyseBlock(
-            in_stmt.node,
+            in_stmt.body.node,
             in_stmt.body,
             scope,
         );
@@ -1330,8 +1333,8 @@ pub const Sema = struct {
             null;
 
         const prev_loop_context = self.setLoopContext(.{
-            .continuable = parallel == null,
-            .breakable = true,
+            .continuable = true,
+            .breakable = parallel == null,
         });
         defer self.restoreLoopContext(prev_loop_context);
 
