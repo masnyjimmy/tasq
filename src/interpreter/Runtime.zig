@@ -217,10 +217,10 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                         parent_scope: *Scope,
                         target: *const ir.ForStmt,
                         values: []?Value,
-                        left: usize,
+                        left: i64,
 
                         fn iteration(ctx: *Self, idx: usize) Error!void {
-                            const item_index = ctx.left + idx;
+                            const item_index = lib.math.op(i64, ctx.left, idx, .add);
 
                             const iter_scope = try Scope.create(
                                 ctx.parent_scope,
@@ -231,7 +231,7 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
 
                             for (ctx.target.captures, 0..) |capture, j| {
                                 const value: Value = if (ctx.values[j]) |value|
-                                    value.list.items[item_index]
+                                    value.list.items[@intCast(item_index)]
                                 else
                                     .{ .number = @floatFromInt(item_index) };
                                 _ = try ctx.runtime.destructure(
@@ -262,7 +262,7 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                         .parent_scope = scope,
                         .target = for_stmt,
                         .values = values,
-                        .left = @intCast(final_range.left),
+                        .left = final_range.left,
                     };
 
                     try parallelization.runIndexed(
@@ -277,12 +277,12 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                     defer for_scope.destroy();
 
                     for (0..iterations_count) |i| {
-                        const item_index = @as(usize, @intCast(final_range.left)) + i;
+                        const item_index = lib.math.op(i64, final_range.left, i, .add);
                         defer for_scope.clearSymbols(self.io);
 
                         for (for_stmt.captures, 0..) |capture, j| {
                             const value: Value = if (values[j]) |value|
-                                value.list.items[item_index]
+                                value.list.items[@intCast(item_index)]
                             else
                                 .{ .number = @floatFromInt(item_index) };
 
@@ -677,11 +677,11 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                         parent_scope: *Scope,
                         target: *const ir.ForExpr,
                         values: []?Value,
-                        left: usize,
+                        left: i64,
                         slots: []?Value,
 
                         fn iteration(ctx: *Self, idx: usize) Error!void {
-                            const item_index = ctx.left + idx;
+                            const item_index = lib.math.op(i64, ctx.left, idx, .add);
 
                             const iter_scope = try Scope.create(
                                 ctx.parent_scope,
@@ -692,7 +692,7 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
 
                             for (ctx.target.captures, 0..) |capture, j| {
                                 const value: Value = if (ctx.values[j]) |value|
-                                    value.list.items[item_index]
+                                    value.list.items[@intCast(item_index)]
                                 else
                                     .{ .number = @floatFromInt(item_index) };
                                 _ = try ctx.runtime.destructure(
@@ -746,12 +746,12 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                     defer for_scope.destroy();
 
                     for (0..iterations_count) |i| {
-                        const item_index = @as(usize, @intCast(final_range.left)) + i;
+                        const item_index = lib.math.op(i64, final_range.left, i, .add);
                         defer for_scope.clearSymbols(self.io);
 
                         for (for_expr.captures, 0..) |capture, j| {
                             const value: Value = if (values[j]) |value|
-                                value.list.items[item_index]
+                                value.list.items[@intCast(item_index)]
                             else
                                 .{ .number = @floatFromInt(item_index) };
 
@@ -1092,7 +1092,7 @@ const Range = struct {
 };
 
 pub fn integerize(value: f64) i64 {
-    return @ceil(value);
+    return lib.math.asInt(i64, value);
 }
 
 fn evaluateRange(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, range: *const ir.Range) Error!Range {

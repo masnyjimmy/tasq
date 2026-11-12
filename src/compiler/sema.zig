@@ -3439,7 +3439,18 @@ const OptionsResolver = struct {
             },
             .working_dir => .{ .working_dir = value.string },
             .jobs => {
-                const number = value.number;
+                var number = value.number;
+
+                if (number < 1) {
+                    //TODO: consider prettier hanlding here
+                    try self.sema.diagnostics.err(
+                        value_node.?.node.trimmedSpan(),
+                        "jobs number must be 1 or greater: got '{}'",
+                        .{number},
+                    );
+                    number = 1;
+                }
+
                 const val: usize = @trunc(number);
 
                 if (number != @as(f64, @floatFromInt(val))) {
