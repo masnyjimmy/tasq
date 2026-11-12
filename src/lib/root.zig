@@ -21,3 +21,5 @@ pub const platform = @import("platform.zig");
 pub const program = @import("program.zig");
 
 pub const hash = @import("hash.zig");
+
+pub const math = @import("math.zig");
