@@ -27,7 +27,7 @@ symbols: SymbolMap = .empty,
 /// Static declarations that are being evaluated right now, with the event their waiters sleep on.
 pending: PendingMap = .empty,
 arena: std.heap.ArenaAllocator,
-environ: std.process.Environ.Map,
+environ: Environ,
 
 status_code: std.atomic.Value(u8) = .init(0),
 
@@ -40,7 +40,7 @@ pub fn create(parent: ?*Scope, allocator: std.mem.Allocator, ss: *static_scope.S
         .arena = .init(allocator),
         .static = ss,
         .environ = if (parent) |p|
-            try p.environ.clone(allocator)
+            .initRef(&p.environ)
         else
             .init(allocator),
     };
@@ -151,3 +151,45 @@ pub fn root(self: *Scope) *Scope {
     while (cur.parent) |p| cur = p;
     return cur;
 }
+
+pub const Environ = struct {
+    map: std.process.Environ.Map,
+    owns: bool,
+
+    fn init(allocator: std.mem.Allocator) Environ {
+        return .{
+            .map = .init(allocator),
+            .owns = true,
+        };
+    }
+
+    fn deinit(self: *Environ) void {
+        if (self.owns) {
+            self.map.deinit();
+        }
+    }
+
+    fn initRef(parent: *const Environ) Environ {
+        return .{
+            .map = parent.map,
+            .owns = false,
+        };
+    }
+
+    pub fn putEnvs(self: *Environ, allocator: std.mem.Allocator, vars: []const ir.Env) !void {
+        if (vars.len == 0) return;
+
+        if (!self.owns) {
+            self.map = try self.map.clone(allocator);
+            self.owns = true;
+        }
+
+        for (vars) |kv| {
+            try self.map.put(kv.key, kv.value);
+        }
+    }
+
+    pub fn get(self: *Environ, key: []const u8) ?[]const u8 {
+        return self.map.get(key);
+    }
+};

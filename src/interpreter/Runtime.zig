@@ -77,20 +77,13 @@ pub fn run(
     const root_scope = try Scope.create(null, self.allocator, initial_task.body.scope.root());
     defer root_scope.destroy();
 
-    var it = environ.iterator();
-
-    while (it.next()) |kv| {
-        try root_scope.environ.put(
-            kv.key_ptr.*,
-            kv.value_ptr.*,
-        );
-    }
+    try root_scope.environ.map.putAll(environ);
 
     if (self.options.dotenv) |dotenv| {
         try lib.dotenv.parse(
             self.io,
             dotenv,
-            &root_scope.environ,
+            &root_scope.environ.map,
         );
     }
 
@@ -513,7 +506,7 @@ fn handleProcess(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, options: Proces
         .{
             .argv = argv,
             .cwd = .{ .dir = cwd },
-            .environ_map = &scope.environ,
+            .environ_map = &scope.environ.map,
             .stdout = if (options.out == null)
                 .inherit
             else

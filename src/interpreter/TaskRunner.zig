@@ -238,12 +238,10 @@ fn createTaskScope(
         }, false);
     }
 
-    for (task.envs) |env| {
-        try task_scope.environ.put(
-            env.key,
-            env.value,
-        );
-    }
+    try task_scope.environ.putEnvs(
+        allocator,
+        task.envs,
+    );
 
     return task_scope;
 }

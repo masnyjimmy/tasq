@@ -258,7 +258,7 @@ const handlers = struct {
             self.allocator,
             dir,
             self.io,
-            &scope.environ,
+            &scope.environ.map,
             name,
         );
 
