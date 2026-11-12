@@ -34,8 +34,8 @@ invokation_dir: []const u8,
 io: std.Io,
 printer: *Printer,
 options: *const ir.Options,
-status_code: u8 = 0,
 cwd: std.Io.Dir,
+worker_budget: std.atomic.Value(usize),
 
 pub fn init(
     allocator: std.mem.Allocator,
@@ -60,6 +60,7 @@ pub fn init(
         .printer = printer,
         .options = options,
         .cwd = cwd,
+        .worker_budget = .init(options.jobs - 1),
     };
 }
 
@@ -76,20 +77,13 @@ pub fn run(
     const root_scope = try Scope.create(null, self.allocator, initial_task.body.scope.root());
     defer root_scope.destroy();
 
-    var it = environ.iterator();
-
-    while (it.next()) |kv| {
-        try root_scope.environ.put(
-            kv.key_ptr.*,
-            kv.value_ptr.*,
-        );
-    }
+    try root_scope.environ.map.putAll(environ);
 
     if (self.options.dotenv) |dotenv| {
         try lib.dotenv.parse(
             self.io,
             dotenv,
-            &root_scope.environ,
+            &root_scope.environ.map,
         );
     }
 
@@ -138,7 +132,7 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                 .echo = !noecho,
                 .allow_input = true,
             });
-            self.status_code = status_code;
+            scope.setStatusCode(status_code);
 
             if (status_code != 0 and proc_expr.nofail == false) {
                 try self.printer.printStyled(
@@ -512,7 +506,7 @@ fn handleProcess(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, options: Proces
         .{
             .argv = argv,
             .cwd = .{ .dir = cwd },
-            .environ_map = &scope.environ,
+            .environ_map = &scope.environ.map,
             .stdout = if (options.out == null)
                 .inherit
             else
@@ -889,7 +883,7 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                 .allow_input = false,
                 .out = &aw.writer,
             });
-            self.status_code = status_code;
+            scope.setStatusCode(status_code);
 
             if (status_code != 0) {
                 if (process_expr.fallback) |*value| {
@@ -1148,4 +1142,17 @@ fn resolveString(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, string: ir.Stri
     }
 
     return try aw.toOwnedSlice();
+}
+
+pub fn acquireWorkers(self: *Runtime, want: usize) usize {
+    var cur = self.worker_budget.load(.monotonic);
+    while (true) {
+        const take = @min(cur, want);
+        if (take == 0) return 0;
+        cur = self.worker_budget.cmpxchgWeak(cur, cur - take, .acquire, .monotonic) orelse return take;
+    }
+}
+
+pub fn releaseWorkers(self: *Runtime, n: usize) void {
+    _ = self.worker_budget.fetchAdd(n, .release);
 }

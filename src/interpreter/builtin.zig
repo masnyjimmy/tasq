@@ -247,8 +247,8 @@ const handlers = struct {
         };
     }
 
-    fn status_code(self: *Runtime, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
-        return .{ .number = @floatFromInt(self.status_code) };
+    fn status_code(_: *Runtime, _: std.Io.Dir, s: *Scope, _: []const Value) Error!Value {
+        return .{ .number = @floatFromInt(s.statusCode()) };
     }
 
     fn which(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
@@ -258,7 +258,7 @@ const handlers = struct {
             self.allocator,
             dir,
             self.io,
-            &scope.environ,
+            &scope.environ.map,
             name,
         );
 
@@ -741,5 +741,35 @@ const handlers = struct {
             makeResult(scope, &.number, .{ .number = n })
         else
             makeResult(scope, &.number, null);
+    }
+
+    fn input(self: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+        const text = args[0].string;
+        try self.printer.printStyled(
+            self.allocator,
+            .{ .fg = .bright_white },
+            "{s}",
+            .{text},
+        );
+        var buffer: [512]u8 = undefined;
+        var stdin = std.Io.File.stdin().reader(self.io, &buffer);
+        const reader = &stdin.interface;
+
+        var aw: std.Io.Writer.Allocating = .init(scope.arena.allocator());
+        const writer = &aw.writer;
+        _ = reader.streamDelimiter(writer, '\n') catch {
+            aw.deinit();
+            return try makeResult(scope, &.string, null);
+        };
+
+        return try makeResult(
+            scope,
+            &.string,
+            .{ .string = try aw.toOwnedSlice() },
+        );
+    }
+
+    fn select(_: *Runtime, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+        lib.debug.todo("select not implemented yet");
     }
 };

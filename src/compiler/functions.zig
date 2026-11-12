@@ -522,13 +522,41 @@ const misc_functions: []const Spec = &.{
     },
 };
 
+const input_functions: []const Spec = &.{
+    .{
+        .name = "input",
+        .args = &.{
+            .{
+                .name = "text",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .result = &.{ .concrete = Type.string } },
+    },
+    // .{
+    //     .name = "select",
+    //     .args = &.{
+    //         .{
+    //             .name = "text",
+    //             .type = .{ .concrete = Type.string },
+    //         },
+    //         .{
+    //             .name = "choices",
+    //             .type = .{ .list = &.{ .generic = "T" } },
+    //         },
+    //     },
+    //     .return_type = .{ .result = &.{ .generic = "T" } },
+    // },
+};
+
 pub const definitions = Functions(
     debug_functions ++
         type_cast_functions ++
         fs_functions ++
         string_functions ++
         collections_functions ++
-        misc_functions,
+        misc_functions ++
+        input_functions,
 );
 
 fn Functions(comptime specs: []const Spec) type {
