@@ -35,6 +35,7 @@ io: std.Io,
 printer: *Printer,
 options: *const ir.Options,
 cwd: std.Io.Dir,
+worker_budget: std.atomic.Value(usize),
 
 pub fn init(
     allocator: std.mem.Allocator,
@@ -59,6 +60,7 @@ pub fn init(
         .printer = printer,
         .options = options,
         .cwd = cwd,
+        .worker_budget = .init(options.jobs - 1),
     };
 }
 
@@ -1147,4 +1149,17 @@ fn resolveString(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, string: ir.Stri
     }
 
     return try aw.toOwnedSlice();
+}
+
+pub fn acquireWorkers(self: *Runtime, want: usize) usize {
+    var cur = self.worker_budget.load(.monotonic);
+    while (true) {
+        const take = @min(cur, want);
+        if (take == 0) return 0;
+        cur = self.worker_budget.cmpxchgWeak(cur, cur - take, .acquire, .monotonic) orelse return take;
+    }
+}
+
+pub fn releaseWorkers(self: *Runtime, n: usize) void {
+    _ = self.worker_budget.fetchAdd(n, .release);
 }
