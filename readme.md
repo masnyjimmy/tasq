@@ -65,8 +65,17 @@
     - [12.4 Environment Attributes](#124-environment-attributes)
     - [12.5 Working Directory Attribute](#125-working-directory-attribute)
     - [12.6 Environment and Working Directory at a Glance](#126-environment-and-working-directory-at-a-glance)
-13. [Quick Reference](#13-quick-reference)
-14. [Planned Features](#14-planned-features)
+13. [Parallel Execution](#13-parallel-execution)
+    - [13.1 Model and Limits](#131-model-and-limits)
+    - [13.2 Parallel For](#132-parallel-for)
+    - [13.3 Parallel With](#133-parallel-with)
+    - [13.4 Parallel Block](#134-parallel-block)
+    - [13.5 Failure](#135-failure)
+    - [13.6 Status Code](#136-status-code)
+    - [13.7 Interaction with Other Features](#137-interaction-with-other-features)
+    - [13.8 Compile-Time Errors](#138-compile-time-errors)
+14. [Quick Reference](#14-quick-reference)
+15. [Planned Features](#15-planned-features)
 
 ---
 
@@ -89,7 +98,7 @@ The following words are keywords. They cannot be used as the name of a binding, 
 
 ```
 task  group  set
-if  else  switch  for  in  with
+if  else  switch  for  in  with  parallel
 break  continue  fallback
 and  or  not
 true  false
@@ -158,7 +167,7 @@ The types `void`, `noreturn` and `!T` also exist at runtime but have no literal 
           []              // an empty []number: the type is known from the other branch
   }
   ```
-- **Whole-number contexts.** Wherever a `number` is used in a place where a fractional value has no meaning (range bounds and slice bounds ([§4.9](#49-ranges-and-slices)), the position argument of `@at` ([§5](#5-built-in-functions)), and any similar place), it is first **rounded up to the next whole number** (ceiling): `1.2` becomes `2`, `2.0` stays `2`, `-1.5` becomes `-1`. This is not a type conversion and never raises an error; the value is still a `number`.
+- **Whole-number contexts.** Wherever a `number` is used in a place where a fractional value has no meaning (range bounds and slice bounds ([§4.9](#49-ranges-and-slices)), the position argument of `@at` ([§5](#5-built-in-functions)), the limit of `parallel` ([§13.1](#131-model-and-limits)), and any similar place), it is first **rounded up to the next whole number** (ceiling): `1.2` becomes `2`, `2.0` stays `2`, `-1.5` becomes `-1`. This is not a type conversion and never raises an error; the value is still a `number`.
 - A **tuple** has at least two elements, and each element has its own type. Its type is the ordered list of its element types, so `(string, number)` and `(number, string)` are different types. An element may be a `bool`, `char`, `number`, `string`, list, tuple or `lambda`; it cannot be `void`, `noreturn` or `!T`. Tuples may be nested and may be list elements (all elements of such a list must then have the identical tuple type). A tuple is created with a literal and taken apart by destructuring ([§4.10](#410-tuples-and-destructuring)).
 - A `lambda` is a **template**: its parameter and result types are inferred from each use. Lambdas can be bound, aliased, passed around, stored in a tuple and passed to the built-ins that take a lambda. The full rules and limits are in [§4.8](#48-lambdas).
 
@@ -263,6 +272,7 @@ Consequences:
 - A static binding whose expression would diverge (e.g. calls `@error(...)`) only does so if something references it. An unused static binding is never evaluated.
 - A static binding containing a process expression ([§6](#6-process-calls)) runs its command only on first reference, and only once. This makes it a convenient place to store a value such as a tool version that several tasks need. Because every process call updates `@status_code()` ([§5](#5-built-in-functions)), that first reference can change the value `@status_code()` reports in the task that triggered it.
 - A **destructuring** static binding is one unit: referencing **any** of its names evaluates the whole right-hand side once, and every name of that binding then has its cached value.
+- "At most once" also holds when several branches of a parallel construct reference the same static binding for the first time at the same moment: one of them evaluates it and the others wait for the result ([§13.7](#137-interaction-with-other-features)).
 
 **Examples:**
 
@@ -458,13 +468,14 @@ The statement form is described in [§8.6](#86-switch-statement).
 A `for` expression maps, filters or otherwise processes one or more lists (or ranges) in lock-step and produces a **new list**. It is not wrapped in brackets:
 
 ```
-for(<subjects>) |<captures>| <expr>
+for(<subjects>) [parallel[(<n>)]] |<captures>| <expr>
 ```
 
 - `<subjects>` are one or more comma-separated subjects, each a list expression or a range. They are iterated in lock-step over a shared window of indices. The iteration rules (window, clamping, unbounded ranges) are defined once, in [§4.9](#49-ranges-and-slices); in short, with only list subjects the loop runs for the length of the **shortest** one, with no error.
+- `parallel`, when written, makes the iterations run concurrently; the result is the same list, in the same order ([§13.2](#132-parallel-for)).
 - `<captures>` binds one capture to each subject, in order. A capture is an identifier (the current element of a list subject, or the current index of a range subject), `_` for a value you don't need, or a destructuring pattern `(a, b)` when the elements are tuples ([§4.10](#410-tuples-and-destructuring)). The number of captures **must equal** the number of subjects.
 - `<expr>` is evaluated once per iteration, and its result becomes the corresponding element of the produced list. The result type is `[]T`, where `T` is the type of `<expr>`. If there are no iterations the result is an empty `[]T`.
-- `<expr>` may be an `if`, `switch`, `in` or `with` expression containing `break` or `continue` branches ([§4.6](#46-break-and-continue)); these are `noreturn` and unify with the surviving branches ([§2.2](#22-special-types)).
+- `<expr>` may be an `if`, `switch`, `in` or `with` expression containing `break` or `continue` branches ([§4.6](#46-break-and-continue)); these are `noreturn` and unify with the surviving branches ([§2.2](#22-special-types)). In a parallel `for`, `break` is not allowed ([§13.2](#132-parallel-for)).
 - `<expr>` may itself be a `for` expression (a nested loop). The inner `for` produces a list, so the outer result is a list of lists.
 
 ```
@@ -504,6 +515,8 @@ Both have type `noreturn` ([§2.2](#22-special-types)), so they can be used as b
 | `continue` | Skips the rest of the current iteration and proceeds to the next. | Skips the current element (it is **not** added to the list) and proceeds. |
 
 Both always refer to the **nearest enclosing `for`**; a nested `if`, `switch`, `in` or `with` does not change this, and neither does an inner `for`: in nested loops, `break` and `continue` affect only the innermost one. Leaving an `in` block this way restores the previous working directory ([§4.11](#411-in-expression)).
+
+In a **parallel** `for` ([§13.2](#132-parallel-for)), `break` is a compile-time error, because there is no stable meaning of "stop here" while iterations run concurrently; `continue` works as in the table (the expression form drops the element, the statement form ends that iteration). Neither keyword can refer to a `for` that encloses a parallel block ([§13.4](#134-parallel-block)).
 
 ```
 for(numbers) |n| {
@@ -668,7 +681,7 @@ range := <expr> '..' [<expr>]       // a..b    or    a..
 
 #### Range loops
 
-This section is the single definition of how `for` iterates, for both the expression and the statement form.
+This section is the single definition of how `for` iterates, for both the expression and the statement form, sequential or parallel.
 
 Every `for` subject contributes an interval of indices, and the loop runs over the **intersection** of all of them:
 
@@ -843,16 +856,17 @@ sources := in("src") @sort(@glob("*.zig"), |a, b| a < b) else @error("src/ is mi
 - A task called from inside an `in` block does **not** inherit the block's directory: every task runs in its own working directory ([§12.5](#125-working-directory-attribute)), whoever calls it. This differs from `[env]`, which a callee does inherit ([§12.4](#124-environment-attributes)).
 - A lambda is evaluated in the working directory (and environment) in effect **where it is called**, not where it is written ([§4.8](#48-lambdas)).
 - **Static bindings** never see the working directory of whatever triggers them ([§3](#3-bindings)).
+- Inside a branch of a parallel construct, `in` changes the working directory of that branch only ([§13.1](#131-model-and-limits)).
 
 ### 4.12 With Expression
 
 `with` names one or more intermediate values **inside a single expression**. It is a building block for expression pipelines: compute a value once, then use it several times in the body. It matters most in lambda bodies ([§4.8](#48-lambdas)), which are a single expression and cannot contain bindings ([§3](#3-bindings)).
 
 ```
-with(<subjects>) |<captures>| <expr>
+with(<subjects>) [parallel[(<n>)]] |<captures>| <expr>
 ```
 
-- `<subjects>` are one or more comma-separated expressions. They are evaluated once each, **left to right**, before the body.
+- `<subjects>` are one or more comma-separated expressions. They are evaluated once each, **left to right**, before the body. With `parallel` they are evaluated concurrently instead, in no particular order ([§13.3](#133-parallel-with)).
 - `<captures>` binds one capture to each subject, in order. A capture is an identifier, `_` for a value you don't need, or a destructuring pattern `(a, b)` when the subject is a tuple ([§4.10](#410-tuples-and-destructuring)). The number of captures **must equal** the number of subjects (compile-time error otherwise).
 - `<expr>` is the **body**. It extends as far right as possible, like a lambda body.
 - The value and type of the whole `with` expression are those of the body. If the body is `noreturn`, so is the `with` expression ([§2.2](#22-special-types)).
@@ -917,7 +931,7 @@ Built-in functions are called with an `@` prefix and may appear in any expressio
 | `@arch()` | `string` | The architecture **family** of the current platform. Its values are those of Zig's `builtin.target.cpu.arch.family()`, for example `"x86"` (both 32-bit and 64-bit x86), `"arm"`, `"aarch64"` or `"riscv"`. The exact set of values is that of the Zig version tasq is built with. |
 | `@cwd()` | `string` | The absolute path of the working directory in effect: the task's working directory ([§12.5](#125-working-directory-attribute)), or the directory entered by an enclosing `in` ([§4.11](#411-in-expression)). |
 | `@invocation_dir()` | `string` | The directory from which tasq was called. Unlike `@cwd()` it is not affected by the `working_dir` setting or by `in`. |
-| `@status_code()` | `number` | Exit status of the most recently executed process. Every process call, statement or expression, updates it, including a process expression evaluated as part of a lazily evaluated static binding ([§3](#3-bindings)). After a process that failed without aborting (`nofail`, or a taken `fallback`) it holds that non-zero status. Errors if no process has run yet in the current task. |
+| `@status_code()` | `number` | Exit status of the most recently executed process. Every process call, statement or expression, updates it, including a process expression evaluated as part of a lazily evaluated static binding ([§3](#3-bindings)). After a process that failed without aborting (`nofail`, or a taken `fallback`) it holds that non-zero status. Errors if no process has run yet in the current task. In a parallel construct every branch has its own status ([§13.6](#136-status-code)). |
 
 **File system**
 
@@ -929,7 +943,7 @@ Relative paths given to `@exists`, `@is_file`, `@is_dir`, `@read` and `@glob` ar
 | `@is_file(path: string)` | `bool` | `true` if `path` exists and is a file. `false` if it is missing or is not a file. |
 | `@is_dir(path: string)` | `bool` | `true` if `path` exists and is a directory. `false` if it is missing or is not a directory. |
 | `@read(path: string)` | `!string` | The content of the file at `path`, exactly as stored (nothing is trimmed). Errors if the file cannot be read or is not valid UTF-8. |
-| `@glob(pattern: string)` | `[]string` | Lists, recursively, the files and directories that match the glob `pattern`. The result is **not sorted** and its order is unspecified; use `@sort` for a deterministic order. An invalid pattern currently results in an empty list rather than an error ([§14](#14-planned-features)). |
+| `@glob(pattern: string)` | `[]string` | Lists, recursively, the files and directories that match the glob `pattern`. The result is **not sorted** and its order is unspecified; use `@sort` for a deterministic order. An invalid pattern currently results in an empty list rather than an error ([§15](#15-planned-features)). |
 | `@basename(path: string)` | `string` | The final component of `path`. Trailing separators are ignored. |
 | `@join_path(parts: []string)` | `string` | Joins `parts` into one path using the **native path separator of the current operating system** (`\` on Windows, `/` elsewhere). |
 
@@ -1147,6 +1161,7 @@ set script = ["zsh", "-c"]
 | `script` | `[]string` | Command and arguments used to invoke each process call, e.g. `["sh", "-c"]`. |
 | `dotenv` | `bool \| string` | Whether to read a `.env` file into the environment. `set dotenv` enables the default `.env` file in `working_dir`; `set dotenv = "path/to/file"` enables it using that file instead. Default: `false`. See [§12.4](#124-environment-attributes) for how loaded values interact with `[env]` and the OS environment. |
 | `working_dir` | `string` | The root working directory. Defaults to the directory `tasq` was invoked from. It is the base of every task's working directory ([§12.5](#125-working-directory-attribute)), the working directory of static bindings ([§3](#3-bindings)), and the base for the default `.env` path. |
+| `jobs` | `number` | The global budget of parallel execution ([§13.1](#131-model-and-limits)): the maximum number of threads that execute tasq code at the same time, the main thread included. tasq never creates more threads than this value. It must be a whole number of at least `1` (anything else is a compile-time error); `set jobs = 1` runs everything sequentially. Default: the number of CPUs. |
 
 > There is no setting to ignore process failures; see [§6.2](#62-failure-handling).
 > Additional settings will be added in future versions.
@@ -1246,6 +1261,7 @@ A task body may contain any combination of:
 | Switch statement | `switch(...) { ... }` ([§8.6](#86-switch-statement)) |
 | For statement | `for(...) \|...\| { ... }` ([§8.7](#87-for-statement)) |
 | In statement | `in(path) { ... } else { ... }` ([§8.9](#89-in-statement)) |
+| Parallel block | `parallel[(n)] { ... }` ([§13.4](#134-parallel-block)) |
 | Task call | `name(...)` / `::name(...)` / `group::name(...)` ([§9](#9-task-calls)) |
 | Expression statement | Any other expression, e.g. `@print(msg)` |
 
@@ -1267,7 +1283,7 @@ _ := double(2)        // evaluated, result discarded
 STMT_BLOCK := '{' STATEMENTS '}' | STATEMENT
 ```
 
-A block with exactly one statement may omit its braces. This is one general rule, not a special form of any construct; a brace-less task such as `task build $`cc main.c`` is simply a consequence of it.
+A block with exactly one statement may omit its braces. This is one general rule, not a special form of any construct; a brace-less task such as `task build $`cc main.c`` is simply a consequence of it. The parallel block is the exception: it always needs its braces ([§13.4](#134-parallel-block)).
 
 ### 8.5 If Statement
 
@@ -1325,12 +1341,13 @@ switch(color) {
 `for` as a **statement** iterates over one or more lists or ranges in lock-step, running a block for each step. Unlike the `for` expression ([§4.5](#45-for-expression)), it produces no value.
 
 ```
-for(<subjects>) |<captures>| <stmt_block>
+for(<subjects>) [parallel[(<n>)]] |<captures>| <stmt_block>
 ```
 
 - `<subjects>`, `<captures>` and the iteration rules (shared window, shortest-subject bound, clamping, unbounded ranges) are exactly those of the `for` expression ([§4.5](#45-for-expression)), defined in [§4.9](#49-ranges-and-slices).
 - `<stmt_block>` is a `{ }` block or a single statement ([§8.4](#84-task-body)).
 - `break` and `continue` ([§4.6](#46-break-and-continue)) may be used inside, including from a nested `if`, `switch` or `in`.
+- `parallel`, when written, runs the iterations concurrently ([§13.2](#132-parallel-for)). `continue` then ends the current iteration, and `break` is not allowed.
 
 ```
 words   := ["one", "two", "three"]
@@ -1391,7 +1408,7 @@ task other [dep_a()] {
 **Basics:**
 
 - Each entry is an ordinary task call ([§9](#9-task-calls)): same scope resolution, argument passing and compile-time call errors.
-- Dependencies run before the body, one after another, **in the order listed**. They never run in parallel.
+- Dependencies run before the body, one after another, **in the order listed**. They never run in parallel (running dependencies in parallel is a planned feature, [§15](#15-planned-features)).
 - A dependency's arguments are ordinary expressions. They may use the task's **own arguments** (e.g. `[compile(target)]`), the group's shared arguments, static bindings and built-ins. The task body has not run yet, so its task-local bindings do not exist and cannot be used.
 - The task's `[env]` attributes ([§12.4](#124-environment-attributes)) **apply to its dependencies**, as if the task had called them itself.
 - Each dependency runs in its own working directory ([§12.5](#125-working-directory-attribute)), like any task.
@@ -1427,7 +1444,7 @@ task b [c()] { ... }
 task c [b()] { ... }
 ```
 
-Only dependency lists are checked. A cycle through task call statements ([§9](#9-task-calls)), such as two tasks that call each other from their bodies, is **not detected** yet ([§14](#14-planned-features)); running one never terminates normally.
+Only dependency lists are checked. A cycle through task call statements ([§9](#9-task-calls)), such as two tasks that call each other from their bodies, is **not detected** yet ([§15](#15-planned-features)); running one never terminates normally.
 
 **Examples:**
 
@@ -1986,6 +2003,7 @@ task create_user(
 - **Static bindings** ([§3](#3-bindings)) never see the `[env]` of the task that triggers them. They are evaluated in the environment of the scope they are declared in: the `.env` file (if enabled) and the OS environment.
 - **Task-local bindings** see the task's effective environment: its own `[env]` plus whatever it inherited.
 - `in` ([§4.11](#411-in-expression), [§8.9](#89-in-statement)) does not change the environment.
+- Every branch of a parallel construct runs in the environment in effect where the construct is written, and a task called from a branch inherits it as from any other place ([§13.1](#131-model-and-limits)).
 
 **Precedence.** When a variable could come from several sources, the most specific wins:
 
@@ -2067,7 +2085,7 @@ task docs {
 
 ### 12.6 Environment and Working Directory at a Glance
 
-This table summarizes the rules of [§3](#3-bindings), [§4.8](#48-lambdas), [§4.11](#411-in-expression), [§8.8](#88-task-dependencies), [§9](#9-task-calls), [§12.4](#124-environment-attributes) and [§12.5](#125-working-directory-attribute) in one place. Where it differs from those sections, they are authoritative.
+This table summarizes the rules of [§3](#3-bindings), [§4.8](#48-lambdas), [§4.11](#411-in-expression), [§8.8](#88-task-dependencies), [§9](#9-task-calls), [§12.4](#124-environment-attributes), [§12.5](#125-working-directory-attribute) and [§13](#13-parallel-execution) in one place. Where it differs from those sections, they are authoritative.
 
 | Where code runs | Environment | Working directory |
 |-----------------|-------------|-------------------|
@@ -2077,12 +2095,202 @@ This table summarizes the rules of [§3](#3-bindings), [§4.8](#48-lambdas), [§
 | Dependency | Inherits the declaring task's effective environment, including its `[env]` | Always its own directory |
 | Block inside `in` | Unchanged | The entered directory; restored when the block is left |
 | Lambda body | The environment in effect where the lambda is **called** | The directory in effect where the lambda is **called** |
+| Branch of a parallel construct | Its own copy of the environment in effect where the construct is written | Its own copy of the directory in effect there (an enclosing `in` included); an `in` inside the branch changes only that branch |
 
 `@invocation_dir()` is never affected by any of the above.
 
 ---
 
-## 13. Quick Reference
+## 13. Parallel Execution
+
+By default tasq runs everything sequentially. Writing the keyword **`parallel`** makes a construct run its parts concurrently. Three constructs have a parallel form:
+
+| Construct | Syntax | Concurrent parts (*branches*) | See |
+|-----------|--------|-------------------------------|-----|
+| `for` expression and statement | `for(<subjects>) parallel[(<n>)] \|<captures>\| ...` | the iterations | [§13.2](#132-parallel-for) |
+| `with` expression | `with(<subjects>) parallel[(<n>)] \|<captures>\| <expr>` | the subjects | [§13.3](#133-parallel-with) |
+| Parallel block (statement) | `parallel[(<n>)] { <statements> }` | the statements | [§13.4](#134-parallel-block) |
+
+The optional `(<n>)` limits how many branches run at the same time. Task dependencies are never parallel ([§8.8](#88-task-dependencies)).
+
+```
+task compress {
+    // at most 4 files at a time
+    for(files) parallel(4) |f| $`gzip {f}`
+
+    // three different jobs at once
+    parallel {
+        lint()
+        test()
+        $`cargo doc`
+    }
+    deploy()          // runs after the block has finished
+}
+```
+
+### 13.1 Model and Limits
+
+**Branches.** The unit of concurrency is a *branch*: one iteration of a parallel `for`, one subject of a parallel `with`, one statement of a parallel block. Branches are numbered in order: by iteration index, by subject position and by statement position.
+
+**Join.** A parallel construct finishes only when all of its branches have finished. Whatever follows it runs afterwards. Nothing is ever left running in the background.
+
+**Scopes.** Every branch runs in a scope of its own, created when the branch starts. The scope starts with a copy of the environment and the working directory in effect where the construct is written ([§12.6](#126-environment-and-working-directory-at-a-glance)). What a branch changes (an `in` block, a called task with `[env]`) is visible only to that branch. Because bindings are immutable, branches cannot change each other's values; the few things they do share are listed in [§13.7](#137-interaction-with-other-features).
+
+**Order of start.** Branches are started in order, the lowest-numbered branch that has not started yet first. They may finish in any order.
+
+**The limit `(n)`.** `n` is an expression of type `number`, evaluated once before the first branch starts. It is a whole-number context ([§2.1](#21-runtime-types)): it is rounded up, and a result below `1` counts as `1`. It means *at most `n` branches of this construct run at the same time*. Without it, the construct is limited only by the global budget.
+
+**The global budget.** The `jobs` setting ([§7](#7-settings)) is the global budget: the number of threads that may execute tasq code at the same time, **the main thread included**. tasq never creates more threads than this budget allows, so at most `jobs - 1` helper threads exist at any moment. `jobs` defaults to the number of CPUs.
+
+- The thread that reaches a parallel construct takes part in running its branches itself, and borrows helper threads from the budget only if any are left.
+- Nested parallel constructs share the one budget. An inner construct can therefore run fewer branches concurrently than its limit says, or none: its branches then run one after another on the calling thread. This never waits for a free thread and cannot deadlock.
+- `(n)` never raises the budget; it only lowers what one construct may use.
+- `set jobs = 1` turns concurrency off: every parallel construct runs its branches one after another, in order.
+- A construct whose branches mostly wait for external processes may benefit from a `jobs` value above the CPU count.
+
+```
+set jobs = 8
+
+task example {
+    // 3 files at a time, inside a global budget of 8 threads
+    for(files) parallel(3) |f| $`gzip {f}`
+}
+```
+
+### 13.2 Parallel For
+
+```
+for(<subjects>) parallel[(<n>)] |<captures>| <expr>          // expression
+for(<subjects>) parallel[(<n>)] |<captures>| <stmt_block>    // statement
+```
+
+The subjects, the captures and the window of indices work exactly as in a sequential `for` ([§4.9](#49-ranges-and-slices)): list subjects, ranges, lock-step, clamping. The only difference is that the iterations run concurrently. Each iteration gets its own scope with its own captures.
+
+| | Expression | Statement |
+|---|------------|-----------|
+| Result | A list, **in input order**, whatever the order in which the iterations finish | None |
+| `continue` | The element is dropped from the list | The iteration ends |
+| `break` | Compile-time error | Compile-time error |
+
+`break` is not allowed, because there is no stable meaning of "stop here" while other iterations are already running.
+
+```
+// Results keep input order, even if the first iteration finishes last
+sizes := for(["big.iso", "a.txt", "b.txt"]) parallel |f| $`stat -c %s {f}`
+
+// `continue` filters in the expression form
+up := for(hosts) parallel(8) |h| if ($[nofail]`ping -c1 {h}` == "") continue else h
+
+// Statement form: index capture, `continue` ends one iteration
+for(files, 0..) parallel |f, i| {
+    if (@is_dir(f)) continue
+    $`process {f} --id {i}`
+}
+```
+
+Parallel loops can be nested; the inner loop shares the global budget ([§13.1](#131-model-and-limits)):
+
+```
+grid := for(["a", "b"]) parallel |x| for([1, 2]) parallel |y| $`echo {x}{y}`   // [[a1, a2], [b1, b2]]
+```
+
+### 13.3 Parallel With
+
+```
+with(<subjects>) parallel[(<n>)] |<captures>| <expr>
+```
+
+All subjects are evaluated concurrently, each in a scope of its own. When **all** of them have finished, their values are bound to the captures and the body is evaluated **once**, exactly as in a sequential `with` ([§4.12](#412-with-expression)); the body itself does not run in parallel. The value of the whole expression is the value of the body.
+
+- The subjects are started in order but may finish in any order. The "left to right" guarantee of a sequential `with` does not hold: subjects must not depend on each other's side effects.
+- The rules for subjects, captures, destructuring and scope are those of [§4.12](#412-with-expression). In particular a subject still cannot be a fallible result `!T`, and captured names are visible only in the body.
+- If a subject fails, the body does not run ([§13.5](#135-failure)).
+- The limit works as everywhere else; it only matters when there are more subjects than `n`.
+
+```
+// Three independent lookups cost as much as the slowest one
+info := with(
+    $`git rev-parse --short HEAD`,
+    $`git branch --show-current`,
+    $`date +%F`
+) parallel |sha, branch, day| `{sha} {branch} {day}`
+
+// Gather concurrently, then continue with ordinary statements
+staging, prod := with(
+    $`curl -fsS https://staging.example.com/version`,
+    $`curl -fsS https://example.com/version`
+) parallel |s, p| (s, p)
+```
+
+### 13.4 Parallel Block
+
+```
+parallel[(<n>)] {
+    <statement>
+    <statement>
+    ...
+}
+```
+
+A parallel block is a statement. **Every statement of the block is one branch**, and all of them run concurrently. A statement that contains blocks of its own (`if`, `switch`, `for`, `in`) is still a single branch as a whole. Any statement is allowed: process statements, task calls, `if`, `switch`, `for` (also a parallel one), `in`, expression statements such as `@print(...)`, and bindings.
+
+- **Braces are required.** A single statement has nothing to run alongside, so the brace-less form of [§8.4](#84-task-body) does not apply to the parallel block.
+- **Every statement runs in a scope of its own.** A binding is allowed, mainly so that a value can be discarded legally with `_ := ...` ([§8.4](#84-task-body)). The names it introduces are visible only inside that statement: other statements of the block and the code after the block can never read them.
+- **`break` and `continue`** cannot refer to a `for` that encloses the block ([§4.6](#46-break-and-continue)): that is a compile-time error. Inside a `for` that is itself in a branch they work as usual.
+- The block finishes when all of its statements have finished.
+
+```
+task build_all {
+    parallel(2) {
+        in("frontend") $`npm run build`     // `in` affects only this branch
+        in("backend")  $`cargo build`
+        _ := $`git describe --tags`         // evaluated for its side effects, result discarded
+        if (@os() != "windows") docs()
+        for(images) parallel |img| $`optimize {img}`
+    }
+    @print("everything built")
+}
+```
+
+### 13.5 Failure
+
+A branch fails when it aborts the run in the usual way: a process that exits non-zero without `nofail` or `fallback` ([§6.2](#62-failure-handling)), `@error(...)`, an error raised by a task it called, and so on.
+
+- Every failing branch reports its error as it would in a sequential run.
+- After the first failure **no further branch is started**. Branches that are already running are **not interrupted**; they finish normally. Branches that never started are skipped silently.
+- When the running branches have finished, the construct aborts the run, and tasq exits with a non-zero status as for any other failure. Nothing after the construct runs, and a failing `with` does not evaluate its body.
+
+### 13.6 Status Code
+
+`@status_code()` ([§5](#5-built-in-functions)) is kept per scope, so every branch has its own.
+
+- Inside a branch it holds the status of the last process that branch ran. Before the branch has run one, it holds the value in effect where the construct is written, as in any nested block.
+- A branch never changes the status that other branches see.
+- When the construct has finished, the status is that of the **highest-numbered branch that ran a process**. This is the value a sequential run of the same construct would leave, whatever the order in which the branches finished. If no branch ran a process, the status is unchanged.
+
+### 13.7 Interaction with Other Features
+
+**Static bindings.** A static binding that several branches reference for the first time at the same moment is still evaluated **once** ([§3](#3-bindings)): one branch evaluates it while the others wait for the result. If its evaluation aborts, the run aborts ([§13.5](#135-failure)).
+
+**Task calls.** A task call statement in a branch runs the task as anywhere else: the task inherits the environment of the branch, runs in its own working directory, and starts its own call tree ([§8.8](#88-task-dependencies), [§9](#9-task-calls)). Call trees of different branches are independent, so deduplication never works across branches: two branches that call the same task run it twice, possibly at the same time. The dependencies of a task are never parallel, also when the task is called from a parallel branch.
+
+**Environment and working directory.** Private to each branch, see [§13.1](#131-model-and-limits) and [§12.6](#126-environment-and-working-directory-at-a-glance).
+
+**Output and input.** tasq does not order or group the output of concurrent branches. Echoed commands, `@print` output and the output of the processes themselves appear as they are produced and may interleave. Process expressions capture their output ([§6.1](#61-statements-and-expressions)), so they never interleave; use them, or `noecho`, where readable output matters. Process statements inherit stdin as usual, so branches that read from the terminal compete for the input: avoid interactive commands in parallel branches.
+
+### 13.8 Compile-Time Errors
+
+| Mistake | Example |
+|---------|---------|
+| `break` in a parallel `for` (expression or statement) | `for(xs) parallel \|x\| if (x < 0) break else x` |
+| `break` or `continue` that refers to a `for` outside the parallel block | `for(xs) \|x\| { parallel { break } }` |
+| A limit that is not a `number` | `parallel("4")` |
+| A parallel block without braces | `parallel $`make`` |
+| A `jobs` setting that is not a whole number of at least `1` | `set jobs = 0`, `set jobs = 2.5` |
+
+---
+
+## 14. Quick Reference
 
 ### Literals
 
@@ -2140,6 +2348,16 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 | `a()` as a statement in a body | Always runs; starts a new call tree | [§9](#9-task-calls) |
 | `a` depends on `b` and `b` on `a` | Compile-time error (cycles through call statements are not detected) | [§8.8](#88-task-dependencies) |
 
+### Parallel Execution
+
+| Form | Meaning | See |
+|------|---------|-----|
+| `for(xs) parallel \|x\| expr` | Iterations run concurrently; the result keeps input order; `continue` drops an element; no `break` | [§13.2](#132-parallel-for) |
+| `for(xs) parallel(4) \|x\| stmt` | Statement form, at most 4 iterations at once; `continue` ends an iteration; no `break` | [§13.2](#132-parallel-for) |
+| `with(a, b) parallel \|x, y\| expr` | Subjects are evaluated concurrently, then the body runs once | [§13.3](#133-parallel-with) |
+| `parallel(n) { s1 s2 }` | Every statement is a concurrent branch; braces required | [§13.4](#134-parallel-block) |
+| `set jobs = 8` | Global budget of threads (a whole number, at least 1); default: number of CPUs | [§7](#7-settings), [§13.1](#131-model-and-limits) |
+
 ### Scope Resolution
 
 | Syntax | Resolves to |
@@ -2150,7 +2368,7 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 
 ---
 
-## 14. Planned Features
+## 15. Planned Features
 
 Reserved for future versions; not currently part of the language:
 
@@ -2164,3 +2382,7 @@ Reserved for future versions; not currently part of the language:
 - **Configurable stdin for process expressions.** They currently read an empty stdin.
 - **Dependency identity.** Today a run is identified by the task and its resolved arguments only ([§8.8](#88-task-dependencies)). Two dependencies on the same task with the same arguments count as one run even if they sit under different `[env]` attributes. A future version may make the effective `[env]` part of the identity. (The working directory needs no such handling: it depends only on the task, [§12.5](#125-working-directory-attribute).)
 - **Cycle detection for task call statements.** Dependency cycles are rejected at compile time, but cycles through task call statements are not detected today ([§8.8](#88-task-dependencies), [§9](#9-task-calls)). A future version may report them.
+- **Parallel dependencies.** An opt-in way to run the dependencies of a task concurrently. Dependencies are always sequential today ([§8.8](#88-task-dependencies)).
+- **Output modes for parallel constructs.** Today the output of concurrent branches is neither ordered nor grouped ([§13.7](#137-interaction-with-other-features)). Grouped output (each branch's output printed together when the branch finishes) and line-prefixed live output are being considered, probably selected by a setting.
+- **Tuple shorthand for parallel `with`.** `with(<subjects>) parallel ...`, which returns the results as a tuple without captures and body, for use with destructuring (`a, b := with(x, y) parallel ...`).
+- **Cancelling running branches on failure.** Today running branches always finish ([§13.5](#135-failure)); stopping them early would require killing their processes.
