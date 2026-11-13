@@ -258,11 +258,13 @@ pub fn buildCommand(allocator: std.mem.Allocator) !*Command {
         .short = null,
     }, .flag);
 
-    _ = try rootCmd.createSub(.{
-        .name = "--dump",
-        .brief = "dumps either ast tree or ir into stdout",
-        .run = .set(Dump),
-    });
+    if (comptime builtin.optimize == .debug) {
+        _ = try rootCmd.createSub(.{
+            .name = "--dump",
+            .brief = "dumps either ast tree or ir into stdout",
+            .run = .set(Dump),
+        });
+    }
 
     return rootCmd;
 }
