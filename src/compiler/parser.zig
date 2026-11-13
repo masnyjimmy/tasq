@@ -12,18 +12,19 @@ const SET_DECL_START: FollowSet = .set(&.{.ident});
 const DECL_START: FollowSet = .set(&.{ .ident, .lparen, .set_kw, .task_kw, .group_kw });
 const TARGET_START: FollowSet = .set(&.{ .ident, .lparen });
 const ATTR_START: FollowSet = .set(&.{.ident});
-const META_START: FollowSet = .set(&.{
-    .null_kw, .false_kw,   .true_kw, .number,
-    .lparen,  .apostrophe, .quote,   .lbracket,
+const STRING_START: FollowSet = .set(&.{ .quote, .raw_quote, .raw_backtick });
+const META_START: FollowSet = STRING_START.with(&.{
+    .null_kw, .false_kw,   .true_kw,  .number,
+    .lparen,  .apostrophe, .lbracket,
 });
 const PARAM_TYPE_START: FollowSet = .set(&.{
     .lbracket, .string_type, .number_type, .flag_type,
 });
-const EXPR_START: FollowSet = .set(&.{
-    .true_kw,   .false_kw, .number,      .ident,
-    .lparen,    .quote,    .backtick,    .lbracket,
-    .switch_kw, .if_kw,    .at,          .not_kw,
-    .minus,     .dollar,   .continue_kw, .break_kw,
+const EXPR_START: FollowSet = STRING_START.with(&.{
+    .true_kw, .false_kw,    .number,   .ident,
+    .lparen,  .backtick,    .lbracket, .switch_kw,
+    .if_kw,   .at,          .not_kw,   .minus,
+    .dollar,  .continue_kw, .break_kw,
 });
 // A list element is either an expression or a spread (`...expr`).
 // `...` is NOT part of EXPR_START: a spread is only valid directly inside
@@ -198,7 +199,7 @@ pub const Parser = struct {
                 try self.close(.tuple);
             },
             .apostrophe => try self.parseChar(follow),
-            .quote => try self.parseString(follow),
+            inline .quote, .raw_quote => |kind| try self.parseString(kind, follow),
             .lbracket => {
                 try self.open();
                 try self.parseSequence(
@@ -849,7 +850,7 @@ pub const Parser = struct {
             },
             .dollar => try self.parseProcess(follow, .expr),
             .backtick => try self.parseStringExpr(follow),
-            .quote => try self.parseString(follow),
+            inline .quote, .raw_quote, .raw_backtick => |kind| try self.parseString(kind, follow),
             .lbracket => {
                 try self.open();
 
@@ -1024,12 +1025,24 @@ pub const Parser = struct {
         try self.close(.char);
     }
 
-    fn parseString(self: *Parser, follow: FollowSet) Error!void {
+    fn parseString(self: *Parser, comptime open_kind: TokenKind, follow: FollowSet) Error!void {
         try self.open();
 
-        try self.expect(.quote, follow.with(&.{ .string, .quote }));
-        _ = try self.eat(.string);
-        try self.expect(.quote, follow);
+        const string_kind: TokenKind = switch (open_kind) {
+            .quote => .string,
+            .raw_quote, .raw_backtick => .raw_string,
+            else => unreachable,
+        };
+
+        const close_kind: TokenKind = switch (open_kind) {
+            .quote, .raw_quote => .quote,
+            .raw_backtick => .backtick,
+            else => unreachable,
+        };
+
+        try self.expect(open_kind, follow.with(&.{ .string, open_kind }));
+        _ = try self.eat(string_kind);
+        try self.expect(close_kind, follow);
 
         try self.close(.string);
     }

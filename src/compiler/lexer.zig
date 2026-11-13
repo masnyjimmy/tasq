@@ -47,6 +47,7 @@ fn hexValue(c: u8) u32 {
 const StringCtx = struct {
     terminator: u8,
     close_kind: TokenKind,
+    raw: bool,
     multiline: bool,
     interporable: bool,
 };
@@ -141,6 +142,8 @@ pub const Lexer = struct {
     }
 
     pub fn nextString(self: *Lexer, ctx: StringCtx) Error!Token {
+        std.debug.assert(!ctx.raw or !ctx.interporable);
+
         if (self.peek() == ctx.terminator) {
             _ = self.mode_stack.pop();
             return try self.consumeChar(ctx.close_kind);
@@ -167,6 +170,7 @@ pub const Lexer = struct {
 
         const token = try lexer.lexString(
             terminators,
+            ctx.raw,
             ctx.multiline,
         );
 
@@ -186,118 +190,148 @@ pub const Lexer = struct {
     }
 
     pub fn nextCode(self: *Lexer) Error!Token {
-        while (true) {
-            if (std.ascii.isWhitespace(self.peek())) {
-                return self.lexWhitespace();
-            }
+        if (std.ascii.isWhitespace(self.peek())) {
+            return self.lexWhitespace();
+        }
 
-            switch (self.peek()) {
-                0 => return try self.makeToken(.eof, self.pos, 0),
-                // Comments — skip and loop
-                '/' => {
-                    if (self.peekAt(1) == '/') {
-                        return self.lexLineComment();
-                    }
-                    return self.consumeChar(.slash);
-                },
+        const char = self.peek();
 
-                // Single-char symbols
-                '{' => return self.consumeChar(.lbrace),
-                '}' => return self.consumeChar(.rbrace),
-                '[' => return self.consumeChar(.lbracket),
-                ']' => return self.consumeChar(.rbracket),
-                '(' => return self.consumeChar(.lparen),
-                ')' => return self.consumeChar(.rparen),
-                ':' => {
-                    switch (self.peekAt(1)) {
-                        '=' => return self.consumeTwo(.colon_eq),
-                        ':' => return self.consumeTwo(.dcolon),
-                        else => return self.consumeChar(.colon),
-                    }
-                },
-                '\'' => {
-                    try self.mode_stack.append(self.allocator, .{ .char = .{
-                        .terminator = '\'',
-                        .close_kind = .apostrophe,
-                    } });
-                    return self.consumeChar(.apostrophe);
-                },
+        // mode changing things first
+        switch (char) {
+            'r' => switch (self.peekAt(1)) {
                 '"' => {
                     try self.mode_stack.append(self.allocator, .{ .string = .{
-                        .terminator = '\"',
+                        .terminator = '"',
                         .close_kind = .quote,
+                        .raw = true,
                         .multiline = false,
                         .interporable = false,
                     } });
-                    return self.consumeChar(.quote);
+                    return try self.consumeTwo(.raw_quote);
                 },
                 '`' => {
                     try self.mode_stack.append(self.allocator, .{ .string = .{
                         .terminator = '`',
                         .close_kind = .backtick,
-                        .multiline = false,
-                        .interporable = true,
+                        .raw = true,
+                        .multiline = true,
+                        .interporable = false,
                     } });
-                    return self.consumeChar(.backtick);
+                    return try self.consumeTwo(.raw_backtick);
                 },
-                '.' => {
-                    if (self.peekAt(1) == '.') {
-                        if (self.peekAt(2) == '.')
-                            return self.consumeN(.triple_dot, 3);
+                else => {},
+            },
+            '"' => {
+                try self.mode_stack.append(self.allocator, .{ .string = .{
+                    .terminator = '"',
+                    .close_kind = .quote,
+                    .raw = false,
+                    .multiline = false,
+                    .interporable = false,
+                } });
+                return try self.consumeChar(.quote);
+            },
+            '`' => {
+                try self.mode_stack.append(self.allocator, .{ .string = .{
+                    .terminator = '`',
+                    .close_kind = .backtick,
+                    .raw = false,
+                    .multiline = true,
+                    .interporable = true,
+                } });
+                return try self.consumeChar(.backtick);
+            },
+            '\'' => {
+                try self.mode_stack.append(self.allocator, .{ .char = .{
+                    .terminator = '\'',
+                    .close_kind = .apostrophe,
+                } });
+                return try self.consumeChar(.apostrophe);
+            },
+            else => {},
+        }
 
-                        return self.consumeN(.double_dot, 2);
-                    }
+        switch (char) {
+            0 => return try self.makeToken(.eof, self.pos, 0),
+            // Comments — skip and loop
+            '/' => {
+                if (self.peekAt(1) == '/') {
+                    return self.lexLineComment();
+                }
+                return self.consumeChar(.slash);
+            },
 
-                    return self.consumeChar(.dot);
-                },
-                '+' => return self.consumeChar(.plus),
-                '-' => return self.consumeChar(.minus),
-                '*' => return self.consumeChar(.star),
-                ',' => return self.consumeChar(.comma),
+            // Single-char symbols
+            '{' => return self.consumeChar(.lbrace),
+            '}' => return self.consumeChar(.rbrace),
+            '[' => return self.consumeChar(.lbracket),
+            ']' => return self.consumeChar(.rbracket),
+            '(' => return self.consumeChar(.lparen),
+            ')' => return self.consumeChar(.rparen),
+            ':' => {
+                switch (self.peekAt(1)) {
+                    '=' => return self.consumeTwo(.colon_eq),
+                    ':' => return self.consumeTwo(.dcolon),
+                    else => return self.consumeChar(.colon),
+                }
+            },
+            '.' => {
+                if (self.peekAt(1) == '.') {
+                    if (self.peekAt(2) == '.')
+                        return self.consumeN(.triple_dot, 3);
 
-                // Two-char symbols
-                '=' => {
-                    switch (self.peekAt(1)) {
-                        '=' => return self.consumeTwo(.eq_eq),
-                        '>' => return self.consumeTwo(.fat_arrow),
-                        else => {},
-                    }
+                    return self.consumeN(.double_dot, 2);
+                }
 
-                    return self.consumeChar(.eq);
-                },
-                '!' => {
-                    if (self.peekAt(1) == '=') return self.consumeTwo(.bang_eq);
-                    return self.consumeInvalid();
-                },
-                '<' => {
-                    if (self.peekAt(1) == '=') return self.consumeTwo(.lt_eq);
-                    return self.consumeChar(.lt);
-                },
-                '>' => {
-                    if (self.peekAt(1) == '=') return self.consumeTwo(.gt_eq);
-                    return self.consumeChar(.gt);
-                },
-                '|' => {
-                    return self.consumeChar(.pipe);
-                },
-                '@' => {
-                    return self.consumeChar(.at);
-                },
-                '$' => {
-                    return self.consumeChar(.dollar);
-                },
-                '%' => {
-                    return self.consumeChar(.percent);
-                },
-                // Numbers
-                '0'...'9' => return self.lexNumber(),
+                return self.consumeChar(.dot);
+            },
+            '+' => return self.consumeChar(.plus),
+            '-' => return self.consumeChar(.minus),
+            '*' => return self.consumeChar(.star),
+            ',' => return self.consumeChar(.comma),
 
-                // Identifiers and keywords
-                'a'...'z', 'A'...'Z', '_' => return self.lexIdent(),
+            // Two-char symbols
+            '=' => {
+                switch (self.peekAt(1)) {
+                    '=' => return self.consumeTwo(.eq_eq),
+                    '>' => return self.consumeTwo(.fat_arrow),
+                    else => {},
+                }
 
-                // Everything else
-                else => return self.consumeInvalid(),
-            }
+                return self.consumeChar(.eq);
+            },
+            '!' => {
+                if (self.peekAt(1) == '=') return self.consumeTwo(.bang_eq);
+                return self.consumeInvalid();
+            },
+            '<' => {
+                if (self.peekAt(1) == '=') return self.consumeTwo(.lt_eq);
+                return self.consumeChar(.lt);
+            },
+            '>' => {
+                if (self.peekAt(1) == '=') return self.consumeTwo(.gt_eq);
+                return self.consumeChar(.gt);
+            },
+            '|' => {
+                return self.consumeChar(.pipe);
+            },
+            '@' => {
+                return self.consumeChar(.at);
+            },
+            '$' => {
+                return self.consumeChar(.dollar);
+            },
+            '%' => {
+                return self.consumeChar(.percent);
+            },
+            // Numbers
+            '0'...'9' => return self.lexNumber(),
+
+            // Identifiers and keywords
+            'a'...'z', 'A'...'Z', '_' => return self.lexIdent(),
+
+            // Everything else
+            else => return self.consumeInvalid(),
         }
     }
 
@@ -319,6 +353,7 @@ pub const Lexer = struct {
         pub fn lexString(
             self: *StringLexer,
             terminators: []const []const u8,
+            raw: bool,
             allow_new_line: bool,
         ) !Token {
             const lexer = self.lexer;
@@ -327,7 +362,7 @@ pub const Lexer = struct {
             while (true) {
                 for (terminators) |terminator| {
                     if (self.checkTerminator(terminator)) {
-                        return try self.lexer.makeToken(.string, start, self.lexer.pos - start);
+                        return try self.lexer.makeToken(if (raw) .raw_string else .string, start, self.lexer.pos - start);
                     }
                 }
 
@@ -338,7 +373,7 @@ pub const Lexer = struct {
                         return try lexer.makeToken(.unterminated_string, start, lexer.pos - start);
                     },
                     // escape character => handle through lexCharacter,
-                    '\\' => {
+                    '\\' => if (raw == false) {
                         const escape_start = lexer.pos;
                         const escape = try self.lexCharacter();
 

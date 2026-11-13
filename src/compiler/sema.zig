@@ -12,6 +12,7 @@ const Type = @"type".Type;
 const runtime = @import("runtime.zig");
 const meta = @import("meta.zig");
 const text = @import("text.zig");
+const text_block = @import("text_block.zig");
 
 const binary = @import("binary.zig");
 
@@ -1741,20 +1742,14 @@ pub const Sema = struct {
                     .is_static = is_static,
                 };
             },
-            .string => |string| {
-                const parts = try self.arena.allocator().alloc(ir.StringPart, 1);
-                parts[0] = .{
-                    .lit = if (string.lit) |token|
-                        try text.processString(self.arena.allocator(), token.lexeme)
-                    else
-                        "",
-                };
-
-                return .{
-                    .expr = .{ .string = parts },
-                    .type = .string,
-                    .is_static = true,
-                };
+            .string => |string| .{
+                .expr = .{
+                    .string = try self.arena.allocator().dupe(ir.StringPart, &.{
+                        .{ .lit = try self.processString(string) },
+                    }),
+                },
+                .type = .string,
+                .is_static = true,
             },
             .string_expr => |string| {
                 const result = try self.analyseStringExpr(string, scope);
@@ -2272,6 +2267,30 @@ pub const Sema = struct {
         };
     }
 
+    fn processString(self: *Sema, string: ast.String) Error![]const u8 {
+        return if (string.lit) |lit| {
+            const shape: text_block.Shape = switch (string.open.kind) {
+                .quote, .raw_quote => .single_line_only,
+                .raw_backtick => .block_allowed,
+                else => unreachable,
+            };
+            const escapes: text_block.Escapes = switch (lit.kind) {
+                .raw_string => .none,
+                .string => .cooked,
+                else => unreachable,
+            };
+
+            return switch (try text_block.whole(self.arena.allocator(), lit.lexeme, shape, escapes)) {
+                .ok => |s| s,
+                .bad => |p| {
+                    //TODO: report problem
+                    _ = p;
+                    return lit.lexeme;
+                },
+            };
+        } else "";
+    }
+
     fn analyseInExpr(self: *Sema, in_expr: ast.InExpr, scope: *Scope) Error!ExprResult(ir.InExpr) {
         const subject_node = in_expr.subject orelse return Error.Incomplete;
         var subject = try self.analyseExpr(
@@ -2743,39 +2762,44 @@ pub const Sema = struct {
     }
 
     fn analyseStringExpr(self: *Sema, string: ast.StringExpr, scope: *Scope) Error!ExprResult(ir.String) {
-        var out: std.ArrayList(ir.StringPart) = .empty;
+        const allocator = self.arena.allocator();
 
+        var measure: text_block.Measure = .init(.block_allowed);
+        var it = string.iter();
+        while (it.next()) |part| switch (part) {
+            .expr => measure.hole(),
+            .lit => |lit| measure.lit(lit.lexeme, .cooked),
+        };
+        const block = switch (measure.finish()) {
+            .ok => |b| b,
+            .bad => |p| {
+                try self.diagnostics.err(.{ .start = 0, .len = 0 }, "{s}", .{p.message()});
+                return Error.Incomplete;
+            },
+        };
+
+        var writer: text_block.Writer = .init(block, try allocator.alloc(u8, block.cap));
+        var out: std.ArrayList(ir.StringPart) = .empty;
         var is_static = true;
 
-        var it = string.iter();
-
-        while (it.next()) |part| {
-            switch (part) {
-                .expr => |expr| {
-                    var result = try self.analyseExpr(expr, scope);
-                    _ = try self.rejectNoreturn(expr, &result, "an interpolated value", .{});
-
-                    if (result.is_static == false)
-                        is_static = false;
-                    //TODO: validate type here
-                    try out.append(
-                        self.arena.allocator(),
-                        .{ .expr = result.expr },
-                    );
-                },
-                .lit => |lit| {
-                    try out.append(
-                        self.arena.allocator(),
-                        .{
-                            .lit = try text.processString(
-                                self.arena.allocator(),
-                                lit.lexeme,
-                            ),
-                        },
-                    );
-                },
-            }
-        }
+        it = string.iter();
+        while (it.next()) |part| switch (part) {
+            .expr => |expr| {
+                writer.hole();
+                var result = try self.analyseExpr(expr, scope);
+                _ = try self.rejectNoreturn(expr, &result, "an interpolation value", .{});
+                if (!result.is_static) is_static = false;
+                try out.append(allocator, .{ .expr = result.expr });
+            },
+            .lit => |lit| {
+                const piece = writer.lit(lit.lexeme, .cooked) catch {
+                    _ = writer.problem;
+                    unreachable;
+                };
+                if (piece.len != 0)
+                    try out.append(allocator, .{ .lit = piece });
+            },
+        };
 
         return .{
             .expr = try out.toOwnedSlice(self.arena.allocator()),
@@ -2816,7 +2840,7 @@ pub const Sema = struct {
                 .char = token.lexeme[0],
             } else return Error.Incomplete,
             .string => |str| .{
-                .string = if (str) |token| token.lexeme else "",
+                .string = try self.processString(str),
             },
             .tuple => |tuple| {
                 var elems: std.ArrayList(meta.Value) = .empty;
@@ -3417,11 +3441,7 @@ const OptionsResolver = struct {
                 );
 
                 for (value.list) |val| {
-                    const string = try text.processString(
-                        self.sema.arena.allocator(),
-                        val.string,
-                    );
-                    out.appendAssumeCapacity(string);
+                    out.appendAssumeCapacity(val.string);
                 }
 
                 return .{

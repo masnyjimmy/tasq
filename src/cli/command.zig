@@ -1,7 +1,9 @@
 const std = @import("std");
 const lib = @import("lib");
-const conzole = @import("conzole");
+
+const builtin = @import("builtin");
 const build_options = @import("build_options");
+const conzole = @import("conzole");
 
 const AppContext = @import("Context.zig");
 
@@ -89,6 +91,7 @@ fn Dump(ctx: *const Context) !void {
 
     const Target = enum {
         source,
+        lex,
         tree,
         ir,
 
@@ -141,6 +144,18 @@ fn Dump(ctx: *const Context) !void {
             }
 
             var lexer = compiler.Lexer.init(arena.allocator(), s);
+
+            if (t == .lex) {
+                var token = try lexer.next();
+                while (token.kind != .eof) : (token = try lexer.next()) {
+                    try c.app.printer.print(
+                        c.app.allocator,
+                        "{t: <15}:\t'{f}'\n",
+                        .{ token.kind, lib.debug.vstring(token.lexeme) },
+                    );
+                }
+                return;
+            }
 
             const lex_tree = try compiler.token_tree.TreeReader.read(
                 arena.allocator(),
@@ -243,11 +258,13 @@ pub fn buildCommand(allocator: std.mem.Allocator) !*Command {
         .short = null,
     }, .flag);
 
-    _ = try rootCmd.createSub(.{
-        .name = "--dump",
-        .brief = "dumps either ast tree or ir into stdout",
-        .run = .set(Dump),
-    });
+    if (comptime builtin.optimize == .debug) {
+        _ = try rootCmd.createSub(.{
+            .name = "--dump",
+            .brief = "dumps either ast tree or ir into stdout",
+            .run = .set(Dump),
+        });
+    }
 
     return rootCmd;
 }
