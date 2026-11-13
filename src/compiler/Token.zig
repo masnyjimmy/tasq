@@ -6,6 +6,7 @@ const Token = @This();
 pub const Kind = enum {
     // Literals
     char,
+    raw_string,
     string,
     number,
     true_kw,
@@ -54,7 +55,9 @@ pub const Kind = enum {
     comma, // ,
     apostrophe, // '
     quote, // "
+    raw_quote, // r"
     backtick, // `,
+    raw_backtick, // r`
     eq, // =
     fat_arrow, // =>
     colon_eq, // :=

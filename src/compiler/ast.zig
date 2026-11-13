@@ -184,10 +184,20 @@ pub const Name = struct {
 
 pub const String = struct {
     node: *const cst.Node,
+    open: cst.Token,
     lit: ?cst.Token,
 
     pub fn from(node: *const cst.Node) String {
-        return .{ .node = node, .lit = node.childToken(.string) };
+        var it = node.iter();
+
+        const open = it.expectAnyToken(&.{ .raw_quote, .quote, .raw_backtick }) orelse unreachable;
+        const lit = it.eatAnyToken(&.{ .string, .raw_string });
+
+        return .{
+            .node = node,
+            .open = open,
+            .lit = lit,
+        };
     }
 };
 
@@ -226,7 +236,13 @@ pub const Attribute = struct {
 };
 
 pub const Meta = struct {
-    const KINDS: []const cst.NodeKind = &.{ .literal, .tuple, .char, .string, .list };
+    const KINDS: []const cst.NodeKind = &.{
+        .literal,
+        .tuple,
+        .char,
+        .string,
+        .list,
+    };
 
     node: *const cst.Node,
 
@@ -234,7 +250,7 @@ pub const Meta = struct {
         literal: ?cst.Token,
         tuple: MetaIterated,
         char: ?cst.Token,
-        string: ?cst.Token,
+        string: String,
         list: MetaIterated,
     };
 
@@ -247,7 +263,7 @@ pub const Meta = struct {
             .literal => .{ .literal = self.node.childTokenOf(&.{ .null_kw, .true_kw, .false_kw, .number }) },
             .tuple => .{ .tuple = .from(self.node) },
             .char => .{ .char = self.node.childToken(.char) },
-            .string => .{ .string = self.node.childToken(.string) },
+            .string => .{ .string = .from(self.node) },
             .list => .{ .list = .from(self.node) },
             else => unreachable,
         };
