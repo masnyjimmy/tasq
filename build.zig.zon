@@ -3,8 +3,8 @@
     .version = "0.17.0",
     .dependencies = .{
         .conzole = .{
-            .url = "git+https://github.com/masnyjimmy/conzole#a15c2742c9823fb590c6d94a815a206f35ee1986",
-            .hash = "conzole-1.0.11-DmAtFJfbAABbqC0kFJtY4XWV3h9fp0yLr1UeZQ8az-wn",
+            .url = "git+https://github.com/masnyjimmy/conzole#0d35a724eba7f1fb17f8d2283ff29c66c9577e76",
+            .hash = "conzole-1.0.11-DmAtFMnbAAB3zWFbCR12703xjKm3AzSLz4jXiNs7aT2r",
         },
         .lsp_kit = .{
             .url = "git+https://github.com/zigtools/lsp-kit#3e1058db66079911fdde82f833fdce6856e0a706",
