@@ -3,7 +3,7 @@
     "description": "tasq language vscode support extension",
     "author": "masnyjimmy",
     "license": "ISC",
-    "version": "0.1.0",
+    "version": "0.3.4-beta",
     "homepage": "https://masnyjimmy.github.io/tasq",
     "repository": {
         "type": "git",

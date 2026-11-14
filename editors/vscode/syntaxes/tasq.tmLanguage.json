@@ -5,7 +5,11 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#strings" },
+    { "include": "#raw-string" },
+    { "include": "#raw-block-string" },
     { "include": "#char" },
+    { "include": "#process-string" },
+    { "include": "#process-raw-string" },
     { "include": "#process" },
     { "include": "#interpolated-string" },
     { "include": "#group-definition" },
@@ -31,7 +35,7 @@
     },
 
     "escape": {
-      "comment": "escape sequences, valid in every literal kind: \\n \\t \\r \\\\ \\\" \\' \\` \\0 \\{ \\} \\xNN \\u{NNNN...}. Order matters: specific forms first, catch-all invalid last.",
+      "comment": "escape sequences, valid in \"...\" and `...` (NOT in raw strings): \\n \\t \\r \\\\ \\\" \\' \\` \\0 \\{ \\} \\xNN \\u{NNNN...}. Order matters: specific forms first, catch-all invalid last.",
       "patterns": [
         {
           "name": "constant.character.escape.unicode.tasq",
@@ -56,7 +60,7 @@
       "patterns": [
         {
           "name": "keyword.control.tasq",
-          "match": "\\b(set|task|group|if|else|switch|for|break|continue|fallback|with|in)\\b"
+          "match": "\\b(set|task|group|if|else|switch|for|break|continue|fallback|with|in|parallel)\\b"
         },
         {
           "name": "keyword.operator.logical.tasq",
@@ -83,7 +87,7 @@
 
     "function-call": {
       "comment": "identifier immediately followed by '(' that isn't a reserved word — covers dependency-list calls like dep_task(...) and builtin-style calls",
-      "match": "\\b(?!task\\b|group\\b|if\\b|else\\b|switch\\b|for\\b|fallback\\b|set\\b|and\\b|or\\b|with\\b|in\\b|not\\b|true\\b|false\\b|null\\b|string\\b|flag\\b|number\\b)([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+      "match": "\\b(?!task\\b|group\\b|if\\b|else\\b|switch\\b|for\\b|fallback\\b|set\\b|and\\b|or\\b|with\\b|in\\b|parallel\\b|not\\b|true\\b|false\\b|null\\b|string\\b|flag\\b|number\\b)([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
       "captures": {
         "1": { "name": "entity.name.function.call.tasq" }
       }
@@ -166,13 +170,47 @@
     },
 
     "strings": {
-      "comment": "basic string: \"text\" — no interpolation, escapes only",
+      "comment": "basic string: \"text\" — single line, escapes, no interpolation. Ends at end-of-line so a stray quote cannot swallow the rest of the file.",
       "name": "string.quoted.double.tasq",
       "begin": "\"",
-      "end": "\"",
+      "beginCaptures": {
+        "0": { "name": "punctuation.definition.string.begin.tasq" }
+      },
+      "end": "\"|$",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.tasq" }
+      },
       "patterns": [
         { "include": "#escape" }
       ]
+    },
+
+    "raw-string": {
+      "comment": "raw string: r\"text\" — single line, NO escapes, no interpolation. The `r` is deliberately outside the string scope so themes color it like a modifier.",
+      "begin": "(?<![A-Za-z0-9_])(r)(\")",
+      "beginCaptures": {
+        "1": { "name": "storage.modifier.raw.tasq" },
+        "2": { "name": "string.quoted.double.raw.tasq punctuation.definition.string.begin.tasq" }
+      },
+      "contentName": "string.quoted.double.raw.tasq",
+      "end": "\"|$",
+      "endCaptures": {
+        "0": { "name": "string.quoted.double.raw.tasq punctuation.definition.string.end.tasq" }
+      }
+    },
+
+    "raw-block-string": {
+      "comment": "raw multiline string: r`...` — may span lines, NO escapes, no interpolation. Ends at the first backtick.",
+      "begin": "(?<![A-Za-z0-9_])(r)(`)",
+      "beginCaptures": {
+        "1": { "name": "storage.modifier.raw.tasq" },
+        "2": { "name": "string.quoted.other.raw.tasq punctuation.definition.string.begin.tasq" }
+      },
+      "contentName": "string.quoted.other.raw.tasq",
+      "end": "`",
+      "endCaptures": {
+        "0": { "name": "string.quoted.other.raw.tasq punctuation.definition.string.end.tasq" }
+      }
     },
 
     "char": {
@@ -186,7 +224,7 @@
     },
 
     "interpolated-string": {
-      "comment": "interpolated string: `text {expr} text`. #escape comes first so \\{ \\} \\` and \\u{...} are consumed before { can start an interpolation or ` can end the string.",
+      "comment": "backtick string: `text {expr} text` — single line or multiline, escapes + interpolation. #escape comes first so \\{ \\} \\` and \\u{...} are consumed before { can start an interpolation or ` can end the string.",
       "name": "string.interpolated.tasq",
       "begin": "`",
       "beginCaptures": {
@@ -202,19 +240,22 @@
       ]
     },
 
-    "process": {
-      "comment": "process call: $`command {expr}` with optional attributes: $[nofail, noecho]`command`. Assumes no nested ']' inside the attribute list.",
+    "process-attributes": {
+      "comment": "contents of $[...]: nofail, noecho, script, ...",
+      "patterns": [
+        { "name": "entity.other.attribute-name.tasq", "match": "[a-zA-Z_][a-zA-Z0-9_]*" },
+        { "name": "punctuation.separator.delimiter.tasq", "match": "," }
+      ]
+    },
+
+    "process-string": {
+      "comment": "process call with a backtick string: $`cmd {expr}` / $[nofail]`cmd`. Kept as one begin/end rule so the command text keeps its own scope. Assumes no nested ']' inside the attribute list.",
       "name": "meta.process.tasq string.interpolated.process.tasq",
-      "begin": "(\\$)(?:(\\[)([^\\]\\n]*)(\\]))?(`)",
+      "begin": "(\\$)(?:(\\[)([^\\]\\n]*)(\\]))?[ \\t]*(`)",
       "beginCaptures": {
         "1": { "name": "keyword.operator.process.tasq" },
         "2": { "name": "punctuation.section.brackets.begin.tasq" },
-        "3": {
-          "patterns": [
-            { "name": "entity.other.attribute-name.tasq", "match": "[a-zA-Z_][a-zA-Z0-9_]*" },
-            { "name": "punctuation.separator.delimiter.tasq", "match": "," }
-          ]
-        },
+        "3": { "patterns": [{ "include": "#process-attributes" }] },
         "4": { "name": "punctuation.section.brackets.end.tasq" },
         "5": { "name": "punctuation.definition.string.begin.tasq" }
       },
@@ -228,8 +269,38 @@
       ]
     },
 
+    "process-raw-string": {
+      "comment": "process call with a raw multiline string: $[script]r`...` — no escapes, no interpolation",
+      "name": "meta.process.tasq",
+      "begin": "(\\$)(?:(\\[)([^\\]\\n]*)(\\]))?[ \\t]*(r)(`)",
+      "beginCaptures": {
+        "1": { "name": "keyword.operator.process.tasq" },
+        "2": { "name": "punctuation.section.brackets.begin.tasq" },
+        "3": { "patterns": [{ "include": "#process-attributes" }] },
+        "4": { "name": "punctuation.section.brackets.end.tasq" },
+        "5": { "name": "storage.modifier.raw.tasq" },
+        "6": { "name": "string.quoted.other.raw.process.tasq punctuation.definition.string.begin.tasq" }
+      },
+      "contentName": "string.quoted.other.raw.process.tasq",
+      "end": "`",
+      "endCaptures": {
+        "0": { "name": "string.quoted.other.raw.process.tasq punctuation.definition.string.end.tasq" }
+      }
+    },
+
+    "process": {
+      "comment": "bare process operator: `$` [attributes] followed by ANY other expression (proc := '$' [attributes] expr), e.g. $cmd or $(\"make \" + target). The two string forms above are matched first.",
+      "match": "(\\$)(?:(\\[)([^\\]\\n]*)(\\]))?",
+      "captures": {
+        "1": { "name": "keyword.operator.process.tasq" },
+        "2": { "name": "punctuation.section.brackets.begin.tasq" },
+        "3": { "patterns": [{ "include": "#process-attributes" }] },
+        "4": { "name": "punctuation.section.brackets.end.tasq" }
+      }
+    },
+
     "interpolation": {
-      "comment": "{expr} inside an interpolated string or process call",
+      "comment": "{expr} inside a backtick string or process string",
       "name": "meta.interpolation.tasq",
       "begin": "\\{",
       "beginCaptures": {
@@ -247,8 +318,12 @@
     "expression": {
       "comment": "what may appear inside {...}; braces are deliberately excluded so the closing } ends the interpolation",
       "patterns": [
+        { "include": "#process-string" },
+        { "include": "#process-raw-string" },
         { "include": "#process" },
         { "include": "#strings" },
+        { "include": "#raw-string" },
+        { "include": "#raw-block-string" },
         { "include": "#char" },
         { "include": "#interpolated-string" },
         { "include": "#builtin-functions" },
