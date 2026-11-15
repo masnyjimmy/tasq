@@ -11,6 +11,7 @@ const ir = @import("ir.zig");
 
 pub const Options = struct {
     shell: []const []const u8,
+    script: []const []const u8,
     dotenv: ?[]const u8 = null,
     working_dir: ?[]const u8 = null,
     jobs: usize = 1,
@@ -19,10 +20,12 @@ pub const Options = struct {
         return switch (lib.platform.tag) {
             .windows => .{
                 .shell = &.{ "cmd", "/C" },
+                .script = &.{ "cmd", "/C" },
                 .jobs = std.Thread.getCpuCount() catch unreachable,
             },
             .linux => .{
-                .shell = &.{ "/bin/bash", "-c" },
+                .shell = &.{ "/bin/sh", "-c" },
+                .script = &.{ "/bin/sh", "-eu" },
                 .jobs = std.Thread.getCpuCount() catch 1,
             },
         };
@@ -47,6 +50,10 @@ pub fn formatValueTypes(allocator: std.mem.Allocator, def: definitions.Definitio
 pub const definitions = OptionsGroup(&.{
     .{
         .name = "shell",
+        .value_types = &.{.{ .list = &.string }},
+    },
+    .{
+        .name = "script",
         .value_types = &.{.{ .list = &.string }},
     },
     .{

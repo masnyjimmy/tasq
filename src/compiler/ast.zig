@@ -435,20 +435,20 @@ pub const Fallback = struct {
 pub const ProcessExpr = struct {
     node: *const cst.Node,
     attributes: ?Attributes,
-    string: StringExpr,
+    subject: ?Expr,
     fallback: ?Fallback,
 
     pub fn from(node: *const cst.Node) ProcessExpr {
         var it = node.iter();
 
         const attributes = eatNode(&it, Attributes, .attributes);
-        const string = expectNode(&it, StringExpr, .string_expr) orelse unreachable;
+        const subject = expectAnyNode(&it, Expr, Expr.KINDS);
         const fallback = eatNode(&it, Fallback, .fallback);
 
         return .{
             .node = node,
             .attributes = attributes,
-            .string = string,
+            .subject = subject,
             .fallback = fallback,
         };
     }
@@ -1310,18 +1310,18 @@ pub const ForStmt = struct {
 pub const ProcessStmt = struct {
     node: *const cst.Node,
     attributes: ?Attributes,
-    string: StringExpr,
+    subject: ?Expr,
 
     pub fn from(node: *const cst.Node) ProcessStmt {
         var it = node.iter();
 
         const attributes = eatNode(&it, Attributes, .attributes);
-        const string = expectNode(&it, StringExpr, .string_expr) orelse unreachable;
+        const subject = expectAnyNode(&it, Expr, Expr.KINDS);
 
         return .{
             .node = node,
             .attributes = attributes,
-            .string = string,
+            .subject = subject,
         };
     }
 };

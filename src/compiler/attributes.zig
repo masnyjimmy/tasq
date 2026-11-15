@@ -182,6 +182,14 @@ const process_specs: []const Spec = &.{
         .kind = .modifier,
         .valid_for = &.{.process_stmt},
     },
+    .{
+        .name = "script",
+        .value_types = &.{},
+        .default = .auto,
+        .unique = true,
+        .kind = .modifier,
+        .valid_for = &.{ .process_stmt, .process_expr },
+    },
 };
 
 pub const definitions = Attributes(platform_specs ++ attr_specs ++ process_specs);

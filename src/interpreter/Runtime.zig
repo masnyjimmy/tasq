@@ -18,14 +18,22 @@ const Scope = @import("Scope.zig");
 const parallelization = @import("parallelization.zig");
 pub const Runtime = @This();
 
-pub const Error = error{
-    Abort,
-    Break,
-    Continue,
-} || std.Io.Writer.Error || std.Io.Reader.Error || binary_mod.Error || std.mem.Allocator.Error || std.process.SpawnError || std.Io.Dir.RealPathError;
+pub const Error = blk: {
+    const SignalError = error{
+        Abort,
+        Break,
+        Continue,
+    };
+    const DirError = std.Io.Dir.RealPathError || std.Io.Dir.WriteFileError;
+    const RWError = std.Io.Writer.Error || std.Io.Reader.Error;
+    const ProcessError = std.process.SpawnError;
+
+    break :blk SignalError || DirError || RWError || ProcessError || binary_mod.Error || std.mem.Allocator.Error;
+};
 
 const style = struct {
     const echo: Style = .{ .bold = true, .fg = .bright_white };
+    const warning: Style = .{ .fg = .bright_yellow };
     const @"error": Style = .{ .bold = true, .fg = .red };
 };
 
@@ -33,14 +41,20 @@ allocator: std.mem.Allocator,
 invokation_dir: []const u8,
 io: std.Io,
 printer: *Printer,
+// source
 options: *const ir.Options,
+// environment
 cwd: std.Io.Dir,
+original_environ: *const std.process.Environ.Map,
+tmpdir: []const u8,
+// parallel
 worker_budget: std.atomic.Value(usize),
 
 pub fn init(
     allocator: std.mem.Allocator,
     invokation_dir: []const u8,
     io: std.Io,
+    environ: *const std.process.Environ.Map,
     printer: *Printer,
     options: *const ir.Options,
 ) !Runtime {
@@ -53,6 +67,8 @@ pub fn init(
         break :blk try cwd.openDir(io, options.working_dir orelse ".", .{});
     };
 
+    const tmpdir = try lib.program.tempDir(allocator, environ);
+
     return .{
         .allocator = allocator,
         .invokation_dir = invokation_dir,
@@ -60,6 +76,8 @@ pub fn init(
         .printer = printer,
         .options = options,
         .cwd = cwd,
+        .original_environ = environ,
+        .tmpdir = tmpdir,
         .worker_budget = .init(options.jobs - 1),
     };
 }
@@ -71,13 +89,16 @@ pub fn deinit(self: *Runtime) void {
 pub fn run(
     self: *Runtime,
     initial_task: *const ir.Task,
-    environ: *const std.process.Environ.Map,
     values: std.array_hash_map.String(Value),
 ) !void {
-    const root_scope = try Scope.create(null, self.allocator, initial_task.body.scope.root());
+    const root_scope = try Scope.create(
+        null,
+        self.allocator,
+        initial_task.body.scope.root(),
+    );
     defer root_scope.destroy();
 
-    try root_scope.environ.map.putAll(environ);
+    try root_scope.environ.map.putAll(self.original_environ);
 
     if (self.options.dotenv) |dotenv| {
         try lib.dotenv.parse(
@@ -119,19 +140,29 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
         .decl => |decl| {
             _ = try self.handleDecl(cwd, scope, decl, null);
         },
-        .process => |proc_expr| {
-            const process = try self.resolveString(cwd, scope, proc_expr.command);
+        .process => |*proc_expr| {
+            const process = try self.evaluateExpr(cwd, scope, &proc_expr.command);
 
-            const noecho = if (proc_expr.noecho) |value|
-                value
-            else
-                false;
+            const status_code = blk: {
+                if (proc_expr.script) {
+                    const noecho = proc_expr.noecho orelse true;
 
-            const status_code = try self.handleProcess(cwd, scope, .{
-                .process = process,
-                .echo = !noecho,
-                .allow_input = true,
-            });
+                    break :blk try self.executeScript(cwd, scope, .{
+                        .process = process.string,
+                        .echo = !noecho,
+                        .allow_input = true,
+                    });
+                } else {
+                    const noecho = proc_expr.noecho orelse false;
+
+                    break :blk try self.executeProcess(cwd, scope, .{
+                        .process = process.string,
+                        .echo = !noecho,
+                        .allow_input = true,
+                    });
+                }
+            };
+
             scope.setStatusCode(status_code);
 
             if (status_code != 0 and proc_expr.nofail == false) {
@@ -142,7 +173,7 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                     \\  on '{s}'
                     \\
                 ,
-                    .{ status_code, process },
+                    .{ status_code, process.string },
                 );
                 return Error.Abort;
             }
@@ -476,14 +507,79 @@ pub fn destructure(
     }
 }
 
-const ProcessOptions = struct {
+const ExecuteOptions = struct {
     process: []const u8,
     echo: bool,
     allow_input: bool,
     out: ?*std.Io.Writer = null,
 };
 
-fn handleProcess(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, options: ProcessOptions) Error!u8 {
+fn executeScript(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, options: ExecuteOptions) Error!u8 {
+    // generate temp file name,
+    var raw: [8]u8 = undefined;
+    self.io.random(&raw);
+    const hex = std.fmt.bytesToHex(raw, .lower);
+
+    var name_buf: [64]u8 = undefined;
+
+    const name = try std.mem.print(&name_buf, "tasq-{s}{s}", .{
+        hex, lib.platform.Desc.current.script_extensions,
+    });
+
+    const tmp_file_path = try std.fs.path.join(self.allocator, &.{
+        self.tmpdir,
+        name,
+    });
+    defer self.allocator.free(tmp_file_path);
+
+    try cwd.writeFile(self.io, .{
+        .sub_path = tmp_file_path,
+        .data = options.process,
+        .flags = .{
+            .exclusive = true,
+            .truncate = true,
+        },
+    });
+    defer cwd.deleteFile(self.io, tmp_file_path) catch |err| {
+        self.printer.printStyled(
+            self.allocator,
+            style.warning,
+            "warning: unable to delete '{s}' ({s}),",
+            .{ tmp_file_path, @errorName(err) },
+        ) catch unreachable;
+    };
+
+    const script_len = self.options.script.len;
+    var argv = try self.allocator.alloc([]const u8, script_len + 1);
+    defer self.allocator.free(argv);
+
+    @memcpy(argv[0..script_len], self.options.script);
+    argv[script_len] = tmp_file_path;
+
+    //TOOD: consider if echo, stdout, stdin etc
+    var child = try std.process.spawn(self.io, .{
+        .argv = argv,
+        .cwd = .{ .dir = cwd },
+        .environ_map = &scope.environ.map,
+        .stdout = .inherit,
+        .stdin = .ignore,
+    });
+
+    const result = try child.wait(self.io);
+
+    return switch (result) {
+        .exited => |code| code,
+        .signal => |signal| std.debug.panic(
+            \\Process killed by signal '{t}',
+            \\  Not sure what to do yet :p
+        ,
+            .{signal},
+        ),
+        else => unreachable,
+    };
+}
+
+fn executeProcess(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, options: ExecuteOptions) Error!u8 {
     const shell_len = self.options.shell.len;
 
     var argv = try self.allocator.alloc([]const u8, shell_len + 1);
@@ -874,15 +970,24 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             return result.clone(scope.arena.allocator());
         },
         .process => |process_expr| {
-            const process = try self.resolveString(cwd, scope, process_expr.command);
+            const process = try self.evaluateExpr(cwd, scope, &process_expr.command);
             var aw: std.Io.Writer.Allocating = .init(scope.arena.allocator());
 
-            const status_code = try self.handleProcess(cwd, scope, .{
-                .process = process,
-                .echo = false,
-                .allow_input = false,
-                .out = &aw.writer,
-            });
+            const status_code = if (process_expr.script)
+                try self.executeScript(cwd, scope, .{
+                    .process = process,
+                    .allow_input = false,
+                    .echo = false,
+                    .out = &aw.writer,
+                })
+            else
+                try self.executeProcess(cwd, scope, .{
+                    .process = process,
+                    .allow_input = false,
+                    .echo = false,
+                    .out = &aw.writer,
+                });
+
             scope.setStatusCode(status_code);
 
             if (status_code != 0) {
@@ -897,7 +1002,7 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                         \\tasq: error: command failed with exit code {}
                         \\  on binding evaluation '{s}'
                     ,
-                        .{ status_code, process },
+                        .{ status_code, process.string },
                     );
                     return Error.Abort;
                 }

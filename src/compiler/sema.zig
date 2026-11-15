@@ -981,12 +981,26 @@ pub const Sema = struct {
                 else
                     null;
 
-                const result = try self.analyseStringExpr(proc.string, scope);
+                const script = attributes.contains(.script);
 
+                const subject_node = proc.subject orelse return Error.Incomplete;
+                const result = try self.analyseExpr(
+                    subject_node,
+                    scope,
+                );
+
+                if (result.type != .string and result.type != .unknown) {
+                    try self.diagnostics.err(
+                        subject_node.node.trimmedSpan(),
+                        "process subject must be of 'string' type: got '{f}'",
+                        .{result.type},
+                    );
+                }
                 return .{
                     .process = .{
                         .nofail = nofail,
                         .noecho = noecho,
+                        .script = script,
                         .command = result.expr,
                     },
                 };
@@ -2125,11 +2139,25 @@ pub const Sema = struct {
             .process => |process| {
                 const attributes = try AttributesResolver.resolveAssertNoPlatform(self, .process_expr, process.attributes);
 
-                const result = try self.analyseStringExpr(process.string, scope);
+                const subject_node = process.subject orelse return Error.Incomplete;
+
+                const result = try self.analyseExpr(
+                    subject_node,
+                    scope,
+                );
+
+                if (result.type != .string and result.type != .unknown) {
+                    try self.diagnostics.err(
+                        subject_node.node.trimmedSpan(),
+                        "process subject must be of 'string' type: got '{f}'",
+                        .{result.type},
+                    );
+                }
 
                 var result_type: Type = .string;
 
                 const nofail = attributes.contains(.nofail);
+                const script = attributes.contains(.script);
 
                 const fallback: ?ir.Expr = blk: {
                     const fallback = process.fallback orelse break :blk null;
@@ -2159,6 +2187,7 @@ pub const Sema = struct {
 
                 const ptr = try self.create(ir.ProcessExpr, .{
                     .nofail = nofail,
+                    .script = script,
                     .command = result.expr,
                     .fallback = fallback,
                 });
@@ -3340,6 +3369,7 @@ const AttributesResolver = struct {
 const OptionsResolver = struct {
     const OptionValue = union(options.definitions.Type) {
         shell: []const []const u8,
+        script: []const []const u8,
         dotenv: ?[]const u8,
         working_dir: []const u8,
         jobs: usize,
@@ -3361,6 +3391,7 @@ const OptionsResolver = struct {
 
         while (it.next()) |opt| switch (opt.value.*) {
             .shell => |shell| out.shell = shell,
+            .script => |script| out.script = script,
             .dotenv => |dotenv| out.dotenv = dotenv,
             .working_dir => |wd| out.working_dir = wd,
             .jobs => |jobs| out.jobs = jobs,
@@ -3434,7 +3465,7 @@ const OptionsResolver = struct {
 
     fn getOptionValue(self: *OptionsResolver, id: options.definitions.Type, value: meta.Value, value_node: ?ast.Meta) !OptionValue {
         return switch (id) {
-            .shell => {
+            inline .shell, .script => |tag| {
                 var out: std.ArrayList([]const u8) = try .initCapacity(
                     self.sema.arena.allocator(),
                     value.list.len,
@@ -3444,9 +3475,11 @@ const OptionsResolver = struct {
                     out.appendAssumeCapacity(val.string);
                 }
 
-                return .{
-                    .shell = try out.toOwnedSlice(self.sema.arena.allocator()),
-                };
+                return @unionInit(
+                    OptionValue,
+                    @tagName(tag),
+                    try out.toOwnedSlice(self.sema.arena.allocator()),
+                );
             },
             .dotenv => switch (value) {
                 .bool => |b| {
