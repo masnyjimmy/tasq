@@ -136,7 +136,10 @@ pub fn run(
     );
     defer task_body_scope.destroy();
 
-    try self.runtime.runBlock(target_working_dir, task_body_scope, task.body.statements);
+    try self.runtime.runBlock(.{
+        .cwd = target_working_dir,
+        .scope = task_body_scope,
+    }, task.body.statements);
 
     try self.run_set.put(allocator, key, .done);
 }
@@ -156,7 +159,10 @@ fn handleDependency(
     while (it.next()) |arg| {
         const value = switch (arg.value_ptr.*) {
             .default => |def| def,
-            .value => |*expr| try self.runtime.evaluateExpr(cwd, scope, expr),
+            .value => |*expr| try self.runtime.evaluateExpr(.{
+                .cwd = cwd,
+                .scope = scope,
+            }, expr),
         };
 
         try values.put(

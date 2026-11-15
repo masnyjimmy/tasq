@@ -22,3 +22,22 @@ pub fn IsAssignable(comptime L: type, comptime R: type) bool {
 
     return false;
 }
+
+pub fn replace(value_: anytype, rep: anytype) @TypeOf(value_) {
+    var value = value_;
+    const T = @TypeOf(value);
+    const ti = @typeInfo(T);
+
+    const U = @TypeOf(rep);
+    const ui = @typeInfo(U);
+
+    if (ti != .@"struct" or ui != .@"struct") {
+        @compileError("both inputs needs to be structures");
+    }
+
+    inline for (ui.@"struct".field_names) |field| {
+        @field(value, field) = @field(rep, field);
+    }
+
+    return value;
+}

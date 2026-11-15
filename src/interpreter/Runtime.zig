@@ -37,6 +37,36 @@ const style = struct {
     const @"error": Style = .{ .bold = true, .fg = .red };
 };
 
+/// Per-branch evaluation context. Passed by value, derived with `withX`,
+/// never mutated in place, so it is safe to hand to parallel workers.
+pub const Ctx = struct {
+    cwd: std.Io.Dir,
+    scope: *Scope,
+    stmt: ?*const ir.Statement = null,
+
+    pub fn withCwd(self: Ctx, cwd: std.Io.Dir) Ctx {
+        return lib.utils.replace(self, .{
+            .cwd = cwd,
+        });
+    }
+
+    pub fn withScope(self: Ctx, scope: *Scope) Ctx {
+        return lib.utils.replace(self, .{
+            .scope = scope,
+        });
+    }
+
+    pub fn withStmt(self: Ctx, stmt: *const ir.Statement) Ctx {
+        return lib.utils.replace(self, .{
+            .stmt = stmt,
+        });
+    }
+
+    pub fn arena(self: *const Ctx) std.mem.Allocator {
+        return self.scope.arena.allocator();
+    }
+};
+
 allocator: std.mem.Allocator,
 invokation_dir: []const u8,
 io: std.Io,
@@ -129,25 +159,25 @@ pub fn runTask(self: *Runtime, scope: *Scope, task: *const ir.Task, values: std.
     );
 }
 
-pub fn runBlock(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, statements: []const ir.Statement) Error!void {
+pub fn runBlock(self: *Runtime, ctx: Ctx, statements: []const ir.Statement) Error!void {
     for (statements) |*stmt| {
-        try self.main(cwd, scope, stmt);
+        try self.main(ctx.withStmt(stmt), stmt);
     }
 }
 
-fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statement) Error!void {
+fn main(self: *Runtime, ctx: Ctx, stmt: *const ir.Statement) Error!void {
     switch (stmt.*) {
         .decl => |decl| {
-            _ = try self.handleDecl(cwd, scope, decl, null);
+            _ = try self.handleDecl(ctx, decl, null);
         },
         .process => |*proc_expr| {
-            const process = try self.evaluateExpr(cwd, scope, &proc_expr.command);
+            const process = try self.evaluateExpr(ctx, &proc_expr.command);
 
             const status_code = blk: {
                 if (proc_expr.script) {
                     const noecho = proc_expr.noecho orelse true;
 
-                    break :blk try self.executeScript(cwd, scope, .{
+                    break :blk try self.executeScript(ctx, .{
                         .process = process.string,
                         .echo = !noecho,
                         .allow_input = true,
@@ -155,7 +185,7 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                 } else {
                     const noecho = proc_expr.noecho orelse false;
 
-                    break :blk try self.executeProcess(cwd, scope, .{
+                    break :blk try self.executeProcess(ctx, .{
                         .process = process.string,
                         .echo = !noecho,
                         .allow_input = true,
@@ -163,7 +193,7 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                 }
             };
 
-            scope.setStatusCode(status_code);
+            ctx.scope.setStatusCode(status_code);
 
             if (status_code != 0 and proc_expr.nofail == false) {
                 try self.printer.printStyled(
@@ -179,30 +209,30 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
             }
         },
         .if_stmt => |*if_stmt| {
-            const cond = try self.evaluateExpr(cwd, scope, &if_stmt.cond);
+            const cond = try self.evaluateExpr(ctx, &if_stmt.cond);
 
             if (cond.bool) {
-                const then_scope = try Scope.create(scope, self.allocator, if_stmt.then.scope);
+                const then_scope = try Scope.create(ctx.scope, self.allocator, if_stmt.then.scope);
                 defer then_scope.destroy();
 
-                try self.runBlock(cwd, then_scope, if_stmt.then.statements);
+                try self.runBlock(ctx.withScope(then_scope), if_stmt.then.statements);
             } else if (if_stmt.else_) |*else_| {
-                const else_scope = try Scope.create(scope, self.allocator, else_.scope);
+                const else_scope = try Scope.create(ctx.scope, self.allocator, else_.scope);
                 defer else_scope.destroy();
 
-                try self.runBlock(cwd, else_scope, else_.statements);
+                try self.runBlock(ctx.withScope(else_scope), else_.statements);
             }
         },
         .switch_stmt => |*switch_stmt| {
-            const target = try self.evaluateExpr(cwd, scope, &switch_stmt.subject);
+            const target = try self.evaluateExpr(ctx, &switch_stmt.subject);
 
             const block: ?*const ir.StatementBlock = switch_stmt.cases.getPtr(target) orelse if (switch_stmt.else_case) |*e| e else null;
 
             if (block) |b| {
-                const case_scope = try Scope.create(scope, self.allocator, b.scope);
+                const case_scope = try Scope.create(ctx.scope, self.allocator, b.scope);
                 defer case_scope.destroy();
 
-                try self.runBlock(cwd, case_scope, b.statements);
+                try self.runBlock(ctx.withScope(case_scope), b.statements);
             }
         },
         .for_stmt => |*for_stmt| {
@@ -215,11 +245,11 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
             for (for_stmt.subjects, 0..) |in, idx| {
                 switch (in) {
                     .range => |*range| {
-                        ranges[idx] = try self.evaluateRange(cwd, scope, range);
+                        ranges[idx] = try self.evaluateRange(ctx, range);
                         values[idx] = null;
                     },
                     .expr => |*list_expr| {
-                        const value = try self.evaluateExpr(cwd, scope, list_expr);
+                        const value = try self.evaluateExpr(ctx, list_expr);
                         ranges[idx] = .{
                             .left = 0,
                             .right = @intCast(value.list.items.len),
@@ -235,50 +265,45 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                 const iterations_count: usize = @intCast(right - final_range.left);
 
                 if (for_stmt.parallel) |*p| {
-                    const jobs_limit: usize = try self.evaluateParallelJobsLimit(
-                        cwd,
-                        scope,
-                        p,
-                    );
+                    const jobs_limit: usize = try self.evaluateParallelJobsLimit(ctx, p);
 
-                    const Context = struct {
+                    const ItCtx = struct {
                         const Self = @This();
                         runtime: *Runtime,
-                        dir: std.Io.Dir,
-                        parent_scope: *Scope,
+                        ctx: Ctx,
                         target: *const ir.ForStmt,
                         values: []?Value,
                         left: i64,
 
-                        fn iteration(ctx: *Self, idx: usize) Error!void {
-                            const item_index = lib.math.op(i64, ctx.left, idx, .add);
+                        fn iteration(it: *Self, idx: usize) Error!void {
+                            const item_index = lib.math.op(i64, it.left, idx, .add);
 
                             const iter_scope = try Scope.create(
-                                ctx.parent_scope,
-                                ctx.runtime.allocator,
-                                ctx.target.body.scope,
+                                it.ctx.scope,
+                                it.runtime.allocator,
+                                it.target.body.scope,
                             );
                             defer iter_scope.destroy();
 
-                            for (ctx.target.captures, 0..) |capture, j| {
-                                const value: Value = if (ctx.values[j]) |value|
+                            const iter_ctx = it.ctx.withScope(iter_scope);
+
+                            for (it.target.captures, 0..) |capture, j| {
+                                const value: Value = if (it.values[j]) |value|
                                     value.list.items[@intCast(item_index)]
                                 else
                                     .{ .number = @floatFromInt(item_index) };
-                                _ = try ctx.runtime.destructure(
+                                _ = try it.runtime.destructure(
                                     ir.Capture,
-                                    ctx.dir,
-                                    iter_scope,
+                                    iter_ctx,
                                     capture.target,
                                     value,
                                     null,
                                 );
                             }
 
-                            ctx.runtime.runBlock(
-                                ctx.dir,
-                                iter_scope,
-                                ctx.target.body.statements,
+                            it.runtime.runBlock(
+                                iter_ctx,
+                                it.target.body.statements,
                             ) catch |err| switch (err) {
                                 Error.Continue => return,
                                 Error.Break => unreachable,
@@ -287,10 +312,9 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                         }
                     };
 
-                    var context: Context = .{
+                    var context: ItCtx = .{
                         .runtime = self,
-                        .dir = cwd,
-                        .parent_scope = scope,
+                        .ctx = ctx,
                         .target = for_stmt,
                         .values = values,
                         .left = final_range.left,
@@ -301,11 +325,13 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
                         iterations_count,
                         jobs_limit,
                         &context,
-                        Context.iteration,
+                        ItCtx.iteration,
                     );
                 } else {
-                    const for_scope = try Scope.create(scope, self.allocator, for_stmt.body.scope);
+                    const for_scope = try Scope.create(ctx.scope, self.allocator, for_stmt.body.scope);
                     defer for_scope.destroy();
+
+                    const body_ctx = ctx.withScope(for_scope);
 
                     for (0..iterations_count) |i| {
                         const item_index = lib.math.op(i64, final_range.left, i, .add);
@@ -319,14 +345,13 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
 
                             _ = try self.destructure(
                                 ir.Capture,
-                                cwd,
-                                for_scope,
+                                body_ctx,
                                 capture.target,
                                 value,
                                 null,
                             );
                         }
-                        self.runBlock(cwd, for_scope, for_stmt.body.statements) catch |err| switch (err) {
+                        self.runBlock(body_ctx, for_stmt.body.statements) catch |err| switch (err) {
                             Error.Continue => continue,
                             Error.Break => break,
                             else => return err,
@@ -336,67 +361,59 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
             }
         },
         .task_call => |*task_call| {
-            try self.handleTaskCall(cwd, scope, task_call);
+            try self.handleTaskCall(ctx, task_call);
         },
         .in_stmt => |*in_stmt| {
-            const subject = try self.evaluateExpr(
-                cwd,
-                scope,
-                &in_stmt.subject,
-            );
+            const subject = try self.evaluateExpr(ctx, &in_stmt.subject);
 
             const path = subject.string;
 
-            const in_dir = cwd.openDir(
+            const in_dir = ctx.cwd.openDir(
                 self.io,
                 path,
                 .{},
             ) catch {
                 if (in_stmt.@"else") |@"else"| {
-                    var in_scope = try Scope.create(scope, self.allocator, @"else".scope);
-                    defer in_scope.destroy();
+                    const else_scope = try Scope.create(ctx.scope, self.allocator, @"else".scope);
+                    defer else_scope.destroy();
 
-                    try self.runBlock(cwd, in_scope, @"else".statements);
+                    try self.runBlock(ctx.withScope(else_scope), @"else".statements);
                 }
                 return;
             };
             defer in_dir.close(self.io);
 
-            var in_scope = try Scope.create(scope, self.allocator, in_stmt.body.scope);
+            const in_scope = try Scope.create(ctx.scope, self.allocator, in_stmt.body.scope);
             defer in_scope.destroy();
 
             try self.runBlock(
-                in_dir,
-                in_scope,
+                ctx.withCwd(in_dir).withScope(in_scope),
                 in_stmt.body.statements,
             );
         },
         .parallel_block => |*parallel_block| {
             const jobs_limit: usize = try self.evaluateParallelJobsLimit(
-                cwd,
-                scope,
+                ctx,
                 &parallel_block.parallel,
             );
 
             const Context = struct {
                 const Self = @This();
                 runtime: *Runtime,
-                dir: std.Io.Dir,
-                parent_scope: *Scope,
+                ctx: Ctx,
                 block: *const ir.ParallelBlock,
 
-                fn runStatement(ctx: *Self, idx: usize) Error!void {
-                    const par_stmt = &ctx.block.statements[idx];
+                fn runStatement(it: *Self, idx: usize) Error!void {
+                    const par_stmt = &it.block.statements[idx];
                     const stmt_scope = try Scope.create(
-                        ctx.parent_scope,
-                        ctx.runtime.allocator,
+                        it.ctx.scope,
+                        it.runtime.allocator,
                         par_stmt.scope,
                     );
                     defer stmt_scope.destroy();
 
-                    try ctx.runtime.main(
-                        ctx.dir,
-                        stmt_scope,
+                    try it.runtime.main(
+                        it.ctx.withScope(stmt_scope).withStmt(&par_stmt.statement),
                         &par_stmt.statement,
                     );
                 }
@@ -404,8 +421,7 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
 
             var context: Context = .{
                 .runtime = self,
-                .dir = cwd,
-                .parent_scope = scope,
+                .ctx = ctx,
                 .block = parallel_block,
             };
 
@@ -418,21 +434,21 @@ fn main(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, stmt: *const ir.Statemen
             );
         },
         .expr => |*expr| {
-            _ = try self.evaluateExpr(cwd, scope, expr);
+            _ = try self.evaluateExpr(ctx, expr);
         },
     }
 }
 
-fn evaluateParallelJobsLimit(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, parallel: *const ir.Parallel) Error!usize {
+fn evaluateParallelJobsLimit(self: *Runtime, ctx: Ctx, parallel: *const ir.Parallel) Error!usize {
     if (parallel.jobs) |*jobs_expr| {
-        const value = try self.evaluateExpr(cwd, scope, jobs_expr);
+        const value = try self.evaluateExpr(ctx, jobs_expr);
         return @intCast(integerize(value.number));
     }
 
     return self.options.jobs;
 }
 
-fn handleTaskCall(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, task_call: *const ir.TaskCall) Error!void {
+fn handleTaskCall(self: *Runtime, ctx: Ctx, task_call: *const ir.TaskCall) Error!void {
     const task = task_call.task;
 
     var values: std.array_hash_map.String(Value) = .empty;
@@ -442,28 +458,26 @@ fn handleTaskCall(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, task_call: *co
     while (it.next()) |kv| {
         switch (kv.value_ptr.*) {
             .default => |def| try values.put(self.allocator, kv.key_ptr.*, def),
-            .value => |expr| try values.put(self.allocator, kv.key_ptr.*, try self.evaluateExpr(cwd, scope, &expr)),
+            .value => |expr| try values.put(self.allocator, kv.key_ptr.*, try self.evaluateExpr(ctx, &expr)),
         }
     }
 
-    try self.runTask(scope, task, values, task_call.same_group);
+    try self.runTask(ctx.scope, task, values, task_call.same_group);
 }
 
 fn handleDecl(
     self: *Runtime,
-    cwd: std.Io.Dir,
-    scope: *Scope,
+    ctx: Ctx,
     decl: *const ir.Decl,
     needed: ?*ir.Target(ir.Decl).Leaf,
 ) Error!?Value {
-    const decl_scope = scope.findByStatic(decl.scope) orelse unreachable;
+    const decl_scope = ctx.scope.findByStatic(decl.scope) orelse unreachable;
 
-    const value = try self.evaluateExpr(cwd, decl_scope, &decl.value);
+    const value = try self.evaluateExpr(ctx.withScope(decl_scope), &decl.value);
 
     return try self.destructure(
         ir.Decl,
-        cwd,
-        scope,
+        ctx,
         decl.targets,
         value,
         needed,
@@ -473,8 +487,7 @@ fn handleDecl(
 pub fn destructure(
     self: *Runtime,
     comptime T: type,
-    cwd: std.Io.Dir,
-    scope: *Scope,
+    ctx: Ctx,
     targets: ir.Target(T),
     value: Value,
     needed: ?*ir.Target(T).Leaf,
@@ -482,7 +495,7 @@ pub fn destructure(
     switch (targets) {
         .exact => |target| {
             if (target.name) |name| {
-                try scope.define(self.io, target, .{
+                try ctx.scope.define(self.io, target, .{
                     .name = name,
                     .value = value,
                 }, false);
@@ -498,7 +511,7 @@ pub fn destructure(
             var needed_value: ?Value = null;
 
             for (ts, values) |t, v| {
-                if (try self.destructure(T, cwd, scope, t, v, needed)) |ev|
+                if (try self.destructure(T, ctx, t, v, needed)) |ev|
                     needed_value = ev;
             }
 
@@ -514,7 +527,7 @@ const ExecuteOptions = struct {
     out: ?*std.Io.Writer = null,
 };
 
-fn executeScript(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, options: ExecuteOptions) Error!u8 {
+fn executeScript(self: *Runtime, ctx: Ctx, options: ExecuteOptions) Error!u8 {
     // generate temp file name,
     var raw: [8]u8 = undefined;
     self.io.random(&raw);
@@ -532,7 +545,7 @@ fn executeScript(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, options: Execut
     });
     defer self.allocator.free(tmp_file_path);
 
-    try cwd.writeFile(self.io, .{
+    try ctx.cwd.writeFile(self.io, .{
         .sub_path = tmp_file_path,
         .data = options.process,
         .flags = .{
@@ -540,7 +553,7 @@ fn executeScript(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, options: Execut
             .truncate = true,
         },
     });
-    defer cwd.deleteFile(self.io, tmp_file_path) catch |err| {
+    defer ctx.cwd.deleteFile(self.io, tmp_file_path) catch |err| {
         self.printer.printStyled(
             self.allocator,
             style.warning,
@@ -559,8 +572,8 @@ fn executeScript(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, options: Execut
     //TOOD: consider if echo, stdout, stdin etc
     var child = try std.process.spawn(self.io, .{
         .argv = argv,
-        .cwd = .{ .dir = cwd },
-        .environ_map = &scope.environ.map,
+        .cwd = .{ .dir = ctx.cwd },
+        .environ_map = &ctx.scope.environ.map,
         .stdout = .inherit,
         .stdin = .ignore,
     });
@@ -579,7 +592,7 @@ fn executeScript(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, options: Execut
     };
 }
 
-fn executeProcess(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, options: ExecuteOptions) Error!u8 {
+fn executeProcess(self: *Runtime, ctx: Ctx, options: ExecuteOptions) Error!u8 {
     const shell_len = self.options.shell.len;
 
     var argv = try self.allocator.alloc([]const u8, shell_len + 1);
@@ -601,8 +614,8 @@ fn executeProcess(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, options: Execu
         self.io,
         .{
             .argv = argv,
-            .cwd = .{ .dir = cwd },
-            .environ_map = &scope.environ.map,
+            .cwd = .{ .dir = ctx.cwd },
+            .environ_map = &ctx.scope.environ.map,
             .stdout = if (options.out == null)
                 .inherit
             else
@@ -638,36 +651,39 @@ fn executeProcess(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, options: Execu
     };
 }
 
-pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const ir.Expr) Error!Value {
+pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value {
     return switch (expr.*) {
         .bool_lit => |lit| .{ .bool = lit },
         .number_lit => |lit| .{ .number = lit },
-        .string => |str| .{ .string = try self.resolveString(cwd, scope, str) },
+        .string => |str| .{ .string = try self.resolveString(ctx, str) },
         .list => |*list| {
-            var result: std.ArrayList(Value) = try .initCapacity(scope.arena.allocator(), list.items.len);
-            errdefer result.deinit(scope.arena.allocator());
+            var result: std.ArrayList(Value) = try .initCapacity(
+                ctx.arena(),
+                list.items.len,
+            );
+            errdefer result.deinit(ctx.arena());
 
             for (list.items) |item| {
                 if (item.is_spread) {
-                    const spread = try self.evaluateExpr(cwd, scope, item.expr);
-                    try result.appendSlice(scope.arena.allocator(), spread.list.items);
+                    const spread = try self.evaluateExpr(ctx, item.expr);
+                    try result.appendSlice(ctx.arena(), spread.list.items);
                 } else {
-                    try result.append(scope.arena.allocator(), try self.evaluateExpr(cwd, scope, item.expr));
+                    try result.append(ctx.arena(), try self.evaluateExpr(ctx, item.expr));
                 }
             }
 
             return .{
                 .list = .{
                     .items_type = &list.items_type,
-                    .items = try result.toOwnedSlice(scope.arena.allocator()),
+                    .items = try result.toOwnedSlice(ctx.arena()),
                 },
             };
         },
         .tuple => |tuple| {
-            const result = try scope.arena.allocator().alloc(Value, tuple.elements.len);
+            const result = try ctx.arena().alloc(Value, tuple.elements.len);
 
             for (tuple.elements, result) |*element, *out| {
-                out.* = try self.evaluateExpr(cwd, scope, element);
+                out.* = try self.evaluateExpr(ctx, element);
             }
 
             return .{
@@ -681,14 +697,14 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             const identity = id.symbol.identity();
             // get resolved
             while (true) {
-                if (scope.resolve(self.io, identity)) |sym| {
+                if (ctx.scope.resolve(self.io, identity)) |sym| {
                     return sym.value;
                 }
                 // resolve if not already (lazy resolution)
                 return switch (id.symbol.origin) {
                     .decl => |target| {
                         const decl = target.parent;
-                        const decl_scope = scope.findByStatic(decl.scope) orelse unreachable;
+                        const decl_scope = ctx.scope.findByStatic(decl.scope) orelse unreachable;
 
                         switch (try decl_scope.beginStatic(self.io, decl, identity)) {
                             .done => continue,
@@ -698,7 +714,7 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                             },
                             .owner => {
                                 defer decl_scope.endStatic(self.io, decl);
-                                return try self.handleDecl(cwd, scope, decl, target) orelse unreachable;
+                                return try self.handleDecl(ctx, decl, target) orelse unreachable;
                             },
                         }
                     },
@@ -709,20 +725,20 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             }
         },
         .if_expr => |if_expr| {
-            const cond = try self.evaluateExpr(cwd, scope, &if_expr.cond);
+            const cond = try self.evaluateExpr(ctx, &if_expr.cond);
             std.debug.assert(cond == .bool);
 
             return if (cond.bool)
-                try self.evaluateExpr(cwd, scope, &if_expr.then)
+                try self.evaluateExpr(ctx, &if_expr.then)
             else
-                try self.evaluateExpr(cwd, scope, &if_expr.@"else");
+                try self.evaluateExpr(ctx, &if_expr.@"else");
         },
         .switch_expr => |switch_expr| {
-            const target = try self.evaluateExpr(cwd, scope, &switch_expr.subject);
+            const target = try self.evaluateExpr(ctx, &switch_expr.subject);
 
             const value = switch_expr.cases.get(target) orelse switch_expr.else_case;
 
-            return try self.evaluateExpr(cwd, scope, &value);
+            return try self.evaluateExpr(ctx, &value);
         },
         .for_expr => |for_expr| {
             const ranges = try self.allocator.alloc(Range, for_expr.subjects.len);
@@ -734,11 +750,11 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             for (for_expr.subjects, 0..) |in, idx| {
                 switch (in) {
                     .range => |*range| {
-                        ranges[idx] = try self.evaluateRange(cwd, scope, range);
+                        ranges[idx] = try self.evaluateRange(ctx, range);
                         values[idx] = null;
                     },
                     .expr => |*list_expr| {
-                        const value = try self.evaluateExpr(cwd, scope, list_expr);
+                        const value = try self.evaluateExpr(ctx, list_expr);
                         ranges[idx] = .{
                             .left = 0,
                             .right = @intCast(value.list.items.len),
@@ -755,62 +771,57 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             if (final_range.right) |right| {
                 const iterations_count: usize = @intCast(right - final_range.left);
                 try result.ensureTotalCapacityPrecise(
-                    scope.arena.allocator(),
+                    ctx.arena(),
                     iterations_count,
                 );
                 // handle parallel for expr
                 if (for_expr.parallel) |*p| {
-                    const jobs_limit: usize = try self.evaluateParallelJobsLimit(
-                        cwd,
-                        scope,
-                        p,
-                    );
+                    const jobs_limit: usize = try self.evaluateParallelJobsLimit(ctx, p);
 
-                    const Context = struct {
+                    const ItCtx = struct {
                         const Self = @This();
                         runtime: *Runtime,
-                        dir: std.Io.Dir,
-                        parent_scope: *Scope,
+                        ctx: Ctx,
                         target: *const ir.ForExpr,
                         values: []?Value,
                         left: i64,
                         slots: []?Value,
 
-                        fn iteration(ctx: *Self, idx: usize) Error!void {
-                            const item_index = lib.math.op(i64, ctx.left, idx, .add);
+                        fn iteration(it: *Self, idx: usize) Error!void {
+                            const item_index = lib.math.op(i64, it.left, idx, .add);
 
                             const iter_scope = try Scope.create(
-                                ctx.parent_scope,
-                                ctx.runtime.allocator,
-                                ctx.target.scope,
+                                it.ctx.scope,
+                                it.runtime.allocator,
+                                it.target.scope,
                             );
                             defer iter_scope.destroy();
 
-                            for (ctx.target.captures, 0..) |capture, j| {
-                                const value: Value = if (ctx.values[j]) |value|
+                            const iter_ctx = it.ctx.withScope(iter_scope);
+
+                            for (it.target.captures, 0..) |capture, j| {
+                                const value: Value = if (it.values[j]) |value|
                                     value.list.items[@intCast(item_index)]
                                 else
                                     .{ .number = @floatFromInt(item_index) };
-                                _ = try ctx.runtime.destructure(
+                                _ = try it.runtime.destructure(
                                     ir.Capture,
-                                    ctx.dir,
-                                    iter_scope,
+                                    iter_ctx,
                                     capture.target,
                                     value,
                                     null,
                                 );
                             }
 
-                            const value = ctx.runtime.evaluateExpr(
-                                ctx.dir,
-                                iter_scope,
-                                &ctx.target.body,
+                            const value = it.runtime.evaluateExpr(
+                                iter_ctx,
+                                &it.target.body,
                             ) catch |err| switch (err) {
                                 Error.Continue => return,
                                 Error.Break => unreachable,
                                 else => return err,
                             };
-                            ctx.slots[idx] = try value.clone(ctx.parent_scope.arena.allocator());
+                            it.slots[idx] = try value.clone(it.ctx.arena());
                         }
                     };
 
@@ -818,10 +829,9 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                     defer self.allocator.free(slots);
                     @memset(slots, null);
 
-                    var context: Context = .{
+                    var context: ItCtx = .{
                         .runtime = self,
-                        .dir = cwd,
-                        .parent_scope = scope,
+                        .ctx = ctx,
                         .target = for_expr,
                         .values = values,
                         .left = @intCast(final_range.left),
@@ -833,13 +843,15 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                         iterations_count,
                         jobs_limit,
                         &context,
-                        Context.iteration,
+                        ItCtx.iteration,
                     );
 
                     for (slots) |slot| if (slot) |v| result.appendAssumeCapacity(v);
                 } else {
-                    const for_scope = try Scope.create(scope, self.allocator, for_expr.scope);
+                    const for_scope = try Scope.create(ctx.scope, self.allocator, for_expr.scope);
                     defer for_scope.destroy();
+
+                    const body_ctx = ctx.withScope(for_scope);
 
                     for (0..iterations_count) |i| {
                         const item_index = lib.math.op(i64, final_range.left, i, .add);
@@ -853,8 +865,7 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
 
                             _ = try self.destructure(
                                 ir.Capture,
-                                cwd,
-                                for_scope,
+                                body_ctx,
                                 capture.target,
                                 value,
                                 null,
@@ -862,8 +873,7 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                         }
 
                         const item = self.evaluateExpr(
-                            cwd,
-                            for_scope,
+                            body_ctx,
                             &for_expr.body,
                         ) catch |err| switch (err) {
                             Error.Continue => continue,
@@ -872,8 +882,8 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                         };
 
                         try result.append(
-                            scope.arena.allocator(),
-                            try item.clone(scope.arena.allocator()),
+                            ctx.arena(),
+                            try item.clone(ctx.arena()),
                         );
                     }
                 }
@@ -886,20 +896,20 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             };
         },
         .binary => |binary| {
-            const left = try self.evaluateExpr(cwd, scope, &binary.left);
-            const right = try self.evaluateExpr(cwd, scope, &binary.right);
+            const left = try self.evaluateExpr(ctx, &binary.left);
+            const right = try self.evaluateExpr(ctx, &binary.right);
 
             // add,sub,div,mul => [string,float,int,list,bool] op [string,float,int]
 
             return try binary_mod.evalBinary(
-                scope.arena.allocator(),
+                ctx.arena(),
                 binary.op,
                 left,
                 right,
             );
         },
         .unary => |unary| {
-            const operand = try self.evaluateExpr(cwd, scope, &unary.operand);
+            const operand = try self.evaluateExpr(ctx, &unary.operand);
 
             switch (unary.op) {
                 .not_op => {
@@ -919,19 +929,19 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
         },
         .builtin_call => |call| {
             // lib.debug.dump(call, 4);
-            const args = try scope.arena.allocator().alloc(Value, call.args.len);
+            const args = try ctx.arena().alloc(Value, call.args.len);
 
             for (call.args, args) |in, *out| {
-                out.* = try self.evaluateExpr(cwd, scope, &in);
+                out.* = try self.evaluateExpr(ctx, &in);
             }
 
-            const value = try builtin.callFunction(self, cwd, scope, call.function.id, args);
+            const value = try builtin.callFunction(self, ctx, call.function.id, args);
 
             return switch (value) {
                 .result => |r| if (r.value) |v|
                     v.*
                 else
-                    try self.evaluateExpr(cwd, scope, &call.fallback.?),
+                    try self.evaluateExpr(ctx, &call.fallback.?),
                 else => value,
             };
         },
@@ -945,16 +955,17 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             const lambda = lambda_call.lambda;
             std.debug.assert(lambda_call.args.len == lambda.params.len);
 
-            const frame = try Scope.create(scope, self.allocator, lambda.scope);
+            const frame = try Scope.create(ctx.scope, self.allocator, lambda.scope);
             defer frame.destroy();
 
+            const frame_ctx = ctx.withScope(frame);
+
             for (lambda_call.args, lambda.params) |*arg, *param| {
-                const value = try self.evaluateExpr(cwd, scope, arg);
+                const value = try self.evaluateExpr(ctx, arg);
 
                 _ = try self.destructure(
                     ir.Capture,
-                    cwd,
-                    frame,
+                    frame_ctx,
                     param.target,
                     value,
                     null,
@@ -962,37 +973,36 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             }
 
             const result = try self.evaluateExpr(
-                cwd,
-                frame,
+                frame_ctx,
                 &lambda.body,
             );
 
-            return result.clone(scope.arena.allocator());
+            return result.clone(ctx.arena());
         },
         .process => |process_expr| {
-            const process = try self.evaluateExpr(cwd, scope, &process_expr.command);
-            var aw: std.Io.Writer.Allocating = .init(scope.arena.allocator());
+            const process = try self.evaluateExpr(ctx, &process_expr.command);
+            var aw: std.Io.Writer.Allocating = .init(ctx.arena());
 
             const status_code = if (process_expr.script)
-                try self.executeScript(cwd, scope, .{
-                    .process = process,
+                try self.executeScript(ctx, .{
+                    .process = process.string,
                     .allow_input = false,
                     .echo = false,
                     .out = &aw.writer,
                 })
             else
-                try self.executeProcess(cwd, scope, .{
-                    .process = process,
+                try self.executeProcess(ctx, .{
+                    .process = process.string,
                     .allow_input = false,
                     .echo = false,
                     .out = &aw.writer,
                 });
 
-            scope.setStatusCode(status_code);
+            ctx.scope.setStatusCode(status_code);
 
             if (status_code != 0) {
                 if (process_expr.fallback) |*value| {
-                    return try self.evaluateExpr(cwd, scope, value);
+                    return try self.evaluateExpr(ctx, value);
                 }
 
                 if (process_expr.nofail == false) {
@@ -1022,7 +1032,7 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             return .{ .string = result };
         },
         .slice => |slice| {
-            const operand = try self.evaluateExpr(cwd, scope, &slice.operand);
+            const operand = try self.evaluateExpr(ctx, &slice.operand);
 
             const length = switch (operand) {
                 .list => |list| list.items.len,
@@ -1031,7 +1041,7 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
             };
 
             const range = clampRange(
-                try self.evaluateRange(cwd, scope, &slice.range),
+                try self.evaluateRange(ctx, &slice.range),
                 .{
                     .left = 0,
                     .right = @intCast(length),
@@ -1051,32 +1061,32 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                 else => unreachable,
             };
 
-            return result.clone(scope.arena.allocator());
+            return result.clone(ctx.arena());
         },
         .with => |with| {
             const with_scope = try Scope.create(
-                scope,
+                ctx.scope,
                 self.allocator,
                 with.scope,
             );
             defer with_scope.destroy();
 
-            if (with.parallel) |*p| {
-                const jobs_limit: usize = try self.evaluateParallelJobsLimit(cwd, scope, p);
+            const with_ctx = ctx.withScope(with_scope);
 
-                const Context = struct {
+            if (with.parallel) |*p| {
+                const jobs_limit: usize = try self.evaluateParallelJobsLimit(ctx, p);
+
+                const ItCtx = struct {
                     const Self = @This();
                     runtime: *Runtime,
-                    dir: std.Io.Dir,
-                    parent_scope: *Scope,
+                    ctx: Ctx,
                     target: *const ir.WithExpr,
                     slots: []Value,
 
-                    fn evaluate(ctx: *Self, idx: usize) Error!void {
-                        ctx.slots[idx] = try ctx.runtime.evaluateExpr(
-                            ctx.dir,
-                            ctx.parent_scope,
-                            &ctx.target.subjects[idx],
+                    fn evaluate(it: *Self, idx: usize) Error!void {
+                        it.slots[idx] = try it.runtime.evaluateExpr(
+                            it.ctx,
+                            &it.target.subjects[idx],
                         );
                     }
                 };
@@ -1087,10 +1097,9 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                 );
                 defer self.allocator.free(slots);
 
-                var context: Context = .{
+                var context: ItCtx = .{
                     .runtime = self,
-                    .dir = cwd,
-                    .parent_scope = scope,
+                    .ctx = ctx,
                     .target = with,
                     .slots = slots,
                 };
@@ -1100,14 +1109,13 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                     with.subjects.len,
                     jobs_limit,
                     &context,
-                    Context.evaluate,
+                    ItCtx.evaluate,
                 );
 
                 for (slots, with.captures) |value, *capture| {
                     _ = try self.destructure(
                         ir.Capture,
-                        cwd,
-                        with_scope,
+                        with_ctx,
                         capture.target,
                         value,
                         null,
@@ -1115,16 +1123,11 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                 }
             } else {
                 for (with.subjects, with.captures) |*sub, cap| {
-                    const value = try self.evaluateExpr(
-                        cwd,
-                        scope,
-                        sub,
-                    );
+                    const value = try self.evaluateExpr(ctx, sub);
 
                     _ = try self.destructure(
                         ir.Capture,
-                        cwd,
-                        with_scope,
+                        with_ctx,
                         cap.target,
                         value,
                         null,
@@ -1132,29 +1135,25 @@ pub fn evaluateExpr(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, expr: *const
                 }
             }
 
-            const result = try self.evaluateExpr(cwd, with_scope, &with.expr);
+            const result = try self.evaluateExpr(with_ctx, &with.expr);
 
-            return try result.clone(scope.arena.allocator());
+            return try result.clone(ctx.arena());
         },
         .in => |in| {
-            const subject = try self.evaluateExpr(
-                cwd,
-                scope,
-                &in.subject,
-            );
+            const subject = try self.evaluateExpr(ctx, &in.subject);
 
             const path = subject.string;
 
-            const in_dir = cwd.openDir(
+            const in_dir = ctx.cwd.openDir(
                 self.io,
                 path,
                 .{},
             ) catch {
-                return try self.evaluateExpr(cwd, scope, &in.@"else");
+                return try self.evaluateExpr(ctx, &in.@"else");
             };
             defer in_dir.close(self.io);
 
-            return try self.evaluateExpr(in_dir, scope, &in.body);
+            return try self.evaluateExpr(ctx.withCwd(in_dir), &in.body);
         },
         .@"continue" => Error.Continue,
         .@"break" => Error.Break,
@@ -1200,11 +1199,10 @@ pub fn integerize(value: f64) i64 {
     return lib.math.asInt(i64, value);
 }
 
-fn evaluateRange(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, range: *const ir.Range) Error!Range {
+fn evaluateRange(self: *Runtime, ctx: Ctx, range: *const ir.Range) Error!Range {
     const left: i64 = blk: {
         const value = try self.evaluateExpr(
-            cwd,
-            scope,
+            ctx,
             &range.left,
         );
 
@@ -1215,8 +1213,7 @@ fn evaluateRange(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, range: *const i
         const right = range.right orelse break :blk null;
 
         const value = try self.evaluateExpr(
-            cwd,
-            scope,
+            ctx,
             &right,
         );
 
@@ -1229,8 +1226,8 @@ fn evaluateRange(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, range: *const i
     };
 }
 
-fn resolveString(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, string: ir.String) Error![]const u8 {
-    var aw = std.Io.Writer.Allocating.init(scope.arena.allocator());
+fn resolveString(self: *Runtime, ctx: Ctx, string: ir.String) Error![]const u8 {
+    var aw = std.Io.Writer.Allocating.init(ctx.arena());
     const writer = &aw.writer;
     errdefer aw.deinit();
 
@@ -1240,7 +1237,7 @@ fn resolveString(self: *Runtime, cwd: std.Io.Dir, scope: *Scope, string: ir.Stri
                 try writer.writeAll(lit);
             },
             .expr => |expr| {
-                const value = try self.evaluateExpr(cwd, scope, &expr);
+                const value = try self.evaluateExpr(ctx, &expr);
                 try writer.print("{f}", .{value});
             },
         }

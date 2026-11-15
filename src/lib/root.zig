@@ -1,4 +1,4 @@
-const utils = @import("utils.zig");
+pub const utils = @import("utils.zig");
 
 pub const Enum = struct {
     const Size = utils.EnumSize;

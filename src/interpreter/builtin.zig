@@ -18,10 +18,11 @@ const functions_count = functions.definitions.items.len;
 
 pub const Error = Runtime.Error;
 
+const Context = Runtime.Ctx;
+
 pub fn callFunction(
     runtime: *Runtime,
-    cwd: std.Io.Dir,
-    scope: *Scope,
+    ctx: Context,
     id: functions.definitions.Id,
     args: []const Value,
 ) Error!Value {
@@ -31,7 +32,7 @@ pub fn callFunction(
 
             const handler: *const handlers.Signature = &@field(handlers, name);
 
-            return handler(runtime, cwd, scope, args);
+            return handler(runtime, ctx, args);
         },
     }
 }
@@ -61,14 +62,13 @@ pub fn makeResult(scope: *Scope, result_type: *const Type, value: ?Value) Error!
 
 fn callLambda(
     self: *Runtime,
-    cwd: std.Io.Dir,
-    scope: *Scope,
+    ctx: Context,
     lambda: *const ir.LambdaInstance,
     args: []const Value,
 ) Error!Value {
     std.debug.assert(args.len == lambda.params.len);
 
-    const parent_scope = scope.findByStatic(lambda.template.parent_scope) orelse unreachable;
+    const parent_scope = ctx.scope.findByStatic(lambda.template.parent_scope) orelse unreachable;
 
     const lambda_scope = try Scope.create(
         parent_scope,
@@ -77,11 +77,12 @@ fn callLambda(
     );
     defer lambda_scope.destroy();
 
+    const lambda_ctx = ctx.withScope(lambda_scope);
+
     for (lambda.params, args) |*param, arg| {
         _ = try self.destructure(
             ir.Capture,
-            cwd,
-            lambda_scope,
+            lambda_ctx,
             param.target,
             arg,
             null,
@@ -89,29 +90,28 @@ fn callLambda(
     }
 
     return try self.evaluateExpr(
-        cwd,
-        lambda_scope,
+        lambda_ctx,
         &lambda.body,
     );
 }
 
 const handlers = struct {
-    const Signature = fn (*Runtime, cwd: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value;
+    const Signature = fn (*Runtime, Context, []const Value) Error!Value;
 
-    fn env(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn env(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const key = args[0].string;
 
-        return if (scope.environ.get(key)) |value| makeResult(
-            scope,
+        return if (ctx.scope.environ.get(key)) |value| makeResult(
+            ctx.scope,
             &.string,
             .{ .string = value },
-        ) else makeResult(scope, &.string, null);
+        ) else makeResult(ctx.scope, &.string, null);
     }
 
-    fn exists(self: *Runtime, dir: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn exists(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const path = args[0].string;
 
-        const access_result = dir.access(self.io, path, .{ .read = true });
+        const access_result = ctx.cwd.access(self.io, path, .{ .read = true });
 
         const result: bool = if (access_result) |_|
             true
@@ -121,27 +121,27 @@ const handlers = struct {
         return .{ .bool = result };
     }
 
-    fn read(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn read(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const RESULT_TYPE = &@unionInit(Type, "string", {});
 
         const path = args[0].string;
 
-        const content = dir.readFileAlloc(
+        const content = ctx.cwd.readFileAlloc(
             self.io,
             path,
-            scope.arena.allocator(),
+            ctx.arena(),
             .limited(1024),
-        ) catch return makeResult(scope, RESULT_TYPE, null);
+        ) catch return makeResult(ctx.scope, RESULT_TYPE, null);
 
-        return makeResult(scope, RESULT_TYPE, .{ .string = content });
+        return makeResult(ctx.scope, RESULT_TYPE, .{ .string = content });
     }
 
-    fn glob(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn glob(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const pattern = args[0].string;
 
         var it = globs.iterate(
             self.allocator,
-            dir,
+            ctx.cwd,
             self.io,
             pattern,
         ) catch |err| return switch (err) {
@@ -158,25 +158,25 @@ const handlers = struct {
         var result: std.ArrayList(Value) = .empty;
 
         while (try it.next()) |match| {
-            try result.append(scope.arena.allocator(), .{
-                .string = try scope.arena.allocator().dupe(u8, match),
+            try result.append(ctx.arena(), .{
+                .string = try ctx.arena().dupe(u8, match),
             });
         }
 
         return .{
             .list = .{
                 .items_type = &.string,
-                .items = try result.toOwnedSlice(scope.arena.allocator()),
+                .items = try result.toOwnedSlice(ctx.arena()),
             },
         };
     }
 
-    fn basename(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn basename(_: *Runtime, _: Context, args: []const Value) Error!Value {
         const path = args[0].string;
         return .{ .string = std.fs.path.basename(path) };
     }
 
-    fn join_path(self: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn join_path(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const paths = args[0].list;
 
         const temp_buffer: [][]const u8 = try self.allocator.alloc([]const u8, paths.items.len);
@@ -187,14 +187,14 @@ const handlers = struct {
         }
 
         return .{
-            .string = try std.fs.path.join(scope.arena.allocator(), temp_buffer),
+            .string = try std.fs.path.join(ctx.arena(), temp_buffer),
         };
     }
 
-    fn is_file(self: *Runtime, dir: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn is_file(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const path = args[0].string;
 
-        const stat = dir.statFile(
+        const stat = ctx.cwd.statFile(
             self.io,
             path,
             .{},
@@ -203,10 +203,10 @@ const handlers = struct {
         return .{ .bool = stat.kind == .file };
     }
 
-    fn is_dir(self: *Runtime, dir: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn is_dir(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const path = args[0].string;
 
-        const stat = dir.statFile(
+        const stat = ctx.cwd.statFile(
             self.io,
             path,
             .{},
@@ -215,23 +215,23 @@ const handlers = struct {
         return .{ .bool = stat.kind == .directory };
     }
 
-    fn os(_: *Runtime, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+    fn os(_: *Runtime, _: Context, _: []const Value) Error!Value {
         return .{
             .string = @tagName(platform.tag),
         };
     }
 
-    fn cwd(self: *Runtime, dir: std.Io.Dir, scope: *Scope, _: []const Value) Error!Value {
+    fn cwd(self: *Runtime, ctx: Context, _: []const Value) Error!Value {
         var buffer: [1024]u8 = undefined;
 
-        const size = try dir.realPath(self.io, &buffer);
+        const size = try ctx.cwd.realPath(self.io, &buffer);
 
         return .{
-            .string = try scope.arena.allocator().dupe(u8, buffer[0..size]),
+            .string = try ctx.arena().dupe(u8, buffer[0..size]),
         };
     }
 
-    fn arch(_: *Runtime, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+    fn arch(_: *Runtime, _: Context, _: []const Value) Error!Value {
         const builtin = @import("builtin");
 
         const arch_family = builtin.target.cpu.arch.family();
@@ -241,24 +241,24 @@ const handlers = struct {
         };
     }
 
-    fn invokation_dir(self: *Runtime, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+    fn invokation_dir(self: *Runtime, _: Context, _: []const Value) Error!Value {
         return .{
             .string = self.invokation_dir,
         };
     }
 
-    fn status_code(_: *Runtime, _: std.Io.Dir, s: *Scope, _: []const Value) Error!Value {
-        return .{ .number = @floatFromInt(s.statusCode()) };
+    fn status_code(_: *Runtime, ctx: Context, _: []const Value) Error!Value {
+        return .{ .number = @floatFromInt(ctx.scope.statusCode()) };
     }
 
-    fn which(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn which(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const name = args[0].string;
 
         const result = try program.which(
             self.allocator,
-            dir,
+            ctx.cwd,
             self.io,
-            &scope.environ.map,
+            &ctx.scope.environ.map,
             name,
         );
 
@@ -267,20 +267,20 @@ const handlers = struct {
             if (result) |path| {
                 defer self.allocator.free(path);
                 break :blk .{
-                    .string = try scope.arena.allocator().dupe(u8, path),
+                    .string = try ctx.arena().dupe(u8, path),
                 };
             }
             break :blk null;
         };
 
         return makeResult(
-            scope,
+            ctx.scope,
             &.string,
             value,
         );
     }
 
-    fn @"error"(self: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn @"error"(self: *Runtime, _: Context, args: []const Value) Error!Value {
         const message = args[0].string;
 
         try self.printer.printStyled(
@@ -293,7 +293,7 @@ const handlers = struct {
         return Error.Abort;
     }
 
-    fn print(self: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn print(self: *Runtime, _: Context, args: []const Value) Error!Value {
         const message = args[0].string;
 
         try self.printer.print(
@@ -305,7 +305,7 @@ const handlers = struct {
         return .void;
     }
 
-    fn any(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn any(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const list = args[0].list;
 
         const test_fn = args[1].lambda.instance;
@@ -313,8 +313,7 @@ const handlers = struct {
         for (list.items) |item| {
             const result = try callLambda(
                 self,
-                dir,
-                scope,
+                ctx,
                 test_fn,
                 &.{
                     item,
@@ -328,7 +327,7 @@ const handlers = struct {
         return .{ .bool = false };
     }
 
-    fn all(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn all(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const list = args[0].list;
 
         const test_fn = args[1].lambda.instance;
@@ -336,8 +335,7 @@ const handlers = struct {
         for (list.items) |item| {
             const result = try callLambda(
                 self,
-                dir,
-                scope,
+                ctx,
                 test_fn,
                 &.{item},
             );
@@ -349,7 +347,7 @@ const handlers = struct {
         return .{ .bool = true };
     }
 
-    fn reduce(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn reduce(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const list = args[0].list;
         var value = args[1];
         const func = args[2].lambda.instance;
@@ -357,8 +355,7 @@ const handlers = struct {
         for (list.items) |item| {
             value = try callLambda(
                 self,
-                dir,
-                scope,
+                ctx,
                 func,
                 &.{ value, item },
             );
@@ -367,7 +364,7 @@ const handlers = struct {
         return value;
     }
 
-    fn @"collections/at"(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn @"collections/at"(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const list = args[0].list;
 
         const pos: i64 = blk: {
@@ -376,13 +373,13 @@ const handlers = struct {
         };
 
         if (pos < 0 or list.items.len <= pos) {
-            return makeResult(scope, list.items_type, null);
+            return makeResult(ctx.scope, list.items_type, null);
         }
 
-        return makeResult(scope, list.items_type, list.items[@intCast(pos)]);
+        return makeResult(ctx.scope, list.items_type, list.items[@intCast(pos)]);
     }
 
-    fn unique(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn unique(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const list = args[0].list;
 
         var set: std.HashMapUnmanaged(Value, bool, Value.MapContext, 80) = .empty;
@@ -390,12 +387,12 @@ const handlers = struct {
         var result: std.ArrayList(Value) = .empty;
 
         for (list.items) |item| {
-            const gop = try set.getOrPut(scope.arena.allocator(), item);
+            const gop = try set.getOrPut(ctx.arena(), item);
 
             if (gop.found_existing)
                 continue;
 
-            try result.append(scope.arena.allocator(), item);
+            try result.append(ctx.arena(), item);
         }
 
         return .{
@@ -406,20 +403,19 @@ const handlers = struct {
         };
     }
 
-    fn sort(self: *Runtime, dir: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn sort(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const list = args[0].list;
         const cmp_fn = args[1].lambda.instance;
 
-        const result: []Value = try scope.arena.allocator().alloc(Value, list.items.len);
+        const result: []Value = try ctx.arena().alloc(Value, list.items.len);
 
         for (list.items, result) |in, *out| {
-            out.* = try in.clone(scope.arena.allocator());
+            out.* = try in.clone(ctx.arena());
         }
 
-        const Context = struct {
+        const SortCtx = struct {
             i: *Runtime,
-            c: std.Io.Dir,
-            s: *Scope,
+            c: Context,
             f: *const ir.LambdaInstance,
             err: ?Error = null,
 
@@ -428,15 +424,13 @@ const handlers = struct {
                     const out = callLambda(
                         s.i,
                         s.c,
-                        s.s,
                         s.f,
                         &.{
                             a, b,
                         },
                     ) catch |err| {
                         s.err = err;
-                        unreachable;
-                        // return false;
+                        return false;
                     };
                     return out.bool;
                 }
@@ -445,16 +439,15 @@ const handlers = struct {
             }
         };
 
-        var ctx: Context = .{
+        var sort_context: SortCtx = .{
             .i = self,
-            .c = dir,
-            .s = scope,
+            .c = ctx,
             .f = cmp_fn,
         };
         //TODO: just replace it which custom sort implementation instead of this wire thing
-        std.mem.sort(Value, result, &ctx, Context.lessThan);
+        std.mem.sort(Value, result, &sort_context, SortCtx.lessThan);
 
-        if (ctx.err) |err|
+        if (sort_context.err) |err|
             return err;
 
         return .{
@@ -465,7 +458,7 @@ const handlers = struct {
         };
     }
 
-    fn @"strings/len"(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn @"strings/len"(_: *Runtime, _: Context, args: []const Value) Error!Value {
         const string = args[0].string;
 
         return .{
@@ -473,7 +466,7 @@ const handlers = struct {
         };
     }
 
-    fn @"collections/len"(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn @"collections/len"(_: *Runtime, _: Context, args: []const Value) Error!Value {
         const list = args[0].list;
 
         return .{
@@ -482,12 +475,12 @@ const handlers = struct {
     }
 
     // when sep is "" split on chars
-    fn split(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn split(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const str = args[0].string;
         const sep = args[1].string;
 
         if (sep.len == 0) {
-            const result: []Value = try scope.arena.allocator().alloc(Value, str.len);
+            const result: []Value = try ctx.arena().alloc(Value, str.len);
 
             for (result, 0..) |*out, idx| {
                 out.* = .{
@@ -506,7 +499,7 @@ const handlers = struct {
         const list_size = std.mem.count(u8, str, sep) + 1;
 
         var items: std.ArrayList(Value) = try .initCapacity(
-            scope.arena.allocator(),
+            ctx.arena(),
             list_size,
         );
 
@@ -526,7 +519,7 @@ const handlers = struct {
         };
     }
 
-    fn join(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn join(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const strings = args[0].list;
         const sep = args[1].string;
 
@@ -544,7 +537,7 @@ const handlers = struct {
             break :blk total;
         };
 
-        const string = try scope.arena.allocator().alloc(u8, string_size);
+        const string = try ctx.arena().alloc(u8, string_size);
 
         var fw = std.Io.Writer.fixed(string);
 
@@ -563,27 +556,27 @@ const handlers = struct {
         };
     }
 
-    fn lower(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn lower(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const str = args[0].string;
 
-        const out = try std.ascii.allocLowerString(scope.arena.allocator(), str);
+        const out = try std.ascii.allocLowerString(ctx.arena(), str);
 
         return .{
             .string = out,
         };
     }
 
-    fn upper(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn upper(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const str = args[0].string;
 
-        const out = try std.ascii.allocUpperString(scope.arena.allocator(), str);
+        const out = try std.ascii.allocUpperString(ctx.arena(), str);
 
         return .{
             .string = out,
         };
     }
 
-    fn contains(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn contains(_: *Runtime, _: Context, args: []const Value) Error!Value {
         const str = args[0].string;
         const sub = args[1].string;
 
@@ -594,7 +587,7 @@ const handlers = struct {
         };
     }
 
-    fn starts_with(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn starts_with(_: *Runtime, _: Context, args: []const Value) Error!Value {
         const str = args[0].string;
         const sub = args[1].string;
 
@@ -605,7 +598,7 @@ const handlers = struct {
         };
     }
 
-    fn ends_with(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn ends_with(_: *Runtime, _: Context, args: []const Value) Error!Value {
         const str = args[0].string;
         const sub = args[1].string;
 
@@ -616,14 +609,14 @@ const handlers = struct {
         };
     }
 
-    fn @"strings/replace"(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn @"strings/replace"(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const str = args[0].string;
         const old = args[1].string;
         const new = args[2].string;
 
         const replaced = try std.mem.replaceOwned(
             u8,
-            scope.arena.allocator(),
+            ctx.arena(),
             str,
             old,
             new,
@@ -634,7 +627,7 @@ const handlers = struct {
         };
     }
 
-    fn @"strings/at"(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn @"strings/at"(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const str = args[0].string;
 
         const pos: i64 = blk: {
@@ -643,19 +636,19 @@ const handlers = struct {
         };
 
         if (pos < 0 or str.len <= pos) {
-            return makeResult(scope, &.string, null);
+            return makeResult(ctx.scope, &.string, null);
         }
 
         const idx: usize = @intCast(pos);
 
-        return makeResult(scope, &.string, .{ .string = str[idx .. idx + 1] });
+        return makeResult(ctx.scope, &.string, .{ .string = str[idx .. idx + 1] });
     }
 
-    fn lines(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn lines(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const str = args[0].string;
 
         var items: std.ArrayList(Value) = .empty;
-        errdefer items.deinit(scope.arena.allocator());
+        errdefer items.deinit(ctx.arena());
 
         var rest = str;
         while (rest.len > 0) {
@@ -665,7 +658,7 @@ const handlers = struct {
             if (line.len > 0 and line[line.len - 1] == '\r')
                 line = line[0 .. line.len - 1];
 
-            try items.append(scope.arena.allocator(), .{ .string = line });
+            try items.append(ctx.arena(), .{ .string = line });
 
             rest = if (end < rest.len) rest[end + 1 ..] else rest[end..];
         }
@@ -673,12 +666,12 @@ const handlers = struct {
         return .{
             .list = .{
                 .items_type = &.string,
-                .items = try items.toOwnedSlice(scope.arena.allocator()),
+                .items = try items.toOwnedSlice(ctx.arena()),
             },
         };
     }
 
-    fn trim(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn trim(_: *Runtime, _: Context, args: []const Value) Error!Value {
         const str = args[0].string;
         const set = args[1].string;
 
@@ -689,18 +682,7 @@ const handlers = struct {
         };
     }
 
-    fn trim_end(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
-        const str = args[0].string;
-        const set = args[1].string;
-
-        const result = std.mem.trimStart(u8, str, set);
-
-        return .{
-            .string = result,
-        };
-    }
-
-    fn trim_start(_: *Runtime, _: std.Io.Dir, _: *Scope, args: []const Value) Error!Value {
+    fn trim_end(_: *Runtime, _: Context, args: []const Value) Error!Value {
         const str = args[0].string;
         const set = args[1].string;
 
@@ -711,16 +693,27 @@ const handlers = struct {
         };
     }
 
-    fn @"collections/replace"(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn trim_start(_: *Runtime, _: Context, args: []const Value) Error!Value {
+        const str = args[0].string;
+        const set = args[1].string;
+
+        const result = std.mem.trimStart(u8, str, set);
+
+        return .{
+            .string = result,
+        };
+    }
+
+    fn @"collections/replace"(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const list = args[0].list;
         const old = args[1];
         const new = args[2];
 
-        const replaced = try scope.arena.allocator().dupe(Value, list.items);
+        const replaced = try ctx.arena().dupe(Value, list.items);
 
         for (replaced) |*item| {
             if (item.eql(old)) {
-                item.* = try new.clone(scope.arena.allocator());
+                item.* = try new.clone(ctx.arena());
             }
         }
 
@@ -732,18 +725,18 @@ const handlers = struct {
         };
     }
 
-    fn parse_number(_: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn parse_number(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const str = args[0].string;
 
         const number: ?f64 = std.fmt.parseFloat(f64, str) catch null;
 
         return if (number) |n|
-            makeResult(scope, &.number, .{ .number = n })
+            makeResult(ctx.scope, &.number, .{ .number = n })
         else
-            makeResult(scope, &.number, null);
+            makeResult(ctx.scope, &.number, null);
     }
 
-    fn input(self: *Runtime, _: std.Io.Dir, scope: *Scope, args: []const Value) Error!Value {
+    fn input(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const text = args[0].string;
         try self.printer.printStyled(
             self.allocator,
@@ -755,21 +748,21 @@ const handlers = struct {
         var stdin = std.Io.File.stdin().reader(self.io, &buffer);
         const reader = &stdin.interface;
 
-        var aw: std.Io.Writer.Allocating = .init(scope.arena.allocator());
+        var aw: std.Io.Writer.Allocating = .init(ctx.arena());
         const writer = &aw.writer;
         _ = reader.streamDelimiter(writer, '\n') catch {
             aw.deinit();
-            return try makeResult(scope, &.string, null);
+            return try makeResult(ctx.scope, &.string, null);
         };
 
         return try makeResult(
-            scope,
+            ctx.scope,
             &.string,
             .{ .string = try aw.toOwnedSlice() },
         );
     }
 
-    fn select(_: *Runtime, _: std.Io.Dir, _: *Scope, _: []const Value) Error!Value {
+    fn select(_: *Runtime, _: Context, _: []const Value) Error!Value {
         lib.debug.todo("select not implemented yet");
     }
 };
