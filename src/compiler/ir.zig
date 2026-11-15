@@ -144,9 +144,10 @@ pub const InStmt = struct {
 };
 
 pub const ProcessStmt = struct {
-    nofail: bool = false,
-    noecho: ?bool = null,
-    command: String,
+    nofail: bool,
+    noecho: ?bool,
+    script: bool,
+    command: Expr,
 };
 
 pub const Capture = struct {
@@ -285,8 +286,9 @@ pub const SliceExpr = struct {
 };
 
 pub const ProcessExpr = struct {
-    nofail: bool = false,
-    command: String,
+    nofail: bool,
+    script: bool,
+    command: Expr,
     fallback: ?Expr,
 };
 

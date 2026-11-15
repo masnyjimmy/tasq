@@ -848,6 +848,7 @@ pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []cons
         ctx.allocator,
         ctx.invokation_dir,
         ctx.io,
+        ctx.environ,
         ctx.printer,
         &file.options,
     );
@@ -867,7 +868,6 @@ pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []cons
 
     try runtime.run(
         task,
-        ctx.environ,
         values,
     );
 }

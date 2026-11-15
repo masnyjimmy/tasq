@@ -1,26 +1,6 @@
 const std = @import("std");
 const platform = @import("platform.zig");
-
-const PlatformDesc = struct {
-    path_var_name: []const u8,
-    separator: []const u8,
-    extensions: []const []const u8 = &.{},
-    program_separator: []const u8,
-
-    const current: PlatformDesc = switch (platform.tag) {
-        .windows => .{
-            .path_var_name = "path",
-            .separator = ";",
-            .extensions = &.{ ".ext", ".cmd", ".bat", ".com" },
-            .program_separator = "\\",
-        },
-        else => .{
-            .path_var_name = "PATH",
-            .separator = ":",
-            .program_separator = "/",
-        },
-    };
-};
+const os = @import("os.zig");
 
 fn isExecutableFile(dir: std.Io.Dir, io: std.Io, path: []const u8) !bool {
     const stat = dir.statFile(io, path, .{}) catch return false;
@@ -49,7 +29,7 @@ fn tryOne(
 }
 
 fn probe(allocator: std.mem.Allocator, dir: std.Io.Dir, io: std.Io, base: ?[]const u8, name: []const u8) !?[]u8 {
-    const exts = PlatformDesc.current.extensions;
+    const exts = platform.Desc.current.extensions;
 
     const has_ext = exts.len == 0 or for (exts) |ext| {
         if (std.ascii.endsWithIgnoreCase(name, ext)) break true;
@@ -74,16 +54,16 @@ pub fn which(
 ) !?[]u8 {
     if (name.len == 0) return null;
 
-    if (std.mem.findAny(u8, name, PlatformDesc.current.program_separator) != null) {
+    if (std.mem.findAny(u8, name, platform.Desc.current.program_separator) != null) {
         return probe(allocator, dir, io, null, name);
     }
 
-    const PATH = environ.get(PlatformDesc.current.path_var_name) orelse return null;
+    const PATH = environ.get(platform.Desc.current.path_var_name) orelse return null;
 
     var it = std.mem.splitSequence(
         u8,
         PATH,
-        PlatformDesc.current.separator,
+        platform.Desc.current.path_separator,
     );
 
     while (it.next()) |entry| {
@@ -92,4 +72,11 @@ pub fn which(
     }
 
     return null;
+}
+
+pub fn tempDir(allocator: std.mem.Allocator, environ: *const std.process.Environ.Map) ![]const u8 {
+    return switch (platform.tag) {
+        .linux => environ.get("TMPDIR") orelse "/tmp",
+        .windows => try os.windows.getTempPath(allocator),
+    };
 }
