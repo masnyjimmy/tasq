@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const compiler = @import("compiler");
+
 const Type = compiler.Type;
 const Value = compiler.Value;
 const ir = compiler.ir;
@@ -51,10 +52,18 @@ fn evalArithmetic(op: ir.BinaryOp, left: Value, right: Value) Value {
     return .{ .number = result };
 }
 
+fn normalizeZero(value: f64) f64 {
+    return if (std.math.isNegativeZero(value))
+        0
+    else
+        value;
+}
+
 fn evalOrdering(op: ir.BinaryOp, left: Value, right: Value) Value {
     const result = switch (left) {
-        .number => |l| blk: {
-            const r = right.number;
+        .number => blk: {
+            const l = normalizeZero(left.number);
+            const r = normalizeZero(right.number);
             break :blk switch (op) {
                 .gt => l > r,
                 .gt_eq => l >= r,
