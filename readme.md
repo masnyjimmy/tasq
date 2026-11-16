@@ -36,6 +36,7 @@
    - [6.1 Statements and Expressions](#61-statements-and-expressions)
    - [6.2 Failure Handling](#62-failure-handling)
    - [6.3 Process Attributes](#63-process-attributes)
+   - [6.4 Scripts](#64-scripts)
 7. [Settings](#7-settings)
 8. [Tasks](#8-tasks)
    - [8.1 Basic Syntax](#81-basic-syntax)
@@ -55,7 +56,7 @@
     - [11.1 Invocation](#111-invocation)
     - [11.2 Checking Without Running (`--check`)](#112-checking-without-running---check)
     - [11.3 Task Arguments](#113-task-arguments)
-    - [11.4 Implicit CLI Names](#114-implicit-cli-names)
+    - [11.4 CLI Names](#114-cli-names)
     - [11.5 Listing Tasks and Showing Usage](#115-listing-tasks-and-showing-usage)
     - [11.6 Choosing the File and Option Placement](#116-choosing-the-file-and-option-placement)
 12. [Attributes](#12-attributes)
@@ -160,7 +161,7 @@ The types `void`, `noreturn` and `!T` also exist at runtime but have no literal 
 - An empty list literal `[]` is allowed wherever its element type can be inferred from the surrounding context, for example from the other branches of an `if` or `switch`; where nothing determines the type (such as `x := []`) it is a compile-time error.
 
   ```
-  task test(v: flag) {
+  task test([long] v: flag) {
       list := if (v)
           [1, 2, 3, 4, 5]
       else
@@ -197,7 +198,7 @@ These types have **no literal** and can only be produced by certain built-ins or
 
 ### 2.3 Meta Types
 
-Meta types are used **only** in attribute values and setting values. They are always **compile-time literals**: no expressions, variables, built-in calls or interpolation. In particular, a meta `string` must be a basic `"..."` literal; interpolated strings and process calls are not allowed.
+Meta types are used **only** in attribute values and setting values. A meta value is always a **compile-time literal**: no expressions, variables, built-in calls or interpolation.
 
 | Type | Description | Literal example |
 |------|-------------|-----------------|
@@ -205,14 +206,37 @@ Meta types are used **only** in attribute values and setting values. They are al
 | `bool` | Boolean | `true`, `false` |
 | `char` | A single character | `'a'` |
 | `number` | Numeric value | `16` |
-| `string` | Text | `"bash"` |
+| `string` | Text | `"bash"` or `bash` |
 | `[]T` | Homogeneous list (may be empty: `[]`) | `["bash", "-c"]` |
 | `(T,U,...)` | Fixed-size, heterogeneous sequence | `("some_string", 25)` |
 
-- A meta `[]T` may be empty because the expected element type is always known from the consuming setting or attribute.
-- A tuple's size is fixed by the number of types listed, and each position must match its declared type exactly. Element types may be any meta type, including lists and other tuples. The tuple *type* lists types, e.g. `(string,number)`; the tuple *literal* lists values, e.g. `("some_string", 25)`.
-- Meta tuples are compile-time literals used only in attribute and setting values. They are unrelated to **runtime tuples** ([§4.10](#410-tuples-and-destructuring)), which are ordinary values built from expressions.
-- A setting's type may be a **union** `T | U`, meaning either type is accepted. This is currently used only by the `dotenv` setting ([§7](#7-settings)).
+- **Strings.** A meta `string` is either a basic `"..."` literal or a bare identifier, which is the string of the same text: `full` and `"full"` are the same value. Raw, interpolated and process forms are not allowed. `null`, `true` and `false` keep their literal meaning, and text that is not an identifier (such as `-c`) must be quoted.
+- **Lists.** A meta `[]T` may be empty because the expected element type is always known from the consuming setting or attribute.
+- **Tuples.** The size is fixed by the number of types listed, and each position must match its declared type exactly. Element types may be any meta type, including lists and other tuples. The tuple *type* lists types, e.g. `(string,number)`; the tuple *literal* lists values, e.g. `("some_string", 25)`. Meta tuples are unrelated to **runtime tuples** ([§4.10](#410-tuples-and-destructuring)), which are ordinary values built from expressions.
+- **Unions.** A setting's type may be a union `T | U`, meaning either type is accepted. This is currently used only by the `dotenv` setting ([§7](#7-settings)).
+
+#### Constraints
+
+Where this specification declares an attribute or a setting, its meta type may carry **constraints** in parentheses that narrow the accepted values:
+
+```
+number(int, min = 1)           // a whole number, at least 1
+string([none, name, full])     // exactly one of these three strings
+[]string(min_items = 1)        // a non-empty list of strings
+```
+
+| Type | Constraint | Meaning |
+|------|------------|---------|
+| `number` | `int` | Only whole numbers are accepted. |
+| `number` | `min = n` | The value is at least `n` (inclusive). |
+| `number` | `max = n` | The value is at most `n` (inclusive). |
+| `string` | `[a, b, ...]` | Only the listed strings (the *options*) are accepted. Without it any string is accepted. |
+| `[]T` | `min_items = n` | The list has at least `n` elements. |
+| `[]T` | `max_items = n` | The list has at most `n` elements. |
+
+- Constraints belong to the declaration of an attribute or setting; they are not syntax that can be written in a tasq file.
+- The compiler enforces them: a value that violates a constraint is a compile-time error.
+- A string with options is written like any meta string, quoted or as a bare identifier. Options are compared as exact text.
 
 ### 2.4 Argument Types
 
@@ -341,14 +365,16 @@ ok := @all(nums, |n| n >= 0) and not @any(nums, |n| n > 100)
 "b" >= "a"           // true
 ```
 
-**List spread:**
+#### List spread
 
 ```
 base  := [1, 2, 3]
 extra := [...base, 4, 5]  // [1, 2, 3, 4, 5]
 ```
 
-**Modulo.** `a % b` is the remainder of truncated division:
+#### Modulo
+
+`a % b` is the remainder of truncated division:
 
 - The result takes the **sign of the left operand**; the sign of the divisor does not matter.
 - A zero result from a negative left operand is negative zero, printed as `-0`.
@@ -377,15 +403,75 @@ Output of `tasq test`:
 
 ### 4.2 Strings and Interpolation
 
-| Literal | Type | Interpolation | Description |
-|---------|------|:-------------:|-------------|
-| `"text"` | `string` | No | **Basic string.** Taken as written, apart from escape sequences. `{` and `}` have no special meaning. |
-| `` `text {<expr>}` `` | `string` | Yes | **Interpolated string.** Any expression may be embedded using single curly braces. |
-| `'c'` | `char` | No | A single character. |
+#### Literal forms
 
-Process calls use a related literal, `` $`command` `` ([§6](#6-process-calls)).
+| Literal | Type | Lines | Interpolation | Escapes |
+|---------|------|-------|:-------------:|:-------:|
+| `"text"` | `string` | single line | no | yes |
+| `r"text"` | `string` | single line | no | no (raw) |
+| `` `text {<expr>}` `` | `string` | single or multiple | yes | yes |
+| ``r`text` `` | `string` | single or multiple | no | no (raw) |
+| `'c'` | `char` | single character | no | yes |
 
-**Interpolation.** Inside an interpolated string or a process call, `{<expression>}` is evaluated at runtime and converted to its string representation:
+- **Basic string `"..."`.** Taken as written, apart from escape sequences. `{` and `}` have no special meaning. A line break inside the literal is a compile-time error.
+- **Raw string `r"..."`.** Every character is taken literally, a backslash included. It cannot contain a `"`, as there is no way to escape it, and it cannot span lines.
+- **Interpolated string `` `...` ``.** Any expression may be embedded using single curly braces ([Interpolation](#interpolation)). It may span lines ([Multi-line strings](#multi-line-strings)).
+- **Raw backtick string ``r`...` ``.** The text is taken literally: no interpolation and no escapes, so `{`, `}` and `\` need no care. It cannot contain a backtick. It may span lines, with the same rules as an interpolated string.
+- **Char `'c'`.** A single character. There is no raw form.
+- `r` starts a raw string only when it is written directly in front of the opening quote or backtick; anywhere else it is an ordinary identifier.
+
+Process calls accept a string expression of any of these forms ([§6](#6-process-calls)).
+
+#### Multi-line strings
+
+A backtick string (interpolated or raw) is either **single-line** or **multi-line**:
+
+```
+one_line := `one line of text`
+
+multi := `
+    first line
+        an indented line
+    last line
+`
+```
+
+A literal that contains a line break is multi-line and must follow these rules:
+
+1. **Layout.** The opening backtick must be followed immediately by a line break, and the last line (the one holding the closing backtick) must contain only whitespace. Otherwise it is a compile-time error.
+2. **Content.** The lines between the opening line break and the closing line make up the text. They are joined with line breaks, and the text has **no leading and no trailing line break**. A trailing line break, if wanted, is written as `\n` at the end of the last content line (not possible in a raw string).
+3. **Indentation.** The common indentation is the number of leading whitespace characters of the least-indented content line. It is removed from every content line, so that line starts at column 0.
+   - A space and a tab each count as one character, and they may be mixed.
+   - The closing line does not take part. Whitespace-only content lines are ignored when finding the common indentation and become empty lines.
+4. **Order of processing.** Indentation is normalized on the source text, **before** escape sequences and interpolation are processed. Interpolated values are never re-indented, and an escape such as `\t` at the start of a line does not count as indentation.
+
+In the examples below, `|` marks the left edge of the resulting text and is not part of it:
+
+```
+example1 := `
+    multiple
+       line
+           text
+`
+//   |multiple
+//   |   line
+//   |       text
+
+example2 := `
+       multiple
+    line
+              text
+`
+//   |   multiple
+//   |line
+//   |          text
+```
+
+The least-indented line decides the common indentation, whatever its position.
+
+#### Interpolation
+
+In an interpolated string (`` `...` ``), `{<expression>}` is evaluated at runtime and converted to its string representation:
 
 ```
 greeting := `Hello, {name}!`
@@ -397,13 +483,16 @@ $`mkdir -p {output_dir}/{@env("BUILD_ID") fallback "local"}`
 
 Lists and tuples are converted by converting each element and joining them with `, `; a list is wrapped in `[` `]` and a tuple in `(` `)`, e.g. `[1, 2, 3]` and `(str, 5, false)`. Strings inside them are written without quotes. A lambda (also one inside a tuple) is written as `<lambda>`.
 
-Because `{` starts an interpolation in these literals, a literal brace must be escaped (`\{`, `\}`), for example in shell code:
+Because `{` starts an interpolation, a literal brace in an interpolated string must be escaped (`\{`, `\}`), or the string written as a raw string, where nothing needs escaping:
 
 ```
-$`awk '\{print $1\}' input.txt`
+$`awk '\{print $1\}' input.txt`      // escaped braces in an interpolated string
+$r`awk '{print $1}' input.txt`       // raw string: braces and $ are taken literally
 ```
 
-**Escape sequences** are valid in **every** literal kind (`"..."`, `` `...` ``, `` $`...` `` and `'c'`), even where an escape isn't strictly needed (e.g. `\{` inside a basic string):
+#### Escape sequences
+
+Escapes are valid in every non-raw literal (`"..."`, `` `...` `` and `'c'`), even where an escape is not strictly needed (e.g. `\{` inside a basic string):
 
 | Escape | Meaning |
 |--------|---------|
@@ -414,8 +503,6 @@ $`awk '\{print $1\}' input.txt`
 | `\xNN` | Character with the two-digit hexadecimal code `NN` |
 | `\u{NNNN...}` | Unicode code point given as hexadecimal digits |
 | `\{` `\}` | Literal `{` / `}` (prevents interpolation) |
-
-Escapes are processed by tasq **before** a process call's command reaches the shell. To give the shell a literal backslash sequence such as `\n` (e.g. as an argument to `printf`), write the backslash twice: `` $`printf 'a\\nb'` ``.
 
 ### 4.3 If Expression
 
@@ -475,7 +562,7 @@ for(<subjects>) [parallel[(<n>)]] |<captures>| <expr>
 - `parallel`, when written, makes the iterations run concurrently; the result is the same list, in the same order ([§13.2](#132-parallel-for)).
 - `<captures>` binds one capture to each subject, in order. A capture is an identifier (the current element of a list subject, or the current index of a range subject), `_` for a value you don't need, or a destructuring pattern `(a, b)` when the elements are tuples ([§4.10](#410-tuples-and-destructuring)). The number of captures **must equal** the number of subjects.
 - `<expr>` is evaluated once per iteration, and its result becomes the corresponding element of the produced list. The result type is `[]T`, where `T` is the type of `<expr>`. If there are no iterations the result is an empty `[]T`.
-- `<expr>` may be an `if`, `switch`, `in` or `with` expression containing `break` or `continue` branches ([§4.6](#46-break-and-continue)); these are `noreturn` and unify with the surviving branches ([§2.2](#22-special-types)). In a parallel `for`, `break` is not allowed ([§13.2](#132-parallel-for)).
+- `<expr>` may be an `if`, `switch`, `in` or `with` expression containing `break` or `continue` branches ([§4.6](#46-break-and-continue)); these are `noreturn` and unify with the surviving branches ([§2.2](#22-special-types)).
 - `<expr>` may itself be a `for` expression (a nested loop). The inner `for` produces a list, so the outer result is a list of lists.
 
 ```
@@ -516,7 +603,7 @@ Both have type `noreturn` ([§2.2](#22-special-types)), so they can be used as b
 
 Both always refer to the **nearest enclosing `for`**; a nested `if`, `switch`, `in` or `with` does not change this, and neither does an inner `for`: in nested loops, `break` and `continue` affect only the innermost one. Leaving an `in` block this way restores the previous working directory ([§4.11](#411-in-expression)).
 
-In a **parallel** `for` ([§13.2](#132-parallel-for)), `break` is a compile-time error, because there is no stable meaning of "stop here" while iterations run concurrently; `continue` works as in the table (the expression form drops the element, the statement form ends that iteration). Neither keyword can refer to a `for` that encloses a parallel block ([§13.4](#134-parallel-block)).
+In a **parallel** `for`, `break` is a compile-time error and `continue` works as in the table ([§13.2](#132-parallel-for)). Neither keyword can refer to a `for` that encloses a parallel block ([§13.4](#134-parallel-block)).
 
 ```
 for(numbers) |n| {
@@ -1036,17 +1123,26 @@ task demo {
 
 ## 6. Process Calls
 
-A process call runs a shell command. It is written as a backtick literal prefixed with `$`, optionally with attributes between the `$` and the backtick:
+A process call runs an external program. It is written as `$`, optional attributes, and an expression that produces the text to run:
 
 ```
-$`<command>`
-$[<attributes>]`<command>`
+PROC := '$' [ATTRIBUTES] EXPR
 ```
 
-- Only `$` followed by a backtick literal is a process call; there is no `$"..."` form.
-- `{<expr>}` interpolation and escape sequences work as in interpolated strings ([§4.2](#42-strings-and-interpolation)).
-- Each `` $`...` `` literal is **one process invocation**. It runs using the interpreter from the `script` setting ([§7](#7-settings)), in the working directory in effect and in the environment in effect ([§12.6](#126-environment-and-working-directory-at-a-glance)).
-- Because every process call is its own invocation, a `cd` inside one does not carry over to later process calls or to built-in functions. To change the working directory, use `in` ([§4.11](#411-in-expression), [§8.9](#89-in-statement)).
+```
+$`make build`                        // command, interpolated string
+$[nofail]`rm -f stale.lock`          // with attributes
+$"make build"                        // command, basic string
+$r"printf 'a\nb'"                    // command, raw string
+$[script]`...multi-line script...`   // script, see 6.4
+```
+
+- **Command expression.** `EXPR` is a *primary* expression: a string literal of any form ([§4.2](#42-strings-and-interpolation)), a name, a built-in or lambda call, a parenthesized expression or a slice. Anything larger needs parentheses, e.g. `$("make " + target)`. Its type must be `string`; this is checked during semantic analysis.
+- **Literal rules apply.** What the literal does, the process call does: `` $`echo {x}` `` interpolates, `$"echo {x}"` runs the braces as they are, and a raw literal passes backslashes untouched. Any other string value is used as it is.
+- **Escapes reach the shell processed.** To give the shell a literal backslash sequence such as `\n`, use a raw literal (`$r"printf 'a\nb'"`) or double the backslash (`` $`printf 'a\\nb'` ``).
+- **`fallback`** attaches to the whole process expression ([§4.7](#47-fallback)): `` $`cmd` fallback "x" ``.
+- **One invocation.** Each process call is **one invocation** of its interpreter ([§7](#7-settings)): `shell` for commands, `script` for scripts ([§6.4](#64-scripts)). It runs in the working directory and environment in effect ([§12.6](#126-environment-and-working-directory-at-a-glance)).
+- **No `cd` across calls.** Because every process call is its own invocation, a `cd` inside one does not carry over to later process calls or to built-in functions. To change the working directory, use `in` ([§4.11](#411-in-expression), [§8.9](#89-in-statement)).
 
 ### 6.1 Statements and Expressions
 
@@ -1055,15 +1151,13 @@ A process call is a **statement** when it stands alone as a line of a task body,
 | Aspect | Process statement | Process expression |
 |--------|-------------------|--------------------|
 | Type | none | `string` |
-| Echo | Command (after interpolation) is echoed first; `noecho` disables | None |
+| Echo | The command (after interpolation) is echoed first; `noecho` disables. Scripts are not echoed by default ([§6.4](#64-scripts)) | None |
 | stdout | Inherited | **Captured**; becomes the value |
 | stderr | Inherited | Inherited |
 | stdin | Inherited | Empty (reads end-of-file immediately; never waits for input) |
 | Non-zero exit | Aborts execution | Aborts execution |
 | `@status_code()` | Updated | Updated |
 | `fallback` | None | Optional ([§4.7](#47-fallback)) |
-
-The attributes valid on each form are listed in [§6.3](#63-process-attributes).
 
 **Captured output.** For a process expression, every newline (`\n` or `\r\n`) at the **end** of the captured output is removed. Nothing else is trimmed: leading whitespace, trailing spaces and tabs, and newlines inside the output are preserved.
 
@@ -1103,22 +1197,42 @@ task example {
 
 ### 6.3 Process Attributes
 
-Process attributes are written inline, in a single bracket pair, comma-separated: `` $[nofail, noecho]`cmd` ``.
+Process attributes are written inline, between the `$` and the command, in a single bracket pair, comma-separated: `` $[nofail, noecho]`cmd` ``. The table in [§12](#12-attributes) lists where each one is valid.
 
-| Attribute | Valid on | Description |
-|-----------|----------|-------------|
-| `[nofail]` | statement, expression | A non-zero exit status does not abort execution ([§6.2](#62-failure-handling)). |
-| `[noecho]` | statement | Do not echo the command before running it. The command's own output is unaffected. |
+| Attribute | Meta type | Description |
+|-----------|-----------|-------------|
+| `[nofail]` | flag | A non-zero exit status does not abort execution ([§6.2](#62-failure-handling)). |
+| `[noecho]` | `bool` | Do not echo the command before running it. Written without a value it means `true`; `[noecho: false]` forces the echo. The default is `false` for commands and `true` for scripts ([§6.4](#64-scripts)). The command's own output is unaffected. |
+| `[script]` | flag | Run the text as a script instead of a command ([§6.4](#64-scripts)). |
 
-- Both are presence flags and take no value.
-- Using an attribute where it is not valid (e.g. `noecho` on a process expression, where there is nothing to echo) is a compile-time error.
+- A flag takes no value. `noecho` is the only process attribute that accepts one.
+- `noecho` has no meaning on a process expression, which is never echoed; using it there is a compile-time error.
 - Applying the same attribute twice to one process call is a compile-time error.
+
+### 6.4 Scripts
+
+A **script** is a multi-line program that is run from a file instead of as a one-line command. Mark a process call with `[script]` to make it one:
+
+```
+task test(num: number) $[script]`
+    echo "Adding {num} to a number read from stdin"
+    read second_num
+    echo "$(({num} + $second_num))"
+`
+```
+
+- **How it runs.** tasq writes the text to a temporary file and runs the interpreter from the `script` setting ([§7](#7-settings)) with the path of that file appended as the last argument. A command, by contrast, is passed as the last argument of `shell`, as with `-c`.
+- **Interpreter defaults.** On Linux the default is `["/bin/sh", "-eu"]`, so an unset variable or a failing command stops the script. Set `script` to use another interpreter, e.g. `set script = ["bash", "-euo", "pipefail"]`.
+- **Stdin.** The script text is not sent through stdin, so stdin stays available to the script exactly as for any other process call ([§6.1](#61-statements-and-expressions)).
+- **Echo.** Scripts are not echoed. `[noecho: false]` echoes the script text like a command. This default may change ([§15](#15-planned-features)).
+- **Everything else is as for any process call.** A script may be a statement or an expression, accepts `nofail` and `fallback`, and updates `@status_code()`.
+- **Which literal.** The text is any string expression. A multi-line backtick string ([§4.2](#multi-line-strings)) is the usual choice; use a raw backtick string for a script that is full of braces: ``$[script]r`...` ``.
 
 ---
 
 ## 7. Settings
 
-Settings configure global interpreter behavior. They are declared at **file root**, and **each setting may be declared only once** across the entire file.
+Settings configure global interpreter behavior. They are declared at **file root**, and **each setting may be declared only once** per platform ([§12.1](#121-platform-attributes)); a declaration without a platform attribute counts for all platforms.
 
 **Single setting:**
 
@@ -1145,25 +1259,50 @@ set {
 
 ```
 [windows]
-set script = ["cmd", "/C"]
+set shell = ["cmd", "/C"]
 
 [linux]
-set script = ["bash", "-c"]
+set shell = ["bash", "-c"]
 
 [macos]
-set script = ["zsh", "-c"]
+set shell = ["zsh", "-c"]
+```
+
+**Values.** Setting values are meta values ([§2.3](#23-meta-types)), so a string may be written quoted or as a bare identifier, and each setting's constraints are enforced at compile time:
+
+```
+set task_label = full       // same as: set task_label = "full"
+set task_label = "idk"      // compile-time error: "idk" is not one of none, name, full
 ```
 
 **Available settings:**
 
 | Setting | Meta type | Description |
 |---------|-----------|-------------|
-| `script` | `[]string` | Command and arguments used to invoke each process call, e.g. `["sh", "-c"]`. |
+| `shell` | `[]string(min_items = 1)` | Interpreter for command process calls. The command is appended as the last argument, e.g. `["/bin/sh", "-c"]`. |
+| `script` | `[]string(min_items = 1)` | Interpreter for script process calls ([§6.4](#64-scripts)). The path of the script file is appended as the last argument, e.g. `["/bin/sh", "-eu"]`. |
 | `dotenv` | `bool \| string` | Whether to read a `.env` file into the environment. `set dotenv` enables the default `.env` file in `working_dir`; `set dotenv = "path/to/file"` enables it using that file instead. Default: `false`. See [§12.4](#124-environment-attributes) for how loaded values interact with `[env]` and the OS environment. |
 | `working_dir` | `string` | The root working directory. Defaults to the directory `tasq` was invoked from. It is the base of every task's working directory ([§12.5](#125-working-directory-attribute)), the working directory of static bindings ([§3](#3-bindings)), and the base for the default `.env` path. |
-| `jobs` | `number` | The global budget of parallel execution ([§13.1](#131-model-and-limits)): the maximum number of threads that execute tasq code at the same time, the main thread included. tasq never creates more threads than this value. It must be a whole number of at least `1` (anything else is a compile-time error); `set jobs = 1` runs everything sequentially. Default: the number of CPUs. |
+| `jobs` | `number(int, min = 1)` | The global budget of parallel execution ([§13.1](#131-model-and-limits)): the maximum number of threads that execute tasq code at the same time, the main thread included. tasq never creates more threads than this value; `set jobs = 1` runs everything sequentially. Default: the number of CPUs. |
+| `task_label` | `string([none, name, full])` | Whether tasq announces a task when it starts running. See below. Default: `none`. |
 
-> There is no setting to ignore process failures; see [§6.2](#62-failure-handling).
+**Interpreter defaults:**
+
+| Setting | Windows | Linux and macOS |
+|---------|---------|-----------------|
+| `shell` | `["cmd", "/C"]` | `["/bin/sh", "-c"]` |
+| `script` | `["cmd", "/C"]` | `["/bin/sh", "-eu"]` |
+
+**Task labels.** `task_label` selects what is printed before a task runs:
+
+| Value | Printed before the task runs |
+|-------|------------------------------|
+| `none` | Nothing. |
+| `name` | The name of the task. |
+| `full` | The name of the task and its arguments. |
+
+The label is printed for every task that runs: the one named on the command line, its dependencies and the tasks it calls. A dependency that is skipped as already run ([§8.8](#88-task-dependencies)) does not run and prints nothing. The exact text of the label is not specified yet.
+
 > Additional settings will be added in future versions.
 
 ---
@@ -1218,34 +1357,38 @@ task example(
 
 ### 8.3 Argument Ordering
 
-An argument is **named** when it has a short name (`-x`), a long name (`--xyz`) or both: these are what a user types on the command line, as opposed to a positional argument, which is identified purely by position. CLI names are set with `[short]` / `[long]` ([§12.3](#123-argument-attributes)) or assigned implicitly ([§11.4](#114-implicit-cli-names)).
+An argument is **named** when it has at least one CLI name, a short name (`-x`), a long name (`--xyz`) or both, and **positional** when it has none. CLI names are never assigned automatically: they come only from the `[long]` and `[short]` attributes ([§12.3](#123-argument-attributes), [§11.4](#114-cli-names)).
 
 Arguments in a task or group declaration **must appear in this order**; violating it is a compile-time error.
 
 | Phase | Kind | Characteristics |
 |-------|------|-----------------|
-| 1st | **Positional** | No name attribute; no default; only `string` and `number` |
-| 2nd | **Named required** | Has a CLI name (explicit or implicit); no default |
-| 3rd | **Named optional** | Has a CLI name (explicit or implicit); has a default (`= <value>`) |
+| 1st | **Positional required** | No CLI name; no default; only `string` and `number` |
+| 2nd | **Positional optional** | No CLI name; has a default (`= <value>`); only `string` and `number` |
+| 3rd | **Named required** | Has a CLI name; no default |
+| 4th | **Named optional** | Has a CLI name; has a default (`= <value>`) |
 
-**An argument becomes named automatically when:**
+**Rules:**
 
-- it has a default value, making it named optional;
-- its type is `flag`, `string_list` or `number_list`. These are inherently non-positional and are named required unless a default is given;
-- it is a `group` argument. All group arguments are implicitly named required.
-
-Positional arguments cannot have a default value (compile-time error). A `flag` is placed in the named-required phase even though its implicit default (`false`) lets a caller omit it ([§9](#9-task-calls)).
+- Whether an argument is positional or named depends only on its names. Neither its type nor its default value changes it.
+- Arguments of type `flag`, `string_list` or `number_list` are inherently non-positional, and so are all group arguments ([§10.1](#101-named-groups)). Each of them must be given `[long]` and/or `[short]`; without a name it is a compile-time error.
+- A `flag` has the implicit default `false`, so a caller may omit it ([§9](#9-task-calls)), but it is placed in the named-required phase.
 
 ```
 task deploy(
-    // 1. Positional
+    // 1. Positional required
     target: string,
 
-    // 2. Named required (flag type: implicitly named)
+    // 2. Positional optional
+    retries: number = 3,
+
+    // 3. Named required (a flag must be named explicitly)
+    [long, short]
     verbose: flag,
 
-    // 3. Named optional (default value: implicitly named)
-    retries: number = 3,
+    // 4. Named optional
+    [long]
+    region: string = "eu",
 ) { ... }
 ```
 
@@ -1665,6 +1808,7 @@ Groups are containers for related tasks that share a common set of arguments.
 
 ```
 group group_name(
+    [long]
     shared_arg: argument_type,
 ) {
     task task_a {
@@ -1682,7 +1826,7 @@ group group_name(
 **Rules:**
 
 - Groups **cannot be nested**.
-- Group arguments are **promoted to named**: they implicitly receive CLI names following the same rules as other named arguments ([§11.4](#114-implicit-cli-names)).
+- Group arguments are always **named**: each one needs `[long]` and/or `[short]` ([§11.4](#114-cli-names)), otherwise it is a compile-time error.
 - Group arguments are shared by every task in the group.
 - A group may carry `[cwd]`, which applies to every task in it ([§12.5](#125-working-directory-attribute)).
 - Tasks in a named group are called from outside as `group_name::task_name(...)`.
@@ -1709,6 +1853,7 @@ An anonymous group works like a named group but has no identifier. Its shared ar
 
 ```
 group(
+    [long]
     shared_arg: argument_type,
 ) {
     task task_a { ... }
@@ -1761,7 +1906,7 @@ tasq <task_name> [arguments...] [-f <file>]
 tasq --check
 ```
 
-`--check` runs the compiler over the `tasq` file (parsing, name resolution, type checking and every other check the spec calls a *compile-time error*) and prints the resulting **diagnostics**. It then stops: **no task is run**.
+`--check` runs the compiler over the `tasq` file (parsing, name resolution, type checking and every other check the spec calls a *compile-time error*, constraint violations of settings and attributes included) and prints the resulting **diagnostics**. It then stops: **no task is run**.
 
 **What it does not do:**
 
@@ -1773,7 +1918,7 @@ tasq --check
 
 ### 11.3 Task Arguments
 
-**Positional arguments** are passed by position, in declaration order. Only `string` and `number` may be positional.
+**Positional arguments** are passed by position, in declaration order. Only `string` and `number` may be positional. Trailing optional positional arguments may be left out and take their defaults; an optional argument cannot be skipped in order to give a later one.
 
 ```
 tasq task_name value1 value2
@@ -1794,27 +1939,33 @@ tasq task_name -v
 
 **Mixing.** When a task has both kinds, positional arguments are consumed first in declaration order. Named arguments may appear anywhere in the command, except that the global `-f` / `--file` option must come last ([§11.6](#116-choosing-the-file-and-option-placement)).
 
-### 11.4 Implicit CLI Names
+### 11.4 CLI Names
 
-Every **named** argument ([§8.3](#83-argument-ordering)) that is not given explicit names automatically receives CLI names derived from its identifier. This covers the non-positional types (`string_list`, `number_list`, `flag`), arguments with a default value, and group arguments.
+An argument has CLI names only when they are requested explicitly with `[long]` and `[short]` ([§12.3](#123-argument-attributes)). Nothing is derived automatically, and an argument without a name is positional ([§8.3](#83-argument-ordering)).
 
-| Implicit attribute | Default value |
-|--------------------|---------------|
-| `[short]` | First letter of the identifier |
-| `[long]` | The full identifier |
+| Attribute | CLI name |
+|-----------|----------|
+| `[long]` | `--` and the identifier |
+| `[long: "tag"]` | `--tag` |
+| `[short]` | `-` and the first letter of the identifier |
+| `[short: 't']` | `-t` |
+| `[long: null]`, `[short: null]` | no such name (the same as leaving the attribute out) |
 
-Override or remove them with explicit `[long]` / `[short]` attributes ([§12.3](#123-argument-attributes)):
+A `flag`, a list or a group argument ([§8.3](#83-argument-ordering)) with no name is a compile-time error.
 
 ```
 task example(
-    [long: "tag", short: 't']  // custom names
+    [long: "tag", short: 't']  // --tag, -t
     tags: string_list,
 
-    [short: null]              // remove short; keep long (--verbose)
+    [long]                     // --verbose
     verbose: flag,
 
-    [long: null, short: 'x']   // remove long; custom short (-x)
+    [short: 'x']               // -x only
     extra: flag,
+
+    [long, short]              // --retries, -r
+    retries: number = 3,
 ) { ... }
 ```
 
@@ -1822,7 +1973,7 @@ task example(
 
 **`tasq --list`** displays the tasks of the file, grouped by group. Each task is shown with the names of its positional arguments and its `[desc]` description ([§12.2](#122-documentation-attributes)). `[private]` tasks and groups are omitted.
 
-**`tasq --usage <task_name>`** displays the usage of one task: its signature, that is its arguments with their CLI names ([§11.3](#113-task-arguments), [§11.4](#114-implicit-cli-names)) and default values, together with the `[desc]` descriptions of the task and of its arguments.
+**`tasq --usage <task_name>`** displays the usage of one task: its signature, that is its arguments with their CLI names ([§11.3](#113-task-arguments), [§11.4](#114-cli-names)) and default values, together with the `[desc]` descriptions of the task and of its arguments.
 
 ```
 tasq --list
@@ -1861,8 +2012,9 @@ Several attributes may share one bracket pair, comma-separated, or be spread ove
 [desc: "A percentage value"]
 ```
 
-- Attribute values are **meta types**: compile-time literals ([§2.3](#23-meta-types)).
-- **Process-call attributes** are the one exception to the placement rule: they are written inline between the `$` and the backtick ([§6.3](#63-process-attributes)).
+- Attribute values are **meta values**: compile-time literals, checked against the attribute's meta type and constraints ([§2.3](#23-meta-types)). A string value may be written quoted or as a bare identifier: `[desc: hello]` and `[desc: "hello"]` are the same.
+- An attribute written without a value is a **flag**, except where noted (`noecho` is a `bool` and may also be written with a value).
+- **Process-call attributes** are the one exception to the placement rule: they are written inline between the `$` and the command ([§6.3](#63-process-attributes)).
 - **Uniqueness** is a property of each attribute. A *unique* attribute may be applied at most once per element (twice is a compile-time error); a *repeatable* attribute may be applied multiple times.
 
 **Where each attribute is valid** (this table is the single reference for validity and uniqueness; the subsections below describe meaning):
@@ -1874,10 +2026,11 @@ Several attributes may share one bracket pair, comma-separated, or be spread ove
 | `[private]` | ✓ | ✓ | | | | | Yes |
 | `[cwd]` | ✓ | ✓ | | | | | Yes |
 | `[long]` `[short]` | | | ✓ | | | | Yes |
-| `[int]` `[min]` `[max]` `[pattern]` `[max_items]` | | | ✓ | | | | Yes |
+| `[int]` `[min]` `[max]` `[pattern]` `[min_items]` `[max_items]` | | | ✓ | | | | Yes |
 | `[env]` | ✓ | | | | | | No (repeatable) |
 | `[nofail]` | | | | | ✓ | ✓ | Yes |
 | `[noecho]` | | | | | ✓ | | Yes |
+| `[script]` | | | | | ✓ | ✓ | Yes |
 
 ### 12.1 Platform Attributes
 
@@ -1911,7 +2064,7 @@ task open {
 | Attribute | Meta type | Description |
 |-----------|-----------|-------------|
 | `[desc: "text"]` | `string` | Human-readable description shown by `tasq --list` and `tasq --usage` ([§11.5](#115-listing-tasks-and-showing-usage)). |
-| `[private]` | *(none)* | Hides the task or group from `tasq --list` output. A private task can still be called normally, by name from another task or directly from the command line; it is only omitted from generated documentation. |
+| `[private]` | flag | Hides the task or group from `tasq --list` output. A private task can still be called normally, by name from another task or directly from the command line; it is only omitted from generated documentation. |
 
 ```
 [desc: "Compile and package the project for distribution"]
@@ -1941,14 +2094,14 @@ task release {
 
 Valid only on individual argument declarations inside tasks or groups.
 
-**Naming.** `long` and `short` each come in three forms; each of the two attributes is unique.
+**Naming.** `long` and `short` each come in three forms; each of the two attributes is unique. Names are never assigned automatically ([§11.4](#114-cli-names)): an argument that has neither attribute is positional.
 
 | Attribute | Meta type | Description |
 |-----------|-----------|-------------|
-| `[long]` | *(none)* | Use the identifier as the long name (`--identifier`) |
+| `[long]` | flag | Use the identifier as the long name (`--identifier`) |
 | `[long: "name"]` | `string` | Use a custom long name |
 | `[long: null]` | `null` | Remove the long name |
-| `[short]` | *(none)* | Use the identifier's first letter as the short name (`-i`) |
+| `[short]` | flag | Use the identifier's first letter as the short name (`-i`) |
 | `[short: 'c']` | `char` | Use a custom short name |
 | `[short: null]` | `null` | Remove the short name |
 
@@ -1956,34 +2109,37 @@ Valid only on individual argument declarations inside tasks or groups.
 
 | Attribute | Meta type | Applies to | Description |
 |-----------|-----------|------------|-------------|
-| `[int]` | *(none)* | `number`, `number_list` | Integers only; reject floating-point input |
+| `[int]` | flag | `number`, `number_list` | Integers only; reject floating-point input |
 | `[min: n]` | `number` | `number`, `number_list` | Minimum allowed value (inclusive) |
 | `[max: n]` | `number` | `number`, `number_list` | Maximum allowed value (inclusive) |
 | `[pattern: "regex"]` | `string` | `string`, `string_list` | Validate each value against a regular expression |
-| `[max_items: n]` | `number` | `string_list`, `number_list` | Maximum number of list items |
+| `[min_items: n]` | `number(int, min = 0)` | `string_list`, `number_list` | Minimum number of list items |
+| `[max_items: n]` | `number(int, min = 1)` | `string_list`, `number_list` | Maximum number of list items |
+
+- `min` greater than `max`, or `min_items` greater than `max_items`, on one argument is a compile-time error.
 
 > Additional validation attributes will be added in future versions.
 
 ```
 task create_user(
-    // Positional
+    // 1. Positional required
     username: string,
 
-    // Named with validation
+    // 2. Positional optional, with validation
     [int, min: 13, max: 150, desc: "Age of the user"]
-    age: number,
+    age: number = 18,
 
-    // Custom CLI names and item limit
-    [long: "tag", short: 't', max_items: 10]
+    // 3. Named required: custom names and item limits
+    [long: "tag", short: 't', min_items: 1, max_items: 10]
     tags: string_list,
 
-    // Optional with pattern validation
-    [pattern: "^[\\w._%+\\-]+@[\\w.\\-]+\\.[a-z]{2,}$"]
-    email: string = "",
-
-    // Flag: long name kept, short removed
-    [long, short: null]
+    // Flag: names are requested explicitly (--verbose, -v)
+    [long, short]
     verbose: flag,
+
+    // 4. Named optional, with pattern validation
+    [long, pattern: "^[\\w._%+\\-]+@[\\w.\\-]+\\.[a-z]{2,}$"]
+    email: string = "",
 ) {
     $`echo "Creating {username}, age {age}"`
 }
@@ -2025,13 +2181,13 @@ task deploy {
 **Static vs. task-local bindings:**
 
 ```
-// Static: always sees the root environment (shell braces are escaped)
-layer := $`echo "$\{LAYER:-unset\}"`
+// Static: always sees the root environment (a raw string keeps the shell's braces as they are)
+layer := $r`echo "${LAYER:-unset}"`
 
 [env: ("LAYER", "task")]
 task show {
     @print(layer)                              // "unset" (if LAYER isn't set in the OS environment)
-    local := $`echo "$\{LAYER:-unset\}"`
+    local := $r`echo "${LAYER:-unset}"`
     @print(local)                              // "task"
 }
 ```
@@ -2053,7 +2209,7 @@ Each part is optional. `working_dir` ([§7](#7-settings)) defaults to the direct
 - **Independent of the caller.** The result depends only on the task's own definition. It is the same whether the task is run from the command line, listed as a dependency or called from a body, and a call made from inside an `in` block does not change it ([§4.11](#411-in-expression)). This is why the working directory is not part of a dependency's identity ([§8.8](#88-task-dependencies)).
 - **What it affects.** Every process call and the file-system built-ins (`@glob`, `@exists`, `@read`, `@is_file`, `@is_dir`, [§5](#5-built-in-functions)) in the task body start in this directory, and so does `@cwd()`. `in` replaces it for a block, and a relative `in` path is resolved against it ([§4.11](#411-in-expression)).
 - **What it does not affect.** Static bindings are evaluated in the root working directory, never in the `cwd` of whatever task triggers them ([§3](#3-bindings)). `@invocation_dir()` is unchanged.
-- The `cwd` value is a meta `string` and must be a basic `"..."` literal ([§2.3](#23-meta-types)).
+- The `cwd` value is a meta `string` ([§2.3](#23-meta-types)), so it cannot be computed.
 - If the resulting directory does not exist when the task runs, the run aborts with an error.
 
 ```
@@ -2276,7 +2432,7 @@ A branch fails when it aborts the run in the usual way: a process that exits non
 
 **Environment and working directory.** Private to each branch, see [§13.1](#131-model-and-limits) and [§12.6](#126-environment-and-working-directory-at-a-glance).
 
-**Output and input.** tasq does not order or group the output of concurrent branches. Echoed commands, `@print` output and the output of the processes themselves appear as they are produced and may interleave. Process expressions capture their output ([§6.1](#61-statements-and-expressions)), so they never interleave; use them, or `noecho`, where readable output matters. Process statements inherit stdin as usual, so branches that read from the terminal compete for the input: avoid interactive commands in parallel branches.
+**Output and input.** tasq does not order or group the output of concurrent branches. Echoed commands, task labels ([§7](#7-settings)), `@print` output and the output of the processes themselves appear as they are produced and may interleave. Process expressions capture their output ([§6.1](#61-statements-and-expressions)), so they never interleave; use them, or `noecho`, where readable output matters. Process statements inherit stdin as usual, so branches that read from the terminal compete for the input: avoid interactive commands in parallel branches.
 
 ### 13.8 Compile-Time Errors
 
@@ -2296,14 +2452,16 @@ A branch fails when it aborts the run in the usual way: a process that exits non
 
 | Literal | Type | Interpolation | Notes |
 |---------|------|:-------------:|-------|
-| `"text"` | `string` | No | Basic string |
-| `` `text {expr}` `` | `string` | Yes (`{ }`) | Interpolated string |
+| `"text"` | `string` | No | Basic string, single line, escapes |
+| `r"text"` | `string` | No | Raw string, single line, no escapes |
+| `` `text {expr}` `` | `string` | Yes (`{ }`) | Interpolated string, single or multi-line, escapes ([§4.2](#42-strings-and-interpolation)) |
+| ``r`text` `` | `string` | No | Raw backtick string, single or multi-line, no escapes |
 | `'c'` | `char` | No | Single character |
 | `("a", 1)` | tuple | No | Two or more elements of any value type, lambdas included ([§4.10](#410-tuples-and-destructuring)) |
 | `\|a, b\| expr` | lambda | No | Single-expression function; types inferred per use ([§4.8](#48-lambdas)) |
-| `` $`command {expr}` `` | process call | Yes (`{ }`) | Statement or expression ([§6.1](#61-statements-and-expressions)) |
+| `` $[attrs] <string expr> `` | process call | By its literal | Statement or expression; e.g. `` $`command {expr}` `` ([§6](#6-process-calls)) |
 
-Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` `` `\0` `\xNN` `\u{NNNN...}` `\{` `\}`
+Escape sequences (valid in every non-raw literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` `` `\0` `\xNN` `\u{NNNN...}` `\{` `\}`
 
 ### Expression Forms
 
@@ -2338,6 +2496,15 @@ Escape sequences (valid in every literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` ``
 | `[cwd: "dir"]` on a task or group | Task working directory: `working_dir` + group `cwd` + task `cwd`; independent of the caller | [§12.5](#125-working-directory-attribute) |
 | `@cwd()` | Working directory in effect | [§5](#5-built-in-functions) |
 | `@invocation_dir()` | Directory tasq was called from | [§5](#5-built-in-functions) |
+
+### Process Calls
+
+| Form | Meaning | See |
+|------|---------|-----|
+| `` $`cmd` `` | Run a command with the `shell` interpreter; aborts on failure | [§6](#6-process-calls) |
+| `` $[nofail]`cmd` `` | A non-zero exit does not abort | [§6.2](#62-failure-handling) |
+| `` $[noecho]`cmd` ``, `` $[noecho: false]`cmd` `` | Suppress or force the echo of the command | [§6.3](#63-process-attributes) |
+| `` $[script]`...` `` | Run the text as a script file with the `script` interpreter | [§6.4](#64-scripts) |
 
 ### Dependencies and Calls
 
@@ -2377,6 +2544,7 @@ Reserved for future versions; not currently part of the language:
 - **Glob errors.** An invalid pattern passed to `@glob` currently results in an empty list ([§5](#5-built-in-functions)). Reporting it as an error may be defined later.
 - **Additional settings**: further interpreter configuration options.
 - **Additional argument validation attributes.**
+- **Script echo.** Scripts are not echoed by default ([§6.4](#64-scripts)); the default may change.
 - **Isolated `@status_code()` for static bindings.** Today a lazily evaluated static binding that runs a process updates `@status_code()` like any other process; this may change so that evaluating a static binding leaves it untouched.
 - **Eager evaluation of selected static bindings.** A way to force chosen static bindings to be evaluated at startup instead of on first reference.
 - **Configurable stdin for process expressions.** They currently read an empty stdin.
@@ -2386,3 +2554,4 @@ Reserved for future versions; not currently part of the language:
 - **Output modes for parallel constructs.** Today the output of concurrent branches is neither ordered nor grouped ([§13.7](#137-interaction-with-other-features)). Grouped output (each branch's output printed together when the branch finishes) and line-prefixed live output are being considered, probably selected by a setting.
 - **Tuple shorthand for parallel `with`.** `with(<subjects>) parallel ...`, which returns the results as a tuple without captures and body, for use with destructuring (`a, b := with(x, y) parallel ...`).
 - **Cancelling running branches on failure.** Today running branches always finish ([§13.5](#135-failure)); stopping them early would require killing their processes.
+- **Task label format.** The exact text printed by `task_label` ([§7](#7-settings)) is not specified yet.

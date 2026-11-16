@@ -61,7 +61,7 @@ const attr_specs: []const Spec = &.{
     // modifiers
     .{
         .name = "long",
-        .value_types = &.{ .null, .any_string },
+        .value_types = &.{.any_string},
         .default = .auto,
         .unique = true,
         .kind = .modifier,
@@ -69,7 +69,7 @@ const attr_specs: []const Spec = &.{
     },
     .{
         .name = "short",
-        .value_types = &.{ .null, .char },
+        .value_types = &.{.char},
         .default = .auto,
         .unique = true,
         .kind = .modifier,

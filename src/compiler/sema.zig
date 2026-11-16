@@ -465,61 +465,57 @@ pub const Sema = struct {
         return ptr;
     }
 
-    fn analyseParams(self: *Sema, params: ast.Parameters, scope: *Scope, group: bool) Error![]*ir.Argument {
-        const ArgPhase = enum {
-            const Self = @This();
-            positional,
-            named_required,
-            named_optional,
+    const ArgPhase = enum {
+        const Self = @This();
+        positional_required,
+        positional_optional,
+        named_required,
+        named_optional,
 
-            /// Parameters must come in this order: positional, named required, named optional.
-            fn validate(
-                sema: *Sema,
-                span: Span,
-                name: []const u8,
-                phase: *Self,
-                named: bool,
-                optional: bool,
-            ) !bool {
-                const class: Self = blk: {
-                    if (named == false) {
-                        if (optional) {
-                            try sema.diagnostics.err(
-                                span,
-                                "positional parameter '{s}' cannot have a default value: remove the default, or enable a long/short name to make it a named parameter",
-                                .{name},
-                            );
-                            return false;
-                        }
-                        break :blk .positional;
-                    }
-                    break :blk if (optional) .named_optional else .named_required;
-                };
+        fn of(named: bool, optional: bool) ArgPhase {
+            return if (named)
+                if (optional)
+                    .named_optional
+                else
+                    .named_required
+            else if (optional)
+                .positional_optional
+            else
+                .positional_required;
+        }
 
-                if (phase.* != .positional and class == .positional) {
-                    try sema.diagnostics.err(
-                        span,
-                        "positional parameter '{s}' cannot follow a named parameter: move it before all named parameters",
-                        .{name},
-                    );
-                    return false;
-                }
+        fn describe(self: ArgPhase) []const u8 {
+            return switch (self) {
+                .positional_required => "required positional",
+                .positional_optional => "optional positional",
+                .named_required => "required named",
+                .named_optional => "optional named",
+            };
+        }
 
-                if (phase.* == .named_optional and class == .named_required) {
-                    try sema.diagnostics.err(
-                        span,
-                        "required parameter '{s}' cannot follow an optional parameter: move it before the optional ones",
-                        .{name},
-                    );
-                    return false;
-                }
-
-                phase.* = class;
-                return true;
+        /// Parameters must come in this order: positional, named required, named optional.
+        fn validate(
+            sema: *Sema,
+            span: Span,
+            name: []const u8,
+            phase: *ArgPhase,
+            class: ArgPhase,
+        ) !bool {
+            if (@backingInt(class) < @backingInt(phase.*)) {
+                try sema.diagnostics.err(
+                    span,
+                    "{s} parameter '{s}' cannot come after a {s} parameter: the order is required positional, optional positional, required named, optional named",
+                    .{ class.describe(), name, phase.describe() },
+                );
+                return false;
             }
-        };
+            phase.* = class;
+            return true;
+        }
+    };
 
-        var phase: ArgPhase = .positional;
+    fn analyseParams(self: *Sema, params: ast.Parameters, scope: *Scope, group: bool) Error![]*ir.Argument {
+        var phase: ArgPhase = .positional_required;
 
         var out: std.ArrayList(*ir.Argument) = .empty;
 
@@ -574,19 +570,14 @@ pub const Sema = struct {
                 break :blk null;
             };
 
-            const implicit_names = default != null or name_required;
-
             const short = blk: {
                 const default_value = name[0];
 
-                const attr = attributes.getAssertOne(.short) orelse
-                    break :blk if (implicit_names) default_value else null;
-
+                const attr = attributes.getAssertOne(.short) orelse break :blk null;
                 const value = attr orelse break :blk default_value;
 
                 break :blk switch (value) {
                     .char => |ch| ch,
-                    .null => null,
                     else => unreachable,
                 };
             };
@@ -594,14 +585,11 @@ pub const Sema = struct {
             const long = blk: {
                 const default_value = name;
 
-                const attr = attributes.getAssertOne(.long) orelse
-                    break :blk if (implicit_names) default_value else null;
-
+                const attr = attributes.getAssertOne(.long) orelse break :blk null;
                 const value = attr orelse break :blk default_value;
 
                 break :blk switch (value) {
                     .string => |str| str,
-                    .null => null,
                     else => unreachable,
                 };
             };
@@ -637,7 +625,7 @@ pub const Sema = struct {
                     if (group) {
                         try self.diagnostics.err(
                             param.node.trimmedSpan(),
-                            "parameter '{s}' of a group must be named: groups pass their parameters by name, so enable a long and/or short name",
+                            "parameter '{s}' of a group must be named: groups pass their parameters by name, so add a long and/or short name",
                             .{name},
                         );
                         continue;
@@ -646,7 +634,7 @@ pub const Sema = struct {
                     if (name_required) {
                         try self.diagnostics.err(
                             param.node.trimmedSpan(),
-                            "parameter '{s}' of type '{f}' must be named: enable a long and/or short name for it",
+                            "parameter '{s}' of type '{f}' must be named: add a long and/or short name for it",
                             .{ name, param_type },
                         );
                         continue; // TODO: consider if continue is best way to handle it
@@ -662,8 +650,7 @@ pub const Sema = struct {
                 param.node.trimmedSpan(),
                 name,
                 &phase,
-                has_name,
-                default != null,
+                ArgPhase.of(has_name, default != null),
             ) == false)
                 break;
 
