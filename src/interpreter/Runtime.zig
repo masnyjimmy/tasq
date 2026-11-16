@@ -569,14 +569,39 @@ fn executeScript(self: *Runtime, ctx: Ctx, options: ExecuteOptions) Error!u8 {
     @memcpy(argv[0..script_len], self.options.script);
     argv[script_len] = tmp_file_path;
 
+    if (options.echo) {
+        try self.printer.printStyled(
+            self.allocator,
+            style.echo,
+            "{s}\n",
+            .{options.process},
+        );
+    }
+
     //TOOD: consider if echo, stdout, stdin etc
     var child = try std.process.spawn(self.io, .{
         .argv = argv,
         .cwd = .{ .dir = ctx.cwd },
         .environ_map = &ctx.scope.environ.map,
-        .stdout = .inherit,
-        .stdin = .ignore,
+        .stdout = if (options.out == null)
+            .inherit
+        else
+            .pipe,
+        .stdin = if (options.allow_input)
+            .inherit
+        else
+            .ignore,
     });
+
+    if (options.out) |output| {
+        var buffer: [4096]u8 = undefined;
+        var file_reader: std.Io.File.Reader = .initStreaming(
+            child.stdout.?,
+            self.io,
+            &buffer,
+        );
+        _ = try file_reader.interface.streamRemaining(output);
+    }
 
     const result = try child.wait(self.io);
 
