@@ -521,7 +521,7 @@ pub const Parser = struct {
         if (try self.at(.lbracket)) {
             try self.parseAttributes(follow);
         }
-        try self.parseExpr(follow);
+        try self.parsePrimary(follow);
 
         switch (target) {
             .expr => {
