@@ -2845,6 +2845,7 @@ pub const Sema = struct {
                     .false_kw => .{ .bool = false },
                     .true_kw => .{ .bool = true },
                     .number => .{ .number = std.fmt.parseFloat(f64, token.lexeme) catch unreachable },
+                    .ident => .{ .string = token.lexeme },
                     else => unreachable,
                 }
             else
@@ -2885,6 +2886,66 @@ pub const Sema = struct {
                 return .{ .tuple = try elems.toOwnedSlice(self.arena.allocator()) };
             },
         };
+    }
+    fn validateMetaValueType(self: *Sema, value: meta.Value, expected_type: meta.Type, span: Span) !void {
+        const tag: meta.TypeTag = blk: {
+            const expected = std.meta.activeTag(expected_type);
+            const got = std.meta.activeTag(value);
+
+            if (expected != got) {
+                try self.diagnostics.err(
+                    span,
+                    "invalid meta value type: expected '{f}', got '{f}'",
+                    .{ expected_type, value },
+                );
+                return Error.Incomplete;
+            }
+            break :blk expected;
+        };
+
+        switch (tag) {
+            .string => switch (expected_type.string) {
+                .options => |opts| for (opts) |opt| {
+                    if (std.mem.eql(u8, opt, value.string))
+                        break;
+                } else {
+                    const options_str = try std.mem.join(
+                        self.arena.allocator(),
+                        ",",
+                        opts,
+                    );
+                    try self.diagnostics.err(
+                        span,
+                        "invalid meta string value: got '{s}', expected one of '{s}'",
+                        .{
+                            value.string,
+                            options_str,
+                        },
+                    );
+                    return Error.Incomplete;
+                },
+                else => {},
+            },
+            .number => {
+                const desc = expected_type.number;
+                if (desc.min) |min| if (min > value.number) {
+                    try self.diagnostics.err(span, "meta number value less than min", .{});
+                    return Error.Incomplete;
+                };
+                if (desc.max) |max| if (max < value.number) {
+                    try self.diagnostics.err(span, "meta number value greater than max", .{});
+                    return Error.Incomplete;
+                };
+
+                if (desc.int and value.number != @trunc(value.number)) {
+                    try self.diagnostics.err(span, "invalid meta number value, expected integer, got '{}'", .{
+                        value.number,
+                    });
+                    return Error.Incomplete;
+                }
+            },
+            else => {},
+        }
     }
 
     // ------------------------------------------------------------------------------------------
@@ -3330,7 +3391,7 @@ const AttributesResolver = struct {
 
                         // validate type
                         for (def.value_types) |vt| {
-                            if (value.validateType(vt)) break;
+                            if (value.match(vt)) break;
                         } else {
                             const expected = try attrib.formatValueTypes(self.sema.arena.allocator(), &def);
                             try self.sema.diagnostics.err(
@@ -3373,6 +3434,7 @@ const OptionsResolver = struct {
         dotenv: ?[]const u8,
         working_dir: []const u8,
         jobs: usize,
+        task_label: options.Options.TaskLabel,
     };
 
     const ResolvedOptions = std.EnumMap(options.definitions.Type, OptionValue);
@@ -3395,6 +3457,7 @@ const OptionsResolver = struct {
             .dotenv => |dotenv| out.dotenv = dotenv,
             .working_dir => |wd| out.working_dir = wd,
             .jobs => |jobs| out.jobs = jobs,
+            .task_label => |label| out.task_label = label,
         };
 
         return out;
@@ -3441,8 +3504,16 @@ const OptionsResolver = struct {
         else
             .{ .bool = true };
 
+        // validate
         for (def.value_types) |vt| {
-            if (value.validateType(vt)) break;
+            if (value.match(vt)) {
+                try self.sema.validateMetaValueType(
+                    value,
+                    vt,
+                    decl.node.trimmedSpan(),
+                );
+                break;
+            }
         } else {
             const expected = try options.formatValueTypes(self.sema.arena.allocator(), def);
             try self.sema.diagnostics.err(
@@ -3458,12 +3529,11 @@ const OptionsResolver = struct {
             try self.getOptionValue(
                 def.id,
                 value,
-                decl.value,
             ),
         );
     }
 
-    fn getOptionValue(self: *OptionsResolver, id: options.definitions.Type, value: meta.Value, value_node: ?ast.Meta) !OptionValue {
+    fn getOptionValue(self: *OptionsResolver, id: options.definitions.Type, value: meta.Value) !OptionValue {
         return switch (id) {
             inline .shell, .script => |tag| {
                 var out: std.ArrayList([]const u8) = try .initCapacity(
@@ -3492,29 +3562,16 @@ const OptionsResolver = struct {
             },
             .working_dir => .{ .working_dir = value.string },
             .jobs => {
-                var number = value.number;
+                const number = value.number;
 
-                if (number < 1) {
-                    //TODO: consider prettier hanlding here
-                    try self.sema.diagnostics.err(
-                        value_node.?.node.trimmedSpan(),
-                        "jobs number must be 1 or greater: got '{}'",
-                        .{number},
-                    );
-                    number = 1;
-                }
+                return .{ .jobs = lib.math.as(usize, number) };
+            },
+            .task_label => {
+                const string = value.string;
 
-                const val: usize = @trunc(number);
-
-                if (number != @as(f64, @floatFromInt(val))) {
-                    try self.sema.diagnostics.err(
-                        value_node.?.node.trimmedSpan(),
-                        "expected integer value",
-                        .{},
-                    );
-                }
-
-                return .{ .jobs = val };
+                return .{
+                    .task_label = options.Options.TaskLabel.map.get(string) orelse unreachable,
+                };
             },
         };
     }

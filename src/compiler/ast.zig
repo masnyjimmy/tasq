@@ -260,7 +260,7 @@ pub const Meta = struct {
 
     pub fn classify(self: *const Meta) Kind {
         return switch (self.node.kind) {
-            .literal => .{ .literal = self.node.childTokenOf(&.{ .null_kw, .true_kw, .false_kw, .number }) },
+            .literal => .{ .literal = self.node.childTokenOf(&.{ .null_kw, .true_kw, .false_kw, .number, .ident }) },
             .tuple => .{ .tuple = .from(self.node) },
             .char => .{ .char = self.node.childToken(.char) },
             .string => .{ .string = .from(self.node) },

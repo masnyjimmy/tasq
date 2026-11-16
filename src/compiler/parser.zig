@@ -15,7 +15,7 @@ const ATTR_START: FollowSet = .set(&.{.ident});
 const STRING_START: FollowSet = .set(&.{ .quote, .raw_quote, .raw_backtick });
 const META_START: FollowSet = STRING_START.with(&.{
     .null_kw, .false_kw,   .true_kw,  .number,
-    .lparen,  .apostrophe, .lbracket,
+    .lparen,  .apostrophe, .lbracket, .ident,
 });
 const PARAM_TYPE_START: FollowSet = .set(&.{
     .lbracket, .string_type, .number_type, .flag_type,
@@ -184,7 +184,7 @@ pub const Parser = struct {
 
     fn parseMeta(self: *Parser, follow: FollowSet) Error!void {
         switch (try self.peek()) {
-            .null_kw, .false_kw, .true_kw, .number => try self.advanceAs(.literal),
+            .null_kw, .false_kw, .true_kw, .number, .ident => try self.advanceAs(.literal),
             .lparen => {
                 try self.open();
 

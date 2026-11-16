@@ -40,7 +40,7 @@ const attr_specs: []const Spec = &.{
     // documentation
     .{
         .name = "desc",
-        .value_types = &.{.string},
+        .value_types = &.{.any_string},
         .default = .none,
         .unique = true,
         .kind = .doc,
@@ -61,7 +61,7 @@ const attr_specs: []const Spec = &.{
     // modifiers
     .{
         .name = "long",
-        .value_types = &.{ .null, .string },
+        .value_types = &.{ .null, .any_string },
         .default = .auto,
         .unique = true,
         .kind = .modifier,
@@ -86,7 +86,7 @@ const attr_specs: []const Spec = &.{
     },
     .{
         .name = "min",
-        .value_types = &.{.number},
+        .value_types = &.{.any_number},
         .default = .none,
         .unique = true,
         .kind = .validation,
@@ -94,7 +94,7 @@ const attr_specs: []const Spec = &.{
     },
     .{
         .name = "max",
-        .value_types = &.{.number},
+        .value_types = &.{.any_number},
         .default = .none,
         .unique = true,
         .kind = .validation,
@@ -102,7 +102,7 @@ const attr_specs: []const Spec = &.{
     },
     .{
         .name = "min_length",
-        .value_types = &.{.number},
+        .value_types = &.{.any_number},
         .default = .none,
         .unique = true,
         .kind = .validation,
@@ -110,7 +110,7 @@ const attr_specs: []const Spec = &.{
     },
     .{
         .name = "max_length",
-        .value_types = &.{.number},
+        .value_types = &.{.any_number},
         .default = .none,
         .unique = true,
         .kind = .validation,
@@ -118,7 +118,7 @@ const attr_specs: []const Spec = &.{
     },
     .{
         .name = "pattern",
-        .value_types = &.{.string},
+        .value_types = &.{.any_string},
         .default = .none,
         .unique = true,
         .kind = .validation,
@@ -126,7 +126,7 @@ const attr_specs: []const Spec = &.{
     },
     .{
         .name = "min_items",
-        .value_types = &.{.number},
+        .value_types = &.{.any_number},
         .default = .none,
         .unique = true,
         .kind = .validation,
@@ -134,7 +134,7 @@ const attr_specs: []const Spec = &.{
     },
     .{
         .name = "max_items",
-        .value_types = &.{.number},
+        .value_types = &.{.any_number},
         .default = .none,
         .unique = true,
         .kind = .validation,
@@ -145,7 +145,7 @@ const attr_specs: []const Spec = &.{
         .name = "env",
         .value_types = &.{
             .{
-                .tuple = &.{ .string, .string },
+                .tuple = &.{ .any_string, .any_string },
             },
         },
         .default = .none,
@@ -155,7 +155,7 @@ const attr_specs: []const Spec = &.{
     },
     .{
         .name = "cwd",
-        .value_types = &.{.string},
+        .value_types = &.{.any_string},
         .default = .none,
         .unique = true,
         .kind = .modifier,

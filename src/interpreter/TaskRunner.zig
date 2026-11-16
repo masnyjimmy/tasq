@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const conzole = @import("conzole");
+
 const lib = @import("lib");
 
 const compiler = @import("compiler");
@@ -136,7 +138,11 @@ pub fn run(
     );
     defer task_body_scope.destroy();
 
-    try self.runtime.runBlock(target_working_dir, task_body_scope, task.body.statements);
+    try self.printTaskLabel(task, task_body_scope);
+    try self.runtime.runBlock(.{
+        .cwd = target_working_dir,
+        .scope = task_body_scope,
+    }, task.body.statements);
 
     try self.run_set.put(allocator, key, .done);
 }
@@ -156,7 +162,10 @@ fn handleDependency(
     while (it.next()) |arg| {
         const value = switch (arg.value_ptr.*) {
             .default => |def| def,
-            .value => |*expr| try self.runtime.evaluateExpr(cwd, scope, expr),
+            .value => |*expr| try self.runtime.evaluateExpr(.{
+                .cwd = cwd,
+                .scope = scope,
+            }, expr),
         };
 
         try values.put(
@@ -310,4 +319,74 @@ fn addKeyArg(self: *TaskRunner, key_args: *std.ArrayList(Value), value: Value) R
         allocator,
         try value.clone(allocator),
     );
+}
+
+fn printTaskLabel(self: *TaskRunner, task: *const ir.Task, scope: *Scope) !void {
+    if (self.runtime.options.task_label == .none)
+        return;
+
+    const allocator = self.runtime.allocator;
+    const p = self.runtime.printer;
+    const io = self.runtime.io;
+
+    try p.printStyled(
+        allocator,
+        .{
+            .bold = true,
+            .fg = .white,
+        },
+        "{s}",
+        .{task.name},
+    );
+
+    if (self.runtime.options.task_label == .full) {
+        const total_args = task.args.len + if (task.group) |g| g.args.len else 0;
+        if (total_args != 0) {
+            try p.printStyled(
+                allocator,
+                .{
+                    .fg = .bright_white,
+                },
+                " (",
+                .{},
+            );
+
+            var first: bool = true;
+            for (task.args) |arg| {
+                const symbol = scope.resolve(io, arg) orelse unreachable;
+
+                if (!first) {
+                    try p.print(allocator, ", ", .{});
+                } else first = false;
+
+                try p.printStyled(
+                    allocator,
+                    .{ .fg = .white },
+                    "{s}: {f}",
+                    .{ symbol.name, symbol.value },
+                );
+            }
+
+            if (task.group) |g| {
+                for (g.args) |arg| {
+                    const symbol = scope.resolve(io, arg) orelse unreachable;
+
+                    if (!first) {
+                        try p.print(allocator, ", ", .{});
+                    } else first = false;
+
+                    try p.printStyled(
+                        allocator,
+                        .{ .fg = .white },
+                        "{s}: {f}",
+                        .{ symbol.name, symbol.value },
+                    );
+                }
+            }
+
+            try p.printStyled(allocator, .{ .fg = .bright_white }, ")", .{});
+        }
+    }
+
+    try p.print(allocator, "\n", .{});
 }
