@@ -1,6 +1,6 @@
 .{
     .name = .tsq,
-    .version = "0.17.0",
+    .version = "0.17.1",
     .dependencies = .{
         .conzole = .{
             .url = "git+https://github.com/masnyjimmy/conzole#0d35a724eba7f1fb17f8d2283ff29c66c9577e76",
