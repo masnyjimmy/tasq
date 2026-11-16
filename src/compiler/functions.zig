@@ -263,6 +263,28 @@ const string_functions: []const Spec = &.{
         .return_type = .{ .result = &.{ .concrete = Type.string } },
     },
     .{
+        .name = "first",
+        .unique_name = "strings/first",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .result = &.{ .concrete = Type.string } },
+    },
+    .{
+        .name = "last",
+        .unique_name = "strings/last",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = .{ .result = &.{ .concrete = Type.string } },
+    },
+    .{
         .name = "lines",
         .args = &.{
             .{
@@ -438,6 +460,28 @@ const collections_functions: []const Spec = &.{
             .{
                 .name = "pos",
                 .type = .{ .concrete = .number },
+            },
+        },
+        .return_type = .{ .result = &.{ .generic = "T" } },
+    },
+    .{
+        .name = "first",
+        .unique_name = "collections/first",
+        .args = &.{
+            .{
+                .name = "list",
+                .type = .{ .list = &.{ .generic = "T" } },
+            },
+        },
+        .return_type = .{ .result = &.{ .generic = "T" } },
+    },
+    .{
+        .name = "last",
+        .unique_name = "collections/last",
+        .args = &.{
+            .{
+                .name = "list",
+                .type = .{ .list = &.{ .generic = "T" } },
             },
         },
         .return_type = .{ .result = &.{ .generic = "T" } },

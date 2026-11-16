@@ -379,6 +379,24 @@ const handlers = struct {
         return makeResult(ctx.scope, list.items_type, list.items[@intCast(pos)]);
     }
 
+    fn @"collections/first"(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
+        const list = args[0].list;
+
+        if (list.items.len == 0)
+            return makeResult(ctx.scope, list.items_type, null);
+
+        return makeResult(ctx.scope, list.items_type, list.items[0]);
+    }
+
+    fn @"collections/last"(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
+        const list = args[0].list;
+
+        if (list.items.len == 0)
+            return makeResult(ctx.scope, list.items_type, null);
+
+        return makeResult(ctx.scope, list.items_type, list.items[list.items.len - 1]);
+    }
+
     fn unique(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
         const list = args[0].list;
 
@@ -642,6 +660,28 @@ const handlers = struct {
         const idx: usize = @intCast(pos);
 
         return makeResult(ctx.scope, &.string, .{ .string = str[idx .. idx + 1] });
+    }
+
+    fn @"strings/first"(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
+        const string = args[0].string;
+
+        if (string.len == 0)
+            return makeResult(ctx.scope, &.string, null);
+
+        return makeResult(ctx.scope, &.string, .{
+            .string = string[0..1],
+        });
+    }
+
+    fn @"strings/last"(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
+        const string = args[0].string;
+
+        if (string.len == 0)
+            return makeResult(ctx.scope, &.string, null);
+
+        return makeResult(ctx.scope, &.string, .{
+            .string = string[string.len - 1 .. string.len],
+        });
     }
 
     fn lines(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
