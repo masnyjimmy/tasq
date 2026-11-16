@@ -10,10 +10,19 @@ const MetaType = meta.Type;
 const ir = @import("ir.zig");
 
 pub const Options = struct {
+    pub const TaskLabel = enum {
+        none,
+        name,
+        full,
+
+        pub const map = lib.enums.generateEnumNameMap(TaskLabel);
+    };
+
     shell: []const []const u8,
     script: []const []const u8,
     dotenv: ?[]const u8 = null,
     working_dir: ?[]const u8 = null,
+    task_label: TaskLabel = .full,
     jobs: usize = 1,
 
     pub fn getDefaults() Options {
@@ -34,43 +43,62 @@ pub const Options = struct {
 
 pub fn formatValueTypes(allocator: std.mem.Allocator, def: definitions.DefinitionT) ![]const u8 {
     var aw: std.Io.Writer.Allocating = .init(allocator);
-    const last = def.value_types.len - 1;
 
     for (def.value_types, 0..) |vt, idx| {
-        try aw.writer.print("{f}", .{vt});
-
-        if (idx != last) {
+        if (idx != 0) {
             try aw.writer.writeAll(",");
         }
+        try aw.writer.print("{f}", .{vt});
     }
 
     return try aw.toOwnedSlice();
 }
 
-pub const definitions = OptionsGroup(&.{
+pub const definitions = Definitions(&.{
     .{
         .name = "shell",
-        .value_types = &.{.{ .list = &.string }},
+        .value_types = &.{
+            .{ .list = &.any_string },
+        },
     },
     .{
         .name = "script",
-        .value_types = &.{.{ .list = &.string }},
+        .value_types = &.{
+            .{ .list = &.any_string },
+        },
     },
     .{
         .name = "dotenv",
-        .value_types = &.{ .bool, .string },
+        .value_types = &.{
+            .bool,
+            .any_string,
+        },
     },
     .{
         .name = "working_dir",
-        .value_types = &.{.string},
+        .value_types = &.{
+            .any_string,
+        },
     },
     .{
         .name = "jobs",
-        .value_types = &.{.number},
+        .value_types = &.{
+            .{ .number = .{ .int = true, .min = 1 } },
+        },
+    },
+    .{
+        .name = "task_label",
+        .value_types = &.{
+            .{
+                .string = .{
+                    .options = std.meta.fieldNames(Options.TaskLabel),
+                },
+            },
+        },
     },
 });
 
-fn OptionsGroup(comptime specs: []const Spec) type {
+fn Definitions(comptime specs: []const Spec) type {
     const Id = blk: {
         const TagType = enums.FitUnsigned(specs.len);
 

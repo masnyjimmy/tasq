@@ -10,17 +10,60 @@ pub const TypeTag = enum {
     tuple,
 };
 
+pub const String = union(enum) {
+    any,
+    options: []const []const u8,
+};
+pub const Number = struct {
+    int: bool = false,
+    min: ?f64 = null,
+    max: ?f64 = null,
+
+    pub const default: Number = .{};
+};
 pub const Type = union(TypeTag) {
     null,
     bool,
-    number,
+    number: Number,
     char,
-    string,
+    string: String,
     list: *const Type,
     tuple: []const Type,
 
+    pub const any_string: Type = .{ .string = .any };
+    pub const any_number: Type = .{ .number = .default };
+
     pub fn format(self: *const Type, w: *std.Io.Writer) !void {
         switch (self.*) {
+            .string => |str| switch (str) {
+                .options => |opts| {
+                    try w.writeByte('[');
+
+                    for (opts, 0..) |opt, idx| {
+                        if (idx != 0)
+                            try w.writeByte(',');
+
+                        try w.writeAll(opt);
+                    }
+
+                    try w.writeByte(']');
+                },
+                .any => try w.writeAll("string"),
+            },
+            .number => |num| {
+                const name = if (num.int)
+                    "int"
+                else
+                    "number";
+
+                if (num.min) |min|
+                    try w.print("{}<", .{min});
+
+                try w.writeAll(name);
+
+                if (num.max) |max|
+                    try w.print("<{}", .{max});
+            },
             .list => |l| try w.print("[]{f}", .{l}),
             .tuple => |t| {
                 try w.writeAll("(");
@@ -50,7 +93,7 @@ pub const Value = union(TypeTag) {
     list: []const Value,
     tuple: []const Value,
 
-    pub fn validateType(self: *const Value, target_type: Type) bool {
+    pub fn match(self: *const Value, target_type: Type) bool {
         const T: TypeTag = blk: {
             const self_tag = std.meta.activeTag(self.*);
             const target_tag = std.meta.activeTag(target_type);
@@ -64,14 +107,14 @@ pub const Value = union(TypeTag) {
         switch (T) {
             .list => {
                 for (self.list) |item| {
-                    if (item.validateType(target_type.list.*) == false)
+                    if (item.match(target_type.list.*) == false)
                         return false;
                 }
                 return true;
             },
             .tuple => {
                 for (self.tuple, target_type.tuple) |elem, target| {
-                    if (elem.validateType(target) == false)
+                    if (elem.match(target) == false)
                         return false;
                 }
                 return true;
