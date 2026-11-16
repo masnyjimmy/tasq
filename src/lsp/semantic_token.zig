@@ -24,6 +24,7 @@ pub const TokenType = enum(u32) {
     namespace,
     builtin,
     comment,
+    enumMember,
 
     pub fn getNames() []const []const u8 {
         return std.meta.fieldNames(@This());
@@ -238,6 +239,9 @@ pub const Collector = struct {
             },
             else => switch (token.kind) {
                 .ident => switch (parent) {
+                    .literal => {
+                        try self.add(token.span, .enumMember, null);
+                    },
                     .name => {
                         const significant = self.significantParentNodeKind(&.{
                             .task, .group, .binding, .parameter, .captures, .attribute,

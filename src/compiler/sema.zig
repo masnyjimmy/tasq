@@ -2845,6 +2845,7 @@ pub const Sema = struct {
                     .false_kw => .{ .bool = false },
                     .true_kw => .{ .bool = true },
                     .number => .{ .number = std.fmt.parseFloat(f64, token.lexeme) catch unreachable },
+                    .ident => .{ .string = token.lexeme },
                     else => unreachable,
                 }
             else
