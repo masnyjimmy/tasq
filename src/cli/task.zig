@@ -683,15 +683,15 @@ const TaskArgumentParser = struct {
                     // removing this condition almost make it work
                     // problems may appear somewhere else,
                     // i.e flag nor list can never be positional
-                    if (arg.is_positional == false) {
-                        try self.printer.printStyled(
-                            arena.allocator(),
-                            style.err,
-                            "'{s}' is not positional\n",
-                            .{arg.name},
-                        );
-                        return Error.ParsingFailed;
-                    }
+                    // if (arg.is_positional == false) {
+                    //     try self.printer.printStyled(
+                    //         arena.allocator(),
+                    //         style.err,
+                    //         "'{s}' is not positional\n",
+                    //         .{arg.name},
+                    //     );
+                    //     return Error.ParsingFailed;
+                    // }
 
                     const value: Value = switch (arg.type) {
                         .number => NumberHandler.handle(tok.payload, arg.int) catch |err| return switch (err) {
