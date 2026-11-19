@@ -1093,82 +1093,6 @@ pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value 
 
             return result.clone(ctx.arena());
         },
-        .with => |with| {
-            const with_scope = try Scope.create(
-                ctx.scope,
-                self.allocator,
-                with.scope,
-            );
-            defer with_scope.destroy();
-
-            const with_ctx = ctx.withScope(with_scope);
-
-            if (with.parallel) |*p| {
-                const jobs_limit: usize = try self.evaluateParallelJobsLimit(ctx, p);
-
-                const ItCtx = struct {
-                    const Self = @This();
-                    runtime: *Runtime,
-                    ctx: Ctx,
-                    target: *const ir.WithExpr,
-                    slots: []Value,
-
-                    fn evaluate(it: *Self, idx: usize) Error!void {
-                        it.slots[idx] = try it.runtime.evaluateExpr(
-                            it.ctx,
-                            &it.target.subjects[idx],
-                        );
-                    }
-                };
-
-                const slots = try self.allocator.alloc(
-                    Value,
-                    with.subjects.len,
-                );
-                defer self.allocator.free(slots);
-
-                var context: ItCtx = .{
-                    .runtime = self,
-                    .ctx = ctx,
-                    .target = with,
-                    .slots = slots,
-                };
-
-                try parallelization.runIndexed(
-                    self,
-                    with.subjects.len,
-                    jobs_limit,
-                    &context,
-                    ItCtx.evaluate,
-                );
-
-                for (slots, with.captures) |value, *capture| {
-                    _ = try self.destructure(
-                        ir.Capture,
-                        with_ctx,
-                        capture.target,
-                        value,
-                        null,
-                    );
-                }
-            } else {
-                for (with.subjects, with.captures) |*sub, cap| {
-                    const value = try self.evaluateExpr(ctx, sub);
-
-                    _ = try self.destructure(
-                        ir.Capture,
-                        with_ctx,
-                        cap.target,
-                        value,
-                        null,
-                    );
-                }
-            }
-
-            const result = try self.evaluateExpr(with_ctx, &with.expr);
-
-            return try result.clone(ctx.arena());
-        },
         .in => |in| {
             const subject = try self.evaluateExpr(ctx, &in.subject);
 
@@ -1224,6 +1148,76 @@ pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value 
             }
 
             return try self.evaluateExpr(ctx.withScope(catch_scope), &catch_expr.expr);
+        },
+        .block_expr => |block_expr| {
+            const scope = try Scope.create(
+                ctx.scope,
+                self.allocator,
+                block_expr.scope,
+            );
+            defer scope.destroy();
+
+            for (block_expr.bindings) |binding| {
+                _ = try self.handleDecl(
+                    ctx.withScope(scope),
+                    binding,
+                    null,
+                );
+            }
+
+            const result = try self.evaluateExpr(ctx.withScope(scope), &block_expr.result_expr);
+
+            return try result.clone(ctx.arena());
+        },
+        .parallel_block => |block_expr| {
+            const block_scope = try Scope.create(
+                ctx.scope,
+                ctx.arena(),
+                block_expr.scope,
+            );
+            defer block_scope.destroy();
+
+            const jobs_limit: usize = try self.evaluateParallelJobsLimit(
+                ctx,
+                &block_expr.parallel,
+            );
+
+            const Context = struct {
+                const Self = @This();
+                runtime: *Runtime,
+                ctx: Ctx,
+                block: *const ir.ParallelBlockExpr,
+
+                fn runDecl(it: *Self, idx: usize) Error!void {
+                    const decl = it.block.bindings[idx];
+                    _ = try it.runtime.handleDecl(
+                        it.ctx,
+                        decl,
+                        null,
+                    );
+                }
+            };
+
+            var context: Context = .{
+                .runtime = self,
+                .ctx = ctx.withScope(block_scope),
+                .block = block_expr,
+            };
+
+            try parallelization.runIndexed(
+                self,
+                block_expr.bindings.len,
+                jobs_limit,
+                &context,
+                Context.runDecl,
+            );
+
+            const value = try self.evaluateExpr(
+                ctx.withScope(block_scope),
+                &block_expr.result_expr,
+            );
+
+            return try value.clone(ctx.arena());
         },
         .unknown => unreachable,
     };

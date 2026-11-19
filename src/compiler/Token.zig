@@ -26,7 +26,6 @@ pub const Kind = enum {
     switch_kw,
     continue_kw,
     break_kw,
-    with_kw,
     in_kw,
     parallel_kw,
     // Type keywords

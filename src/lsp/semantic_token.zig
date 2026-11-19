@@ -234,7 +234,6 @@ pub const Collector = struct {
 
         switch (parent) {
             .builtin_call => switch (token.kind) {
-                .fallback_kw => try self.add(token.span, .keyword, null),
                 else => try self.add(token.span, .builtin, &.{.default_library}),
             },
             else => switch (token.kind) {
@@ -365,7 +364,6 @@ pub const Collector = struct {
             .switch_kw,
             .continue_kw,
             .break_kw,
-            .with_kw,
             .in_kw,
             .parallel_kw,
             .try_kw,

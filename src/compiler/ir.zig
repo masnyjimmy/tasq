@@ -251,13 +251,27 @@ pub const Expr = union(enum) {
     lambda_call: *LambdaCall,
     process: *ProcessExpr,
     slice: *SliceExpr,
-    with: *WithExpr,
     in: *InExpr,
     @"continue",
     @"break",
     try_expr: *TryExpr,
     catch_expr: *CatchExpr,
+    block_expr: *BlockExpr,
+    parallel_block: *ParallelBlockExpr,
     unknown, // poison
+};
+
+pub const ParallelBlockExpr = struct {
+    scope: *Scope,
+    parallel: Parallel,
+    bindings: []*Decl,
+    result_expr: Expr,
+};
+
+pub const BlockExpr = struct {
+    scope: *Scope,
+    bindings: []*Decl,
+    result_expr: Expr,
 };
 
 pub const CatchExpr = struct {
@@ -277,15 +291,6 @@ pub const InExpr = struct {
     subject: Expr,
     body: Expr,
     @"else": Expr,
-    type: Type,
-};
-
-pub const WithExpr = struct {
-    scope: *Scope,
-    parallel: ?Parallel,
-    subjects: []const Expr,
-    captures: []const Capture,
-    expr: Expr,
     type: Type,
 };
 

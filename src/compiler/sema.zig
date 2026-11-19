@@ -897,7 +897,7 @@ pub const Sema = struct {
                 if (ident_name) |symbol_name| {
                     try self.defineSymbol(scope, .{
                         .name = symbol_name,
-                        .span = target.node.span,
+                        .span = target.node.trimmedSpan(),
                         .origin = @unionInit(
                             Symbol.Origin,
                             symbol_type,
@@ -909,14 +909,24 @@ pub const Sema = struct {
                 return .{ .exact = ptr };
             },
             .targets => |targets| {
-                if (t != .tuple) {
-                    try self.diagnostics.err(
-                        targets.node.span,
+                const targets_count = targets.count();
+
+                switch (t) {
+                    .tuple => |tuple| {
+                        if (tuple.len != targets_count) {
+                            try self.diagnostics.err(
+                                targets.node.trimmedSpan(),
+                                "invalid targets count: got '{}', expected '{}'",
+                                .{ targets_count, tuple.len },
+                            );
+                        }
+                    },
+                    else => try self.diagnostics.err(
+                        targets.node.trimmedSpan(),
                         "'{f}' cannot be destructured",
                         .{t},
-                    );
+                    ),
                 }
-                const targets_count = targets.count();
 
                 const result = try self.arena.allocator().alloc(ir.Target(T), targets_count);
                 var it = targets.iter();
@@ -925,7 +935,10 @@ pub const Sema = struct {
                     const sub = it.next().?.unwrap() orelse continue;
 
                     const sub_type: Type = switch (t) {
-                        .tuple => |tuple| tuple[idx],
+                        .tuple => |tuple| if (idx >= tuple.len)
+                            .unknown
+                        else
+                            tuple[idx],
                         else => .unknown,
                     };
 
@@ -1645,18 +1658,27 @@ pub const Sema = struct {
             else
                 Error.Incomplete,
             .name_ref => |name_ref| if (name_ref) |token| {
-                const symbol = scope.resolve(token.lexeme, .variable) orelse {
+                const found = scope.resolveWithOwner(token.lexeme, .variable) orelse {
                     try self.unknownValue(token.span, token.lexeme);
                     return Error.Incomplete;
                 };
 
-                const symbol_type = symbol.origin.valueType() orelse unreachable;
+                if (found.owner.parallel_guard) {
+                    try self.diagnostics.err(
+                        token.span,
+                        "'{s}' symbol cannot be accessed as its in parallel context",
+                        .{token.lexeme},
+                    );
+                    return Error.Incomplete;
+                }
+
+                const symbol_type = found.symbol.origin.valueType() orelse unreachable;
 
                 return .{
                     .expr = .{
                         .ident = .{
-                            .name = symbol.name,
-                            .symbol = symbol,
+                            .name = found.symbol.name,
+                            .symbol = found.symbol,
                         },
                     },
                     .type = symbol_type,
@@ -2171,10 +2193,6 @@ pub const Sema = struct {
                     .type = result_type,
                 };
             },
-            .with => |with_expr| try self.wrap(
-                .with,
-                try self.analyseWithExpr(with_expr, scope),
-            ),
             .in => |in_expr| try self.wrap(
                 .in,
                 try self.analyseInExpr(in_expr, scope),
@@ -2216,6 +2234,156 @@ pub const Sema = struct {
                 .catch_expr,
                 try self.analyseCatchExpr(catch_expr, scope),
             ),
+            .block_expr => |block_expr| try self.wrap(
+                .block_expr,
+                try self.analyseBlockExpr(block_expr, scope),
+            ),
+            .parallel_block => |block_expr| try self.wrap(
+                .parallel_block,
+                try self.analyseParallelBlockExpr(block_expr, scope),
+            ),
+        };
+    }
+
+    /// out.len must be equal to expected declarations count
+    fn readBlockExprDeclarations(self: *Sema, it: *ast.BlockExpr.Iterator, out_decls: []*ir.Decl, scope: *Scope, parallel: bool) Error!void {
+        scope.parallel_guard = parallel;
+
+        for (out_decls) |*decl| {
+            const binding_node: ast.BindingDecl = it.next().?.classify().binding;
+
+            decl.* = self.analyseBindingDecl(
+                binding_node,
+                scope,
+            ) catch |err| switch (err) {
+                Error.Incomplete => continue,
+                else => return err,
+            };
+        }
+
+        scope.parallel_guard = false;
+    }
+
+    fn readBlockExprResultExpr(self: *Sema, span: Span, it: *ast.BlockExpr.Iterator, scope: *Scope) Error!ExprResult(ir.Expr) {
+        var result: ExprResult(ir.Expr) = undefined;
+
+        if (it.next()) |item| {
+            // present, means it must be expr cuz earlier loop ended here
+            const expr: ast.Expr = item.classify().expr;
+            result = try self.analyseExpr(expr, scope);
+
+            // error on exceed items, don't analyse them for now, I may enforce it on syntax level later
+            if (it.next()) |exc_item| {
+                const exc_item_span: Span = exc_item.node.trimmedSpan();
+
+                try self.diagnostics.err(
+                    Span.between(exc_item_span, span),
+                    "invalid items after result expr",
+                    .{},
+                );
+            }
+        } else {
+            try self.diagnostics.err(
+                span.insertionPoint(),
+                "missing result expr",
+                .{},
+            );
+            return Error.Incomplete;
+        }
+
+        return result;
+    }
+
+    fn analyseParallelBlockExpr(self: *Sema, parallel_block: ast.ParallelBlockExpr, scope: *Scope) Error!ExprResult(ir.ParallelBlockExpr) {
+        const bindings_count = blk: {
+            var it = parallel_block.block.iter();
+            var bindings: usize = 0;
+            while (it.next()) |item| : (bindings += 1) {
+                if (item.node.kind != .binding)
+                    break;
+            }
+            break :blk bindings;
+        };
+
+        const block_scope = try self.createScope(scope, parallel_block.block.node);
+
+        const bindings = try self.arena.allocator().alloc(
+            *ir.Decl,
+            bindings_count,
+        );
+        var it = parallel_block.block.iter();
+
+        try self.readBlockExprDeclarations(
+            &it,
+            bindings,
+            block_scope,
+            true,
+        );
+
+        const result_expr: ExprResult(ir.Expr) = try self.readBlockExprResultExpr(
+            parallel_block.block.node.trimmedSpan(),
+            &it,
+            block_scope,
+        );
+
+        const parallel = try self.analyseParallel(parallel_block.parallel, scope);
+
+        return .{
+            .expr = .{
+                .scope = block_scope,
+                .parallel = parallel,
+                .bindings = bindings,
+                .result_expr = result_expr.expr,
+            },
+            .is_static = false, //fill later,
+            .type = result_expr.type,
+        };
+    }
+
+    fn analyseBlockExpr(self: *Sema, block: ast.BlockExpr, scope: *Scope) Error!ExprResult(ir.BlockExpr) {
+        const bindings_count = blk: {
+            var it = block.iter();
+            var bindings: usize = 0;
+
+            while (it.next()) |item_| : (bindings += 1) {
+                const item: ast.BlockExprItem = item_;
+                if (item.node.kind != .binding)
+                    break;
+            }
+
+            break :blk bindings;
+        };
+
+        const block_scope = try self.createScope(scope, block.node);
+
+        const bindings = try self.arena.allocator().alloc(
+            *ir.Decl,
+            bindings_count,
+        );
+
+        var it = block.iter();
+
+        try self.readBlockExprDeclarations(
+            &it,
+            bindings,
+            block_scope,
+            false,
+        );
+
+        const result_expr: ExprResult(ir.Expr) = try self.readBlockExprResultExpr(
+            block.node.trimmedSpan(),
+            &it,
+            block_scope,
+        );
+
+        return .{
+            .expr = .{
+                .scope = block_scope,
+                .bindings = bindings,
+                .result_expr = result_expr.expr,
+            },
+            .type = result_expr.type,
+            .is_static = false, // fill up later
         };
     }
 
@@ -2439,77 +2607,6 @@ pub const Sema = struct {
         };
     }
 
-    fn analyseWithExpr(self: *Sema, with_expr: ast.WithExpr, scope: *Scope) Error!ExprResult(ir.WithExpr) {
-        const allocator = self.arena.allocator();
-
-        const in_subjects = try with_expr.subjects.collect(allocator);
-        const in_captures = try with_expr.captures.collect(allocator);
-
-        if (in_subjects.len != in_captures.len) {
-            try self.diagnostics.err(
-                with_expr.node.trimmedSpan(),
-                "'with' needs exactly one capture per subject: got {} capture(s) for {} subject(s)",
-                .{ in_captures.len, in_subjects.len },
-            );
-        }
-        const valid_pairs_count = @min(in_subjects.len, in_captures.len);
-
-        var subjects = try allocator.alloc(ir.Expr, valid_pairs_count);
-        var captures = try allocator.alloc(ir.Capture, valid_pairs_count);
-
-        var is_static = true;
-
-        const with_scope = try self.createScope(scope, with_expr.node);
-
-        for (in_subjects[0..valid_pairs_count], in_captures[0..valid_pairs_count], 0..) |sub, cap, idx| {
-            const capture: ast.Target = cap.unwrap() orelse continue;
-            const subject = sub.unwrap() orelse continue;
-
-            // a subject is consumed (its type becomes the type of a capture), so it is strict
-            var result = try self.analyseExpr(subject, scope);
-            _ = try self.rejectNoreturn(subject, &result, "a 'with' subject", .{});
-
-            captures[idx] = .{
-                .target = try self.destructureType(
-                    ir.Capture,
-                    "capture",
-                    &captures[idx],
-                    capture,
-                    result.type,
-                    with_scope,
-                ),
-                .type = result.type,
-            };
-
-            if (result.is_static == false)
-                is_static = false;
-
-            subjects[idx] = result.expr;
-        }
-
-        const parallel = if (with_expr.parallel) |parallel|
-            try self.analyseParallel(parallel, scope)
-        else
-            null;
-
-        const result = try self.analyseExprPartial(
-            with_expr.expr orelse return Error.Incomplete,
-            with_scope,
-        );
-
-        return .{
-            .expr = .{
-                .scope = with_scope,
-                .parallel = parallel,
-                .subjects = subjects,
-                .captures = captures,
-                .expr = result.expr,
-                .type = result.type,
-            },
-            .type = result.type,
-            .is_static = is_static,
-        };
-    }
     pub fn analyseParallel(self: *Sema, parallel: ast.Parallel, scope: *Scope) Error!ir.Parallel {
         if (parallel.jobs) |jobs_node| {
             var result = try self.analyseExprPartial(jobs_node, scope);
@@ -2681,7 +2778,7 @@ pub const Sema = struct {
             }
         } else if (else_case == null) {
             try self.diagnostics.err(
-                switch_expr.body.node.trimmedSpan(),
+                switch_expr.body.node.trimmedSpan().insertionPoint(),
                 "a switch expression needs an 'else' case: it has to produce a value for every subject",
                 .{},
             );
@@ -3190,12 +3287,12 @@ pub const Sema = struct {
     fn defineSymbol(self: *Sema, scope: *Scope, symbol: Symbol) !void {
         const symbol_type = symbol.typeOf();
 
-        const previous_symbol = switch (symbol_type) {
+        const prev_symbol = switch (symbol_type) {
             .variable, .group => scope.resolve(symbol.name, symbol_type),
             .task => scope.resolveLocal(symbol.name, symbol_type),
         };
 
-        if (previous_symbol) |prev| {
+        if (prev_symbol) |prev| {
             try self.diagnostics.err(
                 symbol.span,
                 "{t} '{s}' is already defined",

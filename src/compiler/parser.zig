@@ -886,14 +886,58 @@ pub const Parser = struct {
             .if_kw => try self.parseIfExpr(follow),
             .continue_kw => try self.advanceAs(.@"continue"),
             .break_kw => try self.advanceAs(.@"break"),
-            .with_kw => try self.parseWithExpr(follow),
             .in_kw => try self.parseIn(.expr, follow),
+            .lbrace => try self.parseBlockExpr(follow),
+            .parallel_kw => try self.parseParallelBlockExpr(follow),
             else => |tag| try self.unexpectedNode(
                 follow,
                 "expected an expression, found '{t}'",
                 .{tag},
             ),
         }
+    }
+
+    fn parseParallelBlockExpr(self: *Parser, follow: FollowSet) Error!void {
+        try self.open();
+
+        try self.parseParallel(follow.with(&.{.lbrace}));
+        try self.parseBlockExpr(follow);
+
+        try self.close(.parallel_block);
+    }
+
+    const BlockExprItemKind = enum {
+        binding,
+        expr,
+    };
+
+    fn classifyBlockExprItem(self: *Parser) Error!BlockExprItemKind {
+        switch (try self.peek()) {
+            .ident, .lparen => if (try self.atBinding())
+                return .binding,
+            else => {},
+        }
+
+        return .expr;
+    }
+
+    fn parseBlockExpr(self: *Parser, follow: FollowSet) Error!void {
+        try self.open();
+
+        //TODO: also decl start
+        const inner = follow.withoutSet(EXPR_START);
+
+        try self.expect(.lbrace, inner);
+
+        while (!try self.atHardStop()) {
+            switch (try self.classifyBlockExprItem()) {
+                .binding => try self.parseBinding(inner.with(&.{.rbrace})),
+                .expr => try self.parseExpr(inner.with(&.{.rbrace})),
+            }
+        }
+        try self.expect(.rbrace, follow);
+
+        try self.close(.block_expr);
     }
 
     /// One element of a list literal: either a plain expression or a spread,
@@ -907,31 +951,6 @@ pub const Parser = struct {
         } else {
             try self.parseExpr(follow);
         }
-    }
-
-    fn parseWithExpr(self: *Parser, follow: FollowSet) Error!void {
-        try self.open();
-
-        try self.expect(.with_kw, follow);
-
-        try self.open();
-        try self.parseSequence(
-            .lparen,
-            .rparen,
-            .comma,
-            follow.with(&.{.parallel_kw}),
-            parseExpr,
-        );
-        try self.close(.subjects);
-
-        if (try self.at(.parallel_kw))
-            try self.parseParallel(follow.with(&.{.pipe}));
-
-        try self.parseCaptures(follow);
-
-        try self.parseExpr(follow);
-
-        try self.close(.with);
     }
 
     fn parseRange(self: *Parser, follow: FollowSet) Error!void {
@@ -1011,7 +1030,7 @@ pub const Parser = struct {
 
         try self.expect(.at, follow.with(&.{.ident}));
         try self.expect(.ident, follow.with(&.{.lparen}));
-        try self.parseCallArgs(follow.withSet(EXPR_START).with(&.{.fallback_kw}));
+        try self.parseCallArgs(follow.withSet(EXPR_START));
 
         try self.close(.builtin_call);
     }

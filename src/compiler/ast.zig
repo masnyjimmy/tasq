@@ -11,7 +11,7 @@ fn IterableBase(comptime T: type, comptime next_fn: fn (it: *cst.Iterator) ?T) t
         const Self = @This();
         node: *const cst.Node,
 
-        const Iterator = struct {
+        pub const Iterator = struct {
             it: cst.Iterator,
 
             fn init(it: cst.Iterator) Iterator {
@@ -282,14 +282,14 @@ pub const MetaIterated = AnyKindIterable(
 
 pub const Expr = struct {
     const KINDS: []const cst.NodeKind = &.{
-        .literal,     .list,        .name_ref,
-        .paren_expr,  .string,      .string_expr,
-        .binary_expr, .unary_expr,  .builtin_call,
-        .@"if",       .@"for",      .@"switch",
-        .lambda,      .lambda_call, .process_expr,
-        .slice,       .with,        .in,
-        .@"continue", .@"break",    .try_expr,
-        .catch_expr,
+        .literal,     .list,           .name_ref,
+        .paren_expr,  .string,         .string_expr,
+        .binary_expr, .unary_expr,     .builtin_call,
+        .@"if",       .@"for",         .@"switch",
+        .lambda,      .lambda_call,    .process_expr,
+        .slice,       .in,             .@"continue",
+        .@"break",    .try_expr,       .catch_expr,
+        .block_expr,  .parallel_block,
     };
 
     node: *const cst.Node,
@@ -311,12 +311,13 @@ pub const Expr = struct {
         lambda: Lambda,
         lambda_call: LambdaCall,
         slice: SliceExpr,
-        with: WithExpr,
         in: InExpr,
         @"continue": cst.Token,
         @"break": cst.Token,
         try_expr: ?Expr,
         catch_expr: CatchExpr,
+        block_expr: BlockExpr,
+        parallel_block: ParallelBlockExpr,
     };
 
     pub fn from(node: *const cst.Node) Expr {
@@ -341,7 +342,6 @@ pub const Expr = struct {
             .lambda_call => .{ .lambda_call = .from(self.node) },
             .process_expr => .{ .process = .from(self.node) },
             .slice => .{ .slice = .from(self.node) },
-            .with => .{ .with = .from(self.node) },
             .in => .{ .in = .from(self.node) },
             .@"continue" => .{ .@"continue" = self.node.childToken(.continue_kw) orelse unreachable },
             .@"break" => .{ .@"break" = self.node.childToken(.break_kw) orelse unreachable },
@@ -352,10 +352,59 @@ pub const Expr = struct {
                     null,
             },
             .catch_expr => .{ .catch_expr = .from(self.node) },
+            .block_expr => .{ .block_expr = .from(self.node) },
+            .parallel_block => .{ .parallel_block = .from(self.node) },
             else => unreachable,
         };
     }
 };
+
+pub const ParallelBlockExpr = struct {
+    node: *const cst.Node,
+    parallel: Parallel,
+    block: BlockExpr,
+
+    pub fn from(node: *const cst.Node) ParallelBlockExpr {
+        var it = node.iter();
+
+        const parallel = expectNode(&it, Parallel, .parallel) orelse unreachable;
+        const block = expectNode(&it, BlockExpr, .block_expr) orelse unreachable;
+
+        return .{
+            .node = node,
+            .parallel = parallel,
+            .block = block,
+        };
+    }
+};
+
+pub const BlockExprItem = struct {
+    pub const KINDS: []const cst.NodeKind = [_]cst.NodeKind{
+        .binding,
+    } ++ Expr.KINDS;
+
+    node: *const cst.Node,
+
+    pub const Kind = union(enum) {
+        binding: BindingDecl,
+        expr: Expr,
+    };
+
+    pub fn from(node: *const cst.Node) BlockExprItem {
+        return .{
+            .node = node,
+        };
+    }
+
+    pub fn classify(self: *const BlockExprItem) Kind {
+        return switch (self.node.kind) {
+            .binding => .{ .binding = .from(self.node) },
+            else => .{ .expr = .from(self.node) },
+        };
+    }
+};
+
+pub const BlockExpr = AnyKindIterable(.loose, BlockExprItem, BlockExprItem.KINDS);
 
 pub const CatchExpr = struct {
     node: *const cst.Node,
@@ -397,31 +446,6 @@ pub const InExpr = struct {
             .subject = subject,
             .body = body,
             .@"else" = @"else",
-        };
-    }
-};
-
-pub const WithExpr = struct {
-    node: *const cst.Node,
-    subjects: Subjects,
-    parallel: ?Parallel,
-    captures: Captures,
-    expr: ?Expr,
-
-    pub fn from(node: *const cst.Node) WithExpr {
-        var it = node.iter();
-
-        const subjects = expectNode(&it, Subjects, .subjects) orelse unreachable;
-        const parallel = eatNode(&it, Parallel, .parallel);
-        const captures = expectNode(&it, Captures, .captures) orelse unreachable;
-        const expr = expectAnyNode(&it, Expr, Expr.KINDS);
-
-        return .{
-            .node = node,
-            .subjects = subjects,
-            .parallel = parallel,
-            .captures = captures,
-            .expr = expr,
         };
     }
 };
