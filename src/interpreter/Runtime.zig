@@ -1225,6 +1225,26 @@ pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value 
 
             return try self.evaluateExpr(ctx.withScope(catch_scope), &catch_expr.expr);
         },
+        .block_expr => |block_expr| {
+            const scope = try Scope.create(
+                ctx.scope,
+                self.allocator,
+                block_expr.scope,
+            );
+            defer scope.destroy();
+
+            for (block_expr.bindings) |binding| {
+                _ = try self.handleDecl(
+                    ctx.withScope(scope),
+                    binding,
+                    null,
+                );
+            }
+
+            const result = try self.evaluateExpr(ctx.withScope(scope), &block_expr.result_expr);
+
+            return try result.clone(ctx.arena());
+        },
         .unknown => unreachable,
     };
 }

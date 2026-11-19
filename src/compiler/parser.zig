@@ -888,12 +888,47 @@ pub const Parser = struct {
             .break_kw => try self.advanceAs(.@"break"),
             .with_kw => try self.parseWithExpr(follow),
             .in_kw => try self.parseIn(.expr, follow),
+            .lbrace => try self.parseBlockExpr(follow),
             else => |tag| try self.unexpectedNode(
                 follow,
                 "expected an expression, found '{t}'",
                 .{tag},
             ),
         }
+    }
+
+    const BlockExprItemKind = enum {
+        binding,
+        expr,
+    };
+
+    fn classifyBlockExprItem(self: *Parser) Error!BlockExprItemKind {
+        switch (try self.peek()) {
+            .ident, .lparen => if (try self.atBinding())
+                return .binding,
+            else => {},
+        }
+
+        return .expr;
+    }
+
+    fn parseBlockExpr(self: *Parser, follow: FollowSet) Error!void {
+        try self.open();
+
+        //TODO: also decl start
+        const inner = follow.withoutSet(EXPR_START);
+
+        try self.expect(.lbrace, inner);
+
+        while (!try self.atHardStop()) {
+            switch (try self.classifyBlockExprItem()) {
+                .binding => try self.parseBinding(inner.with(&.{.rbrace})),
+                .expr => try self.parseExpr(inner.with(&.{.rbrace})),
+            }
+        }
+        try self.expect(.rbrace, follow);
+
+        try self.close(.block_expr);
     }
 
     /// One element of a list literal: either a plain expression or a spread,

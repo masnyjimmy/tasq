@@ -257,7 +257,14 @@ pub const Expr = union(enum) {
     @"break",
     try_expr: *TryExpr,
     catch_expr: *CatchExpr,
+    block_expr: *BlockExpr,
     unknown, // poison
+};
+
+pub const BlockExpr = struct {
+    scope: *Scope,
+    bindings: []*Decl,
+    result_expr: Expr,
 };
 
 pub const CatchExpr = struct {

@@ -909,14 +909,24 @@ pub const Sema = struct {
                 return .{ .exact = ptr };
             },
             .targets => |targets| {
-                if (t != .tuple) {
-                    try self.diagnostics.err(
-                        targets.node.span,
+                const targets_count = targets.count();
+
+                switch (t) {
+                    .tuple => |tuple| {
+                        if (tuple.len != targets_count) {
+                            try self.diagnostics.err(
+                                targets.node.trimmedSpan(),
+                                "invalid targets count: got '{}', expected '{}'",
+                                .{ targets_count, tuple.len },
+                            );
+                        }
+                    },
+                    else => try self.diagnostics.err(
+                        targets.node.trimmedSpan(),
                         "'{f}' cannot be destructured",
                         .{t},
-                    );
+                    ),
                 }
-                const targets_count = targets.count();
 
                 const result = try self.arena.allocator().alloc(ir.Target(T), targets_count);
                 var it = targets.iter();
@@ -925,7 +935,10 @@ pub const Sema = struct {
                     const sub = it.next().?.unwrap() orelse continue;
 
                     const sub_type: Type = switch (t) {
-                        .tuple => |tuple| tuple[idx],
+                        .tuple => |tuple| if (idx >= tuple.len)
+                            .unknown
+                        else
+                            tuple[idx],
                         else => .unknown,
                     };
 
@@ -2216,6 +2229,78 @@ pub const Sema = struct {
                 .catch_expr,
                 try self.analyseCatchExpr(catch_expr, scope),
             ),
+            .block_expr => |block_expr| try self.wrap(
+                .block_expr,
+                try self.analyseBlockExpr(block_expr, scope),
+            ),
+        };
+    }
+
+    fn analyseBlockExpr(self: *Sema, block: ast.BlockExpr, scope: *Scope) Error!ExprResult(ir.BlockExpr) {
+        const bindings_count = blk: {
+            var it = block.iter();
+            var bindings: usize = 0;
+
+            while (it.next()) |item_| : (bindings += 1) {
+                const item: ast.BlockExprItem = item_;
+                if (item.node.kind != .binding)
+                    break;
+            }
+
+            break :blk bindings;
+        };
+
+        const block_scope = try self.createScope(scope, block.node);
+
+        const bindings = try self.arena.allocator().alloc(
+            *ir.Decl,
+            bindings_count,
+        );
+
+        var result_expr: ExprResult(ir.Expr) = undefined;
+
+        var it = block.iter();
+
+        for (bindings) |*decl| {
+            const binding: ast.BindingDecl = it.next().?.classify().binding; // calculated earlier
+
+            decl.* = try self.analyseBindingDecl(binding, block_scope);
+        }
+
+        if (it.next()) |item| {
+            // present, means it must be expr cuz earlier loop ended here
+            const expr: ast.Expr = item.classify().expr;
+            result_expr = try self.analyseExpr(expr, block_scope);
+
+            // error on exceed items, don't analyse them for now, I may enforce it on syntax level later
+            if (it.next()) |exc_item| {
+                const exc_item_span: Span = exc_item.node.trimmedSpan();
+                const block_span = block.node.trimmedSpan();
+
+                try self.diagnostics.err(
+                    Span.between(exc_item_span, block_span),
+                    "invalid items after result expr",
+                    .{},
+                );
+            }
+        } else {
+            const block_span = block.node.trimmedSpan();
+            try self.diagnostics.err(
+                block_span.insertionPoint(),
+                "missing result expr",
+                .{},
+            );
+            return Error.Incomplete;
+        }
+
+        return .{
+            .expr = .{
+                .scope = block_scope,
+                .bindings = bindings,
+                .result_expr = result_expr.expr,
+            },
+            .type = result_expr.type,
+            .is_static = false, // fill up later
         };
     }
 
@@ -2681,7 +2766,7 @@ pub const Sema = struct {
             }
         } else if (else_case == null) {
             try self.diagnostics.err(
-                switch_expr.body.node.trimmedSpan(),
+                switch_expr.body.node.trimmedSpan().insertionPoint(),
                 "a switch expression needs an 'else' case: it has to produce a value for every subject",
                 .{},
             );

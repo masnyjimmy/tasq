@@ -44,6 +44,7 @@ pub const NodeKind = enum {
     task_call_named_arg,
 
     expr_stmt,
+    block_expr,
 
     tuple,
     char,

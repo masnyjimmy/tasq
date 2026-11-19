@@ -289,7 +289,7 @@ pub const Expr = struct {
         .lambda,      .lambda_call, .process_expr,
         .slice,       .with,        .in,
         .@"continue", .@"break",    .try_expr,
-        .catch_expr,
+        .catch_expr,  .block_expr,
     };
 
     node: *const cst.Node,
@@ -317,6 +317,7 @@ pub const Expr = struct {
         @"break": cst.Token,
         try_expr: ?Expr,
         catch_expr: CatchExpr,
+        block_expr: BlockExpr,
     };
 
     pub fn from(node: *const cst.Node) Expr {
@@ -352,10 +353,41 @@ pub const Expr = struct {
                     null,
             },
             .catch_expr => .{ .catch_expr = .from(self.node) },
+            .block_expr => .{ .block_expr = .from(self.node) },
             else => unreachable,
         };
     }
 };
+
+// pub const BlockExprBody
+
+pub const BlockExprItem = struct {
+    pub const KINDS: []const cst.NodeKind = [_]cst.NodeKind{
+        .binding,
+    } ++ Expr.KINDS;
+
+    node: *const cst.Node,
+
+    pub const Kind = union(enum) {
+        binding: BindingDecl,
+        expr: Expr,
+    };
+
+    pub fn from(node: *const cst.Node) BlockExprItem {
+        return .{
+            .node = node,
+        };
+    }
+
+    pub fn classify(self: *const BlockExprItem) Kind {
+        return switch (self.node.kind) {
+            .binding => .{ .binding = .from(self.node) },
+            else => .{ .expr = .from(self.node) },
+        };
+    }
+};
+
+pub const BlockExpr = AnyKindIterable(.loose, BlockExprItem, BlockExprItem.KINDS);
 
 pub const CatchExpr = struct {
     node: *const cst.Node,
