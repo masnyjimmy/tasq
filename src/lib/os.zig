@@ -13,7 +13,7 @@ pub const windows = struct {
     ) callconv(.winapi) native.DWORD;
 
     pub fn getTempPath(allocator: std.mem.Allocator) Error![]const u8 {
-        var buffer: [1024]u16 = undefined;
+        var buffer: [1024:0]u16 = undefined;
 
         const length = GetTempPathW(buffer.len, &buffer);
 
