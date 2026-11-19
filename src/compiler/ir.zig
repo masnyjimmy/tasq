@@ -251,7 +251,6 @@ pub const Expr = union(enum) {
     lambda_call: *LambdaCall,
     process: *ProcessExpr,
     slice: *SliceExpr,
-    with: *WithExpr,
     in: *InExpr,
     @"continue",
     @"break",
@@ -292,15 +291,6 @@ pub const InExpr = struct {
     subject: Expr,
     body: Expr,
     @"else": Expr,
-    type: Type,
-};
-
-pub const WithExpr = struct {
-    scope: *Scope,
-    parallel: ?Parallel,
-    subjects: []const Expr,
-    captures: []const Capture,
-    expr: Expr,
     type: Type,
 };
 

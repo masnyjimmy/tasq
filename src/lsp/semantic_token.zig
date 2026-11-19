@@ -364,7 +364,6 @@ pub const Collector = struct {
             .switch_kw,
             .continue_kw,
             .break_kw,
-            .with_kw,
             .in_kw,
             .parallel_kw,
             .try_kw,

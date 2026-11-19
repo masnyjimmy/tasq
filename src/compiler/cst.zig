@@ -88,8 +88,6 @@ pub const NodeKind = enum {
     name,
     path,
 
-    with,
-
     /// Junk tokens skipped while hunting for an expected TOKEN.
     ///
     /// Emitted ONLY by `Parser.expectOneOf`. Never stands in for a node.

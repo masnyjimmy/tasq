@@ -886,7 +886,6 @@ pub const Parser = struct {
             .if_kw => try self.parseIfExpr(follow),
             .continue_kw => try self.advanceAs(.@"continue"),
             .break_kw => try self.advanceAs(.@"break"),
-            .with_kw => try self.parseWithExpr(follow),
             .in_kw => try self.parseIn(.expr, follow),
             .lbrace => try self.parseBlockExpr(follow),
             .parallel_kw => try self.parseParallelBlockExpr(follow),
@@ -952,31 +951,6 @@ pub const Parser = struct {
         } else {
             try self.parseExpr(follow);
         }
-    }
-
-    fn parseWithExpr(self: *Parser, follow: FollowSet) Error!void {
-        try self.open();
-
-        try self.expect(.with_kw, follow);
-
-        try self.open();
-        try self.parseSequence(
-            .lparen,
-            .rparen,
-            .comma,
-            follow.with(&.{.parallel_kw}),
-            parseExpr,
-        );
-        try self.close(.subjects);
-
-        if (try self.at(.parallel_kw))
-            try self.parseParallel(follow.with(&.{.pipe}));
-
-        try self.parseCaptures(follow);
-
-        try self.parseExpr(follow);
-
-        try self.close(.with);
     }
 
     fn parseRange(self: *Parser, follow: FollowSet) Error!void {

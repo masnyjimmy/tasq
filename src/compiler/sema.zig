@@ -2193,10 +2193,6 @@ pub const Sema = struct {
                     .type = result_type,
                 };
             },
-            .with => |with_expr| try self.wrap(
-                .with,
-                try self.analyseWithExpr(with_expr, scope),
-            ),
             .in => |in_expr| try self.wrap(
                 .in,
                 try self.analyseInExpr(in_expr, scope),
@@ -2611,77 +2607,6 @@ pub const Sema = struct {
         };
     }
 
-    fn analyseWithExpr(self: *Sema, with_expr: ast.WithExpr, scope: *Scope) Error!ExprResult(ir.WithExpr) {
-        const allocator = self.arena.allocator();
-
-        const in_subjects = try with_expr.subjects.collect(allocator);
-        const in_captures = try with_expr.captures.collect(allocator);
-
-        if (in_subjects.len != in_captures.len) {
-            try self.diagnostics.err(
-                with_expr.node.trimmedSpan(),
-                "'with' needs exactly one capture per subject: got {} capture(s) for {} subject(s)",
-                .{ in_captures.len, in_subjects.len },
-            );
-        }
-        const valid_pairs_count = @min(in_subjects.len, in_captures.len);
-
-        var subjects = try allocator.alloc(ir.Expr, valid_pairs_count);
-        var captures = try allocator.alloc(ir.Capture, valid_pairs_count);
-
-        var is_static = true;
-
-        const with_scope = try self.createScope(scope, with_expr.node);
-
-        for (in_subjects[0..valid_pairs_count], in_captures[0..valid_pairs_count], 0..) |sub, cap, idx| {
-            const capture: ast.Target = cap.unwrap() orelse continue;
-            const subject = sub.unwrap() orelse continue;
-
-            // a subject is consumed (its type becomes the type of a capture), so it is strict
-            var result = try self.analyseExpr(subject, scope);
-            _ = try self.rejectNoreturn(subject, &result, "a 'with' subject", .{});
-
-            captures[idx] = .{
-                .target = try self.destructureType(
-                    ir.Capture,
-                    "capture",
-                    &captures[idx],
-                    capture,
-                    result.type,
-                    with_scope,
-                ),
-                .type = result.type,
-            };
-
-            if (result.is_static == false)
-                is_static = false;
-
-            subjects[idx] = result.expr;
-        }
-
-        const parallel = if (with_expr.parallel) |parallel|
-            try self.analyseParallel(parallel, scope)
-        else
-            null;
-
-        const result = try self.analyseExprPartial(
-            with_expr.expr orelse return Error.Incomplete,
-            with_scope,
-        );
-
-        return .{
-            .expr = .{
-                .scope = with_scope,
-                .parallel = parallel,
-                .subjects = subjects,
-                .captures = captures,
-                .expr = result.expr,
-                .type = result.type,
-            },
-            .type = result.type,
-            .is_static = is_static,
-        };
-    }
     pub fn analyseParallel(self: *Sema, parallel: ast.Parallel, scope: *Scope) Error!ir.Parallel {
         if (parallel.jobs) |jobs_node| {
             var result = try self.analyseExprPartial(jobs_node, scope);
