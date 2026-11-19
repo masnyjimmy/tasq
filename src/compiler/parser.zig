@@ -1011,7 +1011,7 @@ pub const Parser = struct {
 
         try self.expect(.at, follow.with(&.{.ident}));
         try self.expect(.ident, follow.with(&.{.lparen}));
-        try self.parseCallArgs(follow.withSet(EXPR_START).with(&.{.fallback_kw}));
+        try self.parseCallArgs(follow.withSet(EXPR_START));
 
         try self.close(.builtin_call);
     }
