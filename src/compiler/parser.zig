@@ -889,12 +889,22 @@ pub const Parser = struct {
             .with_kw => try self.parseWithExpr(follow),
             .in_kw => try self.parseIn(.expr, follow),
             .lbrace => try self.parseBlockExpr(follow),
+            .parallel_kw => try self.parseParallelBlockExpr(follow),
             else => |tag| try self.unexpectedNode(
                 follow,
                 "expected an expression, found '{t}'",
                 .{tag},
             ),
         }
+    }
+
+    fn parseParallelBlockExpr(self: *Parser, follow: FollowSet) Error!void {
+        try self.open();
+
+        try self.parseParallel(follow.with(&.{.lbrace}));
+        try self.parseBlockExpr(follow);
+
+        try self.close(.parallel_block);
     }
 
     const BlockExprItemKind = enum {

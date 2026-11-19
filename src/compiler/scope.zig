@@ -11,6 +11,11 @@ const cst = @import("cst.zig");
 // };
 
 pub const Scope = struct {
+    pub const SymbolWithOwner = struct {
+        symbol: *Symbol,
+        owner: *const Scope,
+    };
+
     const IndexesStorage = std.array_hash_map.String(usize);
 
     parent: ?*Scope,
@@ -22,6 +27,8 @@ pub const Scope = struct {
     groups: IndexesStorage = .empty,
     // child scopes
     children: std.hash_map.AutoHashMapUnmanaged(*const cst.Node, *Scope) = .empty,
+    // if true symbols inaccessible,
+    parallel_guard: bool = false,
 
     pub const empty: Scope = .{
         .parent = null,
@@ -93,22 +100,46 @@ pub const Scope = struct {
         try self.symbols.append(gpa, ptr);
     }
 
-    pub fn resolveLocal(self: *const Scope, name: []const u8, symbol_type: Symbol.Type) ?*Symbol {
+    pub fn getSymbol(self: *const Scope, name: []const u8, symbol_type: Symbol.Type) ?*Symbol {
         const index = switch (symbol_type) {
             .variable => self.variables.get(name),
             .task => self.tasks.get(name),
             .group => self.groups.get(name),
-        };
+        } orelse return null;
 
-        return if (index) |i|
-            self.symbols.items[i]
-        else
-            null;
+        return self.symbols.items[index];
+    }
+
+    pub fn resolveLocal(self: *const Scope, name: []const u8, symbol_type: Symbol.Type) ?*Symbol {
+        const symbol = self.getSymbol(name, symbol_type) orelse return null;
+
+        if (self.parallel_guard) {
+            std.debug.panic(
+                \\error: parallel guard is active
+                \\  for local resolution check parallel_guard flag manually and use getSymbol() instead
+                \\  otherwise use resolveWithOwner and check parallel_guard flag
+            , .{});
+        }
+
+        return symbol;
+    }
+
+    pub fn resolveWithOwner(self: *const Scope, name: []const u8, symbol_type: Symbol.Type) ?SymbolWithOwner {
+        if (self.getSymbol(name, symbol_type)) |symbol| {
+            return .{ .symbol = symbol, .owner = self };
+        }
+
+        if (self.parent) |parent|
+            return parent.resolveWithOwner(name, symbol_type);
+
+        return null;
     }
 
     pub fn resolve(self: *const Scope, name: []const u8, symbol_type: Symbol.Type) ?*Symbol {
-        return self.resolveLocal(name, symbol_type) orelse
-            if (self.parent) |p| p.resolve(name, symbol_type) else null;
+        return if (self.resolveWithOwner(name, symbol_type)) |found|
+            found.symbol
+        else
+            null;
     }
 
     pub fn root(self: *Scope) *Scope {

@@ -897,7 +897,7 @@ pub const Sema = struct {
                 if (ident_name) |symbol_name| {
                     try self.defineSymbol(scope, .{
                         .name = symbol_name,
-                        .span = target.node.span,
+                        .span = target.node.trimmedSpan(),
                         .origin = @unionInit(
                             Symbol.Origin,
                             symbol_type,
@@ -1658,18 +1658,27 @@ pub const Sema = struct {
             else
                 Error.Incomplete,
             .name_ref => |name_ref| if (name_ref) |token| {
-                const symbol = scope.resolve(token.lexeme, .variable) orelse {
+                const found = scope.resolveWithOwner(token.lexeme, .variable) orelse {
                     try self.unknownValue(token.span, token.lexeme);
                     return Error.Incomplete;
                 };
 
-                const symbol_type = symbol.origin.valueType() orelse unreachable;
+                if (found.owner.parallel_guard) {
+                    try self.diagnostics.err(
+                        token.span,
+                        "'{s}' symbol cannot be accessed as its in parallel context",
+                        .{token.lexeme},
+                    );
+                    return Error.Incomplete;
+                }
+
+                const symbol_type = found.symbol.origin.valueType() orelse unreachable;
 
                 return .{
                     .expr = .{
                         .ident = .{
-                            .name = symbol.name,
-                            .symbol = symbol,
+                            .name = found.symbol.name,
+                            .symbol = found.symbol,
                         },
                     },
                     .type = symbol_type,
@@ -2233,6 +2242,105 @@ pub const Sema = struct {
                 .block_expr,
                 try self.analyseBlockExpr(block_expr, scope),
             ),
+            .parallel_block => |block_expr| try self.wrap(
+                .parallel_block,
+                try self.analyseParallelBlockExpr(block_expr, scope),
+            ),
+        };
+    }
+
+    /// out.len must be equal to expected declarations count
+    fn readBlockExprDeclarations(self: *Sema, it: *ast.BlockExpr.Iterator, out_decls: []*ir.Decl, scope: *Scope, parallel: bool) Error!void {
+        scope.parallel_guard = parallel;
+
+        for (out_decls) |*decl| {
+            const binding_node: ast.BindingDecl = it.next().?.classify().binding;
+
+            decl.* = self.analyseBindingDecl(
+                binding_node,
+                scope,
+            ) catch |err| switch (err) {
+                Error.Incomplete => continue,
+                else => return err,
+            };
+        }
+
+        scope.parallel_guard = false;
+    }
+
+    fn readBlockExprResultExpr(self: *Sema, span: Span, it: *ast.BlockExpr.Iterator, scope: *Scope) Error!ExprResult(ir.Expr) {
+        var result: ExprResult(ir.Expr) = undefined;
+
+        if (it.next()) |item| {
+            // present, means it must be expr cuz earlier loop ended here
+            const expr: ast.Expr = item.classify().expr;
+            result = try self.analyseExpr(expr, scope);
+
+            // error on exceed items, don't analyse them for now, I may enforce it on syntax level later
+            if (it.next()) |exc_item| {
+                const exc_item_span: Span = exc_item.node.trimmedSpan();
+
+                try self.diagnostics.err(
+                    Span.between(exc_item_span, span),
+                    "invalid items after result expr",
+                    .{},
+                );
+            }
+        } else {
+            try self.diagnostics.err(
+                span.insertionPoint(),
+                "missing result expr",
+                .{},
+            );
+            return Error.Incomplete;
+        }
+
+        return result;
+    }
+
+    fn analyseParallelBlockExpr(self: *Sema, parallel_block: ast.ParallelBlockExpr, scope: *Scope) Error!ExprResult(ir.ParallelBlockExpr) {
+        const bindings_count = blk: {
+            var it = parallel_block.block.iter();
+            var bindings: usize = 0;
+            while (it.next()) |item| : (bindings += 1) {
+                if (item.node.kind != .binding)
+                    break;
+            }
+            break :blk bindings;
+        };
+
+        const block_scope = try self.createScope(scope, parallel_block.block.node);
+
+        const bindings = try self.arena.allocator().alloc(
+            *ir.Decl,
+            bindings_count,
+        );
+        var it = parallel_block.block.iter();
+
+        try self.readBlockExprDeclarations(
+            &it,
+            bindings,
+            block_scope,
+            true,
+        );
+
+        const result_expr: ExprResult(ir.Expr) = try self.readBlockExprResultExpr(
+            parallel_block.block.node.trimmedSpan(),
+            &it,
+            block_scope,
+        );
+
+        const parallel = try self.analyseParallel(parallel_block.parallel, scope);
+
+        return .{
+            .expr = .{
+                .scope = block_scope,
+                .parallel = parallel,
+                .bindings = bindings,
+                .result_expr = result_expr.expr,
+            },
+            .is_static = false, //fill later,
+            .type = result_expr.type,
         };
     }
 
@@ -2257,41 +2365,20 @@ pub const Sema = struct {
             bindings_count,
         );
 
-        var result_expr: ExprResult(ir.Expr) = undefined;
-
         var it = block.iter();
 
-        for (bindings) |*decl| {
-            const binding: ast.BindingDecl = it.next().?.classify().binding; // calculated earlier
+        try self.readBlockExprDeclarations(
+            &it,
+            bindings,
+            block_scope,
+            false,
+        );
 
-            decl.* = try self.analyseBindingDecl(binding, block_scope);
-        }
-
-        if (it.next()) |item| {
-            // present, means it must be expr cuz earlier loop ended here
-            const expr: ast.Expr = item.classify().expr;
-            result_expr = try self.analyseExpr(expr, block_scope);
-
-            // error on exceed items, don't analyse them for now, I may enforce it on syntax level later
-            if (it.next()) |exc_item| {
-                const exc_item_span: Span = exc_item.node.trimmedSpan();
-                const block_span = block.node.trimmedSpan();
-
-                try self.diagnostics.err(
-                    Span.between(exc_item_span, block_span),
-                    "invalid items after result expr",
-                    .{},
-                );
-            }
-        } else {
-            const block_span = block.node.trimmedSpan();
-            try self.diagnostics.err(
-                block_span.insertionPoint(),
-                "missing result expr",
-                .{},
-            );
-            return Error.Incomplete;
-        }
+        const result_expr: ExprResult(ir.Expr) = try self.readBlockExprResultExpr(
+            block.node.trimmedSpan(),
+            &it,
+            block_scope,
+        );
 
         return .{
             .expr = .{
@@ -3275,12 +3362,12 @@ pub const Sema = struct {
     fn defineSymbol(self: *Sema, scope: *Scope, symbol: Symbol) !void {
         const symbol_type = symbol.typeOf();
 
-        const previous_symbol = switch (symbol_type) {
+        const prev_symbol = switch (symbol_type) {
             .variable, .group => scope.resolve(symbol.name, symbol_type),
             .task => scope.resolveLocal(symbol.name, symbol_type),
         };
 
-        if (previous_symbol) |prev| {
+        if (prev_symbol) |prev| {
             try self.diagnostics.err(
                 symbol.span,
                 "{t} '{s}' is already defined",

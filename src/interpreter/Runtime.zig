@@ -1245,6 +1245,56 @@ pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value 
 
             return try result.clone(ctx.arena());
         },
+        .parallel_block => |block_expr| {
+            const block_scope = try Scope.create(
+                ctx.scope,
+                ctx.arena(),
+                block_expr.scope,
+            );
+            defer block_scope.destroy();
+
+            const jobs_limit: usize = try self.evaluateParallelJobsLimit(
+                ctx,
+                &block_expr.parallel,
+            );
+
+            const Context = struct {
+                const Self = @This();
+                runtime: *Runtime,
+                ctx: Ctx,
+                block: *const ir.ParallelBlockExpr,
+
+                fn runDecl(it: *Self, idx: usize) Error!void {
+                    const decl = it.block.bindings[idx];
+                    _ = try it.runtime.handleDecl(
+                        it.ctx,
+                        decl,
+                        null,
+                    );
+                }
+            };
+
+            var context: Context = .{
+                .runtime = self,
+                .ctx = ctx.withScope(block_scope),
+                .block = block_expr,
+            };
+
+            try parallelization.runIndexed(
+                self,
+                block_expr.bindings.len,
+                jobs_limit,
+                &context,
+                Context.runDecl,
+            );
+
+            const value = try self.evaluateExpr(
+                ctx.withScope(block_scope),
+                &block_expr.result_expr,
+            );
+
+            return try value.clone(ctx.arena());
+        },
         .unknown => unreachable,
     };
 }

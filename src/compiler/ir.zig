@@ -258,7 +258,15 @@ pub const Expr = union(enum) {
     try_expr: *TryExpr,
     catch_expr: *CatchExpr,
     block_expr: *BlockExpr,
+    parallel_block: *ParallelBlockExpr,
     unknown, // poison
+};
+
+pub const ParallelBlockExpr = struct {
+    scope: *Scope,
+    parallel: Parallel,
+    bindings: []*Decl,
+    result_expr: Expr,
 };
 
 pub const BlockExpr = struct {

@@ -11,7 +11,7 @@ fn IterableBase(comptime T: type, comptime next_fn: fn (it: *cst.Iterator) ?T) t
         const Self = @This();
         node: *const cst.Node,
 
-        const Iterator = struct {
+        pub const Iterator = struct {
             it: cst.Iterator,
 
             fn init(it: cst.Iterator) Iterator {
@@ -289,7 +289,7 @@ pub const Expr = struct {
         .lambda,      .lambda_call, .process_expr,
         .slice,       .with,        .in,
         .@"continue", .@"break",    .try_expr,
-        .catch_expr,  .block_expr,
+        .catch_expr,  .block_expr,  .parallel_block,
     };
 
     node: *const cst.Node,
@@ -318,6 +318,7 @@ pub const Expr = struct {
         try_expr: ?Expr,
         catch_expr: CatchExpr,
         block_expr: BlockExpr,
+        parallel_block: ParallelBlockExpr,
     };
 
     pub fn from(node: *const cst.Node) Expr {
@@ -354,12 +355,30 @@ pub const Expr = struct {
             },
             .catch_expr => .{ .catch_expr = .from(self.node) },
             .block_expr => .{ .block_expr = .from(self.node) },
+            .parallel_block => .{ .parallel_block = .from(self.node) },
             else => unreachable,
         };
     }
 };
 
-// pub const BlockExprBody
+pub const ParallelBlockExpr = struct {
+    node: *const cst.Node,
+    parallel: Parallel,
+    block: BlockExpr,
+
+    pub fn from(node: *const cst.Node) ParallelBlockExpr {
+        var it = node.iter();
+
+        const parallel = expectNode(&it, Parallel, .parallel) orelse unreachable;
+        const block = expectNode(&it, BlockExpr, .block_expr) orelse unreachable;
+
+        return .{
+            .node = node,
+            .parallel = parallel,
+            .block = block,
+        };
+    }
+};
 
 pub const BlockExprItem = struct {
     pub const KINDS: []const cst.NodeKind = [_]cst.NodeKind{
