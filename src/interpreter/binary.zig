@@ -128,6 +128,7 @@ fn valuesEqual(left: Value, right: Value) bool {
             return true;
         },
         .noreturn, .result, .lambda, .unknown => unreachable,
+        .@"error" => return left.@"error".type == right.@"error".type and left.@"error".id == right.@"error".id,
         inline else => |_, tag| {
             const left_value = @field(left, @tagName(tag));
             const right_value = @field(right, @tagName(tag));

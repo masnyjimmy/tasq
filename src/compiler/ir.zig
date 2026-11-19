@@ -255,7 +255,22 @@ pub const Expr = union(enum) {
     in: *InExpr,
     @"continue",
     @"break",
+    try_expr: *TryExpr,
+    catch_expr: *CatchExpr,
     unknown, // poison
+};
+
+pub const CatchExpr = struct {
+    subject: Expr,
+    capture: ?*Capture,
+    scope: *Scope,
+    expr: Expr,
+    type: Type,
+};
+
+pub const TryExpr = struct {
+    subject: Expr,
+    type: Type,
 };
 
 pub const InExpr = struct {
@@ -289,7 +304,6 @@ pub const ProcessExpr = struct {
     nofail: bool,
     script: bool,
     command: Expr,
-    fallback: ?Expr,
 };
 
 pub const LambdaTemplate = @"type".LambdaTemplate;
@@ -365,7 +379,7 @@ pub const SwitchExpr = struct {
     pub const CasesStorage = SwitchCasesStorage(Expr);
     subject: Expr,
     cases: CasesStorage,
-    else_case: Expr,
+    else_case: ?Expr,
     type: Type,
 };
 
@@ -401,7 +415,6 @@ pub const ResolvedIdent = struct {
 pub const BuiltinCall = struct {
     function: functions.ResolvedFunction,
     args: []Expr,
-    fallback: ?Expr,
 };
 
 pub const BinaryExpr = struct {

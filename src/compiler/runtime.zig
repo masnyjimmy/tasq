@@ -28,6 +28,10 @@ pub const ValueMapContext = struct {
                 std.debug.assert(n == 0 or std.math.isNormal(n));
                 hasher.update(std.mem.asBytes(&n));
             },
+            .@"error" => |e| {
+                hasher.update(std.mem.asBytes(&e.type));
+                hasher.update(std.mem.asBytes(&e.id));
+            },
             .list => |l| for (l.items) |item| updateHasher(hasher, item),
             .tuple => |t| for (t.elements) |elem| updateHasher(hasher, elem),
             else => unreachable,
@@ -42,7 +46,10 @@ pub const List = struct {
 
 pub const Result = struct {
     type: *const Type,
-    value: ?*const Value,
+    payload: union(enum) {
+        fail: Error,
+        value: *const Value,
+    },
 };
 
 const Tag = enum {
@@ -53,7 +60,15 @@ const Tag = enum {
     tuple,
     void,
     lambda,
+    @"error",
     result,
+};
+
+pub const Error = struct {
+    type: *const type_mod.Error,
+    id: usize,
+    // additional meta, not in a key
+    message: ?[]const u8 = null,
 };
 
 pub const Tuple = struct {
@@ -73,12 +88,14 @@ pub const Value = union(Tag) {
         template: *const ir.LambdaTemplate,
         instance: *const ir.LambdaInstance,
     },
+    @"error": Error,
     result: Result,
 
     pub fn typeOf(self: *const Value) Type {
         return switch (self.*) {
             .list => |list| .{ .list = list.items_type },
-            .result => |res| .{ .result = res.type },
+            .@"error" => |@"error"| .{ .@"error" = @"error".type },
+            .result => |res| res.type.*,
             .tuple => |tuple| .{ .tuple = tuple.types },
             .lambda => |lambda| .{
                 .lambda = switch (lambda) {
@@ -94,6 +111,7 @@ pub const Value = union(Tag) {
         return t.eq(self.typeOf());
     }
 
+    /// TODO: Remove this function, handle it somewhere else
     pub fn format(self: *const Value, writer: *std.Io.Writer) !void {
         switch (self.*) {
             .string => |s| try writer.writeAll(s),
@@ -120,11 +138,10 @@ pub const Value = union(Tag) {
                 }
                 try writer.writeAll(")");
             },
-            .result => |s| {
-                if (s.value) |val|
-                    try writer.print("{f}", .{val})
-                else
-                    try writer.print("error", .{});
+            .@"error" => |e| try writer.print("{s}: {s}", .{ e.type.names[e.id], e.message.? }),
+            .result => |s| switch (s.payload) {
+                .value => |v| try v.format(writer),
+                .fail => |err| try format(&.{ .@"error" = err }, writer),
             },
             .lambda => try writer.writeAll("<lambda>"), //TODO: add more details
             inline else => |_, tag| try writer.print("<{t}>", .{tag}),
@@ -168,14 +185,30 @@ pub const Value = union(Tag) {
 
                 return true;
             },
+            .@"error" => {
+                if (left.@"error".type != right.@"error".type)
+                    return false;
+
+                return left.@"error".id == right.@"error".id;
+            },
             .result => {
-                if (left.result.value == null and right.result.value == null)
-                    return true;
+                const success = blk: {
+                    const l = left.result.payload == .value;
+                    const r = right.result.payload == .value;
 
-                const l = left.result.value orelse return false;
-                const r = right.result.value orelse return false;
+                    if (l != r)
+                        return false;
 
-                return eql(l.*, r.*);
+                    break :blk l;
+                };
+
+                return if (success)
+                    eql(left.result.payload.value.*, right.result.payload.value.*)
+                else
+                    eql(
+                        .{ .@"error" = left.result.payload.fail },
+                        .{ .@"error" = right.result.payload.fail },
+                    );
             },
             else => unreachable,
         };
@@ -212,18 +245,21 @@ pub const Value = union(Tag) {
                     },
                 };
             },
-            .result => |res| {
-                const val = res.value orelse return self.*;
+            .result => |res| switch (res.payload) {
+                .fail => self.*,
+                .value => |value| {
+                    const ptr = try allocator.create(Value);
+                    ptr.* = try value.clone(allocator);
 
-                const ptr = try allocator.create(Value);
-                ptr.* = try val.clone(allocator);
-
-                return .{
-                    .result = .{
-                        .type = res.type,
-                        .value = ptr,
-                    },
-                };
+                    return .{
+                        .result = .{
+                            .type = res.type,
+                            .payload = .{
+                                .value = ptr,
+                            },
+                        },
+                    };
+                },
             },
             else => self.*,
         };

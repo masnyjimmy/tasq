@@ -12,8 +12,22 @@ const Tag = enum {
     noreturn,
     void,
     lambda,
+    @"error",
     result,
     unknown,
+};
+
+pub const Error = struct {
+    names: []const []const u8,
+};
+
+pub const Result = struct {
+    @"error": *const Error,
+    payload: *const Type,
+
+    pub fn getErrorType(self: *const Result) Type {
+        return .{ .@"error" = self.@"error" };
+    }
 };
 
 pub const LambdaTemplate = struct {
@@ -30,7 +44,8 @@ pub const Type = union(Tag) {
     noreturn,
     void,
     lambda: *const LambdaTemplate,
-    result: *const Type,
+    @"error": *const Error,
+    result: Result,
     /// "No information about this type." It is never a real type of a value that reaches the
     /// interpreter. It comes from lambda templates (parameters are not known yet), from error
     /// recovery, and from empty list literals (`[]` is a list of `unknown` until a context gives
@@ -65,14 +80,23 @@ pub const Type = union(Tag) {
             .list => |l| {
                 const inner = try unify(arena, l.*, right.list.*) orelse return null;
                 if (same(inner, l.*)) return left;
-                std.debug.assert(same(inner, right.list.*));
-                return right;
+                if (same(inner, right.list.*)) return right;
+                return .{ .list = try boxed(arena, inner) };
             },
+            .@"error" => |l| return if (l == right.@"error") left else null,
             .result => |l| {
-                const inner = try unify(arena, l.*, right.result.*) orelse return null;
-                if (same(inner, l.*)) return left;
-                std.debug.assert(same(inner, right.result.*));
-                return right;
+                const r = right.result;
+
+                // error sets are compared by identity, same as `same` and `eq`
+                if (l.@"error" != r.@"error") return null;
+
+                const payload = try unify(arena, l.payload.*, r.payload.*) orelse return null;
+                if (same(payload, l.payload.*)) return left;
+                if (same(payload, r.payload.*)) return right;
+                return .{ .result = .{
+                    .@"error" = l.@"error",
+                    .payload = try boxed(arena, payload),
+                } };
             },
             .tuple => |t| {
                 if (t.len != right.tuple.len) return null;
@@ -89,6 +113,12 @@ pub const Type = union(Tag) {
         }
     }
 
+    fn boxed(arena: std.mem.Allocator, t: Type) !*const Type {
+        const ptr = try arena.create(Type);
+        ptr.* = t;
+        return ptr;
+    }
+
     /// Strict structural identity. `unknown` is only the same as `unknown`.
     /// Use it where types are keys (hashing, caches); use `unify` / `eq` for compatibility.
     pub fn same(left: Type, right: Type) bool {
@@ -96,7 +126,14 @@ pub const Type = union(Tag) {
 
         return switch (left) {
             .list => |l| same(l.*, right.list.*),
-            .result => |r| same(r.*, right.result.*),
+            .@"error" => |e| e == right.@"error",
+            .result => |r| same(
+                r.getErrorType(),
+                right.result.getErrorType(),
+            ) and same(
+                r.payload.*,
+                right.result.payload.*,
+            ),
             .tuple => |t| {
                 if (t.len != right.tuple.len) return false;
                 for (t, right.tuple) |l, r| if (!same(l, r)) return false;
@@ -121,8 +158,9 @@ pub const Type = union(Tag) {
         if (@as(Tag, left) != @as(Tag, right)) return false;
 
         return switch (left) {
+            .@"error" => |e| e == right.@"error",
+            .result => |r| eq(r.getErrorType(), right.result.getErrorType()) and eq(r.payload.*, right.result.payload.*),
             .list => |l| eq(l.*, right.list.*),
-            .result => |r| eq(r.*, right.result.*),
             .tuple => |t| {
                 if (t.len != right.tuple.len) return false;
                 for (t, right.tuple) |l, r| if (!eq(l, r)) return false;
@@ -137,7 +175,7 @@ pub const Type = union(Tag) {
         return switch (self) {
             .unknown => true,
             .list => |items| items.containsUnknown(),
-            .result => |t| t.containsUnknown(),
+            .result => |t| t.payload.containsUnknown(),
             .tuple => |t| for (t) |el| {
                 if (el.containsUnknown())
                     return true;
@@ -158,7 +196,19 @@ pub const Type = union(Tag) {
     ) !void {
         switch (self) {
             .list => |t| try writer.print("[]{f}", .{t.*}),
-            .result => |r| try writer.print("!{f}", .{r.*}),
+            .@"error" => |e| {
+                try writer.writeAll("error{");
+
+                for (e.names, 0..) |name, idx| {
+                    if (idx != 0)
+                        try writer.writeAll(",");
+
+                    try writer.writeAll(name);
+                }
+
+                try writer.writeAll("}");
+            },
+            .result => |r| try writer.print("{f}!{f}", .{ r.getErrorType(), r.payload.* }),
             .tuple => |t| {
                 try writer.writeAll("(");
                 for (t, 0..) |el, idx| {
@@ -217,7 +267,12 @@ pub const TypeExpr = union(enum) {
     generic: []const u8,
     list: *const TypeExpr,
     lambda: *const LambdaTypeExpr,
-    result: *const TypeExpr,
+    result: *const ResultExpr,
+};
+
+pub const ResultExpr = struct {
+    @"error": *const Error,
+    payload: TypeExpr,
 };
 
 pub const LambdaTypeExpr = struct {
@@ -250,7 +305,11 @@ pub const TypeMapContext = struct {
                 hasher.update(std.mem.asBytes(&elems.len));
                 for (elems) |elem| updateHasher(hasher, elem);
             },
-            .result => |result| updateHasher(hasher, result.*),
+            .@"error" => |e| hasher.update(std.mem.asBytes(&e)),
+            .result => |result| {
+                hasher.update(std.mem.asBytes(&result.@"error"));
+                updateHasher(hasher, result.payload.*);
+            },
             else => {},
         }
     }
