@@ -55,3 +55,13 @@ pub const StringBuilder = struct {
         self.buffer = self.buffer ++ str;
     }
 };
+
+pub fn generateIndiceMap(comptime strings: []const []const u8) std.StaticStringMap(usize) {
+    var kvs: [strings.len]struct { []const u8, usize } = undefined;
+
+    for (strings, 0..) |str, idx| {
+        kvs[idx] = .{ str, idx };
+    }
+
+    return .initComptime(kvs);
+}

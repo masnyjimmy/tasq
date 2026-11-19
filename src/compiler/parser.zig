@@ -514,7 +514,7 @@ pub const Parser = struct {
         try self.close(.parallel_block);
     }
 
-    fn parseProcess(self: *Parser, follow: FollowSet, comptime target: enum { stmt, expr }) Error!void {
+    fn parseProcess(self: *Parser, follow: FollowSet, comptime target: enum { expr, stmt }) Error!void {
         try self.open();
 
         try self.expect(.dollar, follow.with(&.{.backtick}));
@@ -523,15 +523,10 @@ pub const Parser = struct {
         }
         try self.parsePrimary(follow);
 
-        switch (target) {
-            .expr => {
-                if (try self.at(.fallback_kw))
-                    try self.parseFallback(follow);
-
-                try self.close(.process_expr);
-            },
-            .stmt => try self.close(.process_stmt),
-        }
+        try self.close(switch (target) {
+            .expr => .process_expr,
+            .stmt => .process_stmt,
+        });
     }
 
     fn parseTaskCall(self: *Parser, follow: FollowSet) Error!void {
@@ -770,10 +765,20 @@ pub const Parser = struct {
         try self.parseBinaryBp(0, follow);
     }
 
+    const CATCH_LEFT_BP: u8 = 0;
+    const CATCH_RIGHT_BP: u8 = 1;
+
     fn parseBinaryBp(self: *Parser, min_bp: u8, follow: FollowSet) Error!void {
         try self.parsePrefix(follow);
 
-        while (infixBp(try self.peek())) |bp| {
+        while (true) {
+            if (try self.at(.catch_kw)) {
+                if (CATCH_LEFT_BP < min_bp) break;
+                try self.parseCatch(follow);
+                continue;
+            }
+
+            const bp = infixBp(try self.peek()) orelse break;
             if (bp[0] < min_bp) break;
 
             try self.precedeLast();
@@ -796,7 +801,17 @@ pub const Parser = struct {
         return .{ a - 1, a };
     }
 
+    const TRY_BP: u8 = 11;
+
     fn parsePrefix(self: *Parser, follow: FollowSet) Error!void {
+        if (try self.at(.try_kw)) {
+            try self.open();
+            try self.advance();
+            try self.parseBinaryBp(TRY_BP, follow);
+            try self.close(.try_expr);
+            return;
+        }
+
         if (unaryBp(try self.peek())) |bp| {
             try self.open();
             try self.advance();
@@ -941,13 +956,16 @@ pub const Parser = struct {
         try self.close(.lambda_call);
     }
 
-    fn parseFallback(self: *Parser, follow: FollowSet) Error!void {
-        try self.open();
+    fn parseCatch(self: *Parser, follow: FollowSet) Error!void {
+        try self.precedeLast();
+        try self.advance();
 
-        try self.expect(.fallback_kw, follow.withoutSet(EXPR_START));
-        try self.parseExpr(follow);
+        if (try self.at(.pipe))
+            try self.parseCaptures(follow.withoutSet(EXPR_START));
 
-        try self.close(.fallback);
+        try self.parseBinaryBp(CATCH_RIGHT_BP, follow);
+
+        try self.close(.catch_expr);
     }
 
     fn parseParallel(self: *Parser, follow: FollowSet) Error!void {
@@ -994,9 +1012,6 @@ pub const Parser = struct {
         try self.expect(.at, follow.with(&.{.ident}));
         try self.expect(.ident, follow.with(&.{.lparen}));
         try self.parseCallArgs(follow.withSet(EXPR_START).with(&.{.fallback_kw}));
-
-        if (try self.at(.fallback_kw))
-            try self.parseFallback(follow);
 
         try self.close(.builtin_call);
     }

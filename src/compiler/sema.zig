@@ -32,6 +32,10 @@ const Error = error{
     Incomplete,
 } || std.mem.Allocator.Error || text.Error || std.Io.Writer.Error;
 
+/// The type of a process expression. A process can fail, so it is a result and `try` / `catch`
+/// decide what a failure means. Only `nofail` (failures are ignored) makes it a plain `string`.
+const process_result_type: Type = functions.ProcessResult.withType(&.string);
+
 /// `Error.Incomplete` means "already reported (or the syntax tree is broken), skip this element".
 /// Turns it into `null` so loops can write `orelse continue` instead of a `catch |err| switch`.
 /// Every other error is passed through.
@@ -181,8 +185,9 @@ pub const Sema = struct {
     }
 
     /// `noreturn` (`break`, `continue`, an `@error(..)` call, ...) is only meaningful as a branch of
-    /// `if`/`switch` or as a statement. Wherever a value is *consumed* (operand, argument, condition,
-    /// list item, ...) the consuming code can never run, so that is reported as unreachable code.
+    /// `if`/`switch`/`catch` or as a statement. Wherever a value is *consumed* (operand, argument,
+    /// condition, list item, ...) the consuming code can never run, so that is reported as
+    /// unreachable code.
     ///
     /// The type becomes `unknown`, so nothing downstream reports the same problem again.
     /// Returns `true` when the expression was rejected.
@@ -598,26 +603,6 @@ pub const Sema = struct {
             const pattern = stringAttribute(&attributes, .pattern);
             const int = attributes.contains(.int);
 
-            // const min = if (attributes.getAssertOne(.min)) |value|
-            //     value.?.number
-            // else
-            //     null;
-
-            // const max = if (attributes.getAssertOne(.max)) |value|
-            //     value.?.number
-            // else
-            //     null;
-
-            // const min_items: ?i64 = if (attributes.getAssertOne(.min_items)) |value|
-            //     @intFromFloat(value.?.number)
-            // else
-            //     null;
-
-            // const max_items: ?i64 = if (attributes.getAssertOne(.max_items)) |value|
-            //     @intFromFloat(value.?.number)
-            // else
-            //     null;
-
             const has_name = blk: {
                 const has_name = long != null or short != null;
 
@@ -665,7 +650,6 @@ pub const Sema = struct {
                 .short = short,
                 .long = long,
                 .desc = desc,
-
                 .pattern = pattern,
                 .int = int,
             });
@@ -696,7 +680,10 @@ pub const Sema = struct {
                 }
             else
                 return Error.Incomplete,
-            .string => .string,
+            .string => switch (expected_type) {
+                .@"error" => .@"error",
+                else => .string,
+            },
             .list => .list,
             .paren => |inner| if (inner.count() == 1)
                 return self.assertLiteral(inner.assertOne(), expected_type)
@@ -807,11 +794,34 @@ pub const Sema = struct {
                     },
                 };
             },
-            .string => |string| .{
-                .string = if (string.lit) |token|
-                    token.lexeme
+            // process string
+            .string => |string| {
+                const value = if (string.lit) |lit|
+                    lit.lexeme
                 else
-                    "",
+                    "";
+
+                switch (expected_type) {
+                    .@"error" => |e| {
+                        for (e.names, 0..) |n, idx| {
+                            if (std.mem.eql(u8, n, value))
+                                return .{
+                                    .@"error" = .{
+                                        .type = e,
+                                        .id = idx,
+                                    },
+                                };
+                        } else {
+                            try self.diagnostics.err(
+                                expr.node.trimmedSpan(),
+                                "invalid error type: got '{s}', expected '{f}'",
+                                .{ value, expected_type },
+                            );
+                            return Error.Incomplete;
+                        }
+                    },
+                    else => return .{ .string = value },
+                }
             },
             else => unreachable,
         };
@@ -971,16 +981,14 @@ pub const Sema = struct {
                 const script = attributes.contains(.script);
 
                 const subject_node = proc.subject orelse return Error.Incomplete;
-                const result = try self.analyseExpr(
-                    subject_node,
-                    scope,
-                );
+                var subject = try self.analyseExpr(subject_node, scope);
+                _ = try self.rejectNoreturn(subject_node, &subject, "a process subject", .{});
 
-                if (result.type != .string and result.type != .unknown) {
+                if (subject.type != .string and subject.type != .unknown) {
                     try self.diagnostics.err(
                         subject_node.node.trimmedSpan(),
                         "process subject must be of 'string' type: got '{f}'",
-                        .{result.type},
+                        .{subject.type},
                     );
                 }
                 return .{
@@ -988,7 +996,7 @@ pub const Sema = struct {
                         .nofail = nofail,
                         .noecho = noecho,
                         .script = script,
-                        .command = result.expr,
+                        .command = subject.expr,
                     },
                 };
             },
@@ -1014,14 +1022,20 @@ pub const Sema = struct {
                 const expr = inner orelse return Error.Incomplete;
                 const result = try self.analyseExpr(expr, scope);
 
-                // `noreturn` is fine as a statement (`break`, `continue`, `@error(..)`), and
-                // `unknown` says nothing about the value; whoever produced it already reported why
-                if (result.type != .void and result.type != .noreturn and result.type != .unknown) {
-                    try self.diagnostics.err(
+                switch (result.type) {
+                    // `noreturn` is fine as a statement (`break`, `continue`, `@error(..)`), and
+                    // `unknown` says nothing about the value; whoever produced it already reported why
+                    .void, .noreturn, .unknown => {},
+                    .result => try self.diagnostics.err(
+                        expr.node.trimmedSpan(),
+                        "unhandled result of type '{f}': handle the failure with 'try' or 'catch', or bind it to '_' (`_ := ...`) if ignoring it is intended",
+                        .{result.type},
+                    ),
+                    else => try self.diagnostics.err(
                         expr.node.trimmedSpan(),
                         "unused value of type '{f}': bind it to '_' (`_ := ...`) if discarding it is intended",
                         .{result.type},
-                    );
+                    ),
                 }
 
                 return .{ .expr = result.expr };
@@ -1034,18 +1048,17 @@ pub const Sema = struct {
 
         var statements: std.ArrayList(ir.ParallelBlockStatement) = try .initCapacity(self.arena.allocator(), parallel_block.statements.count());
 
-        var it = parallel_block.statements.iter();
-
+        // statements of a parallel block run detached from the surrounding loop, so
+        // `break` / `continue` have nothing to refer to in there
         const prev_loop_context = self.setLoopContext(.default);
-        self.restoreLoopContext(prev_loop_context);
+        defer self.restoreLoopContext(prev_loop_context);
+
+        var it = parallel_block.statements.iter();
 
         while (it.next()) |stmt_node| {
             //TODO: add warining, if its non value discard binding
             const stmt_scope = try self.createScope(scope, stmt_node.node);
-            const stmt = self.analyseStatement(stmt_node, stmt_scope) catch |err| switch (err) {
-                Error.Incomplete => continue,
-                else => return err,
-            };
+            const stmt = try skipIncomplete(self.analyseStatement(stmt_node, stmt_scope)) orelse continue;
 
             statements.appendAssumeCapacity(.{
                 .scope = stmt_scope,
@@ -1062,10 +1075,7 @@ pub const Sema = struct {
     fn analyseInStmt(self: *Sema, in_stmt: ast.InStmt, scope: *Scope) Error!ir.InStmt {
         const subject_node = in_stmt.subject orelse return Error.Incomplete;
 
-        var subject = try self.analyseExpr(
-            in_stmt.subject orelse return Error.Incomplete,
-            scope,
-        );
+        var subject = try self.analyseExpr(subject_node, scope);
         _ = try self.rejectNoreturn(subject_node, &subject, "in subject", .{});
 
         if (subject.type != .string and subject.type != .unknown) {
@@ -1493,6 +1503,22 @@ pub const Sema = struct {
         };
     }
 
+    /// Boxes the IR of a compound expression (`if`, `switch`, `try`, ...) and wraps it as the
+    /// `ir.Expr` variant `tag`, which must hold a pointer to that IR.
+    fn wrap(
+        self: *Sema,
+        comptime tag: std.meta.FieldEnum(ir.Expr),
+        result: anytype,
+    ) Error!ExprResult(ir.Expr) {
+        const ptr = try self.create(@TypeOf(result.expr), result.expr);
+
+        return .{
+            .expr = @unionInit(ir.Expr, @tagName(tag), ptr),
+            .type = result.type,
+            .is_static = result.is_static,
+        };
+    }
+
     /// Strict entry point. Use it wherever a value is consumed (bindings, conditions, operands,
     /// arguments of lambda calls, range bounds, slice operands, ...): the type of what is
     /// consumed must be fully known.
@@ -1535,8 +1561,9 @@ pub const Sema = struct {
 
     /// Gives the empty list literals reachable through `expr` the element type `target`
     /// prescribes, so the interpreter never sees an `unknown` type. Only forms that pass a
-    /// value through can contain such a literal: a list literal, `if`, `switch` and `for`.
-    /// Everything else already has a complete type (a slice, for one, requires a complete operand).
+    /// value through can contain such a literal: a list literal, `if`, `switch`, `for` and the
+    /// handler of a `catch`. Everything else already has a complete type (a slice, for one,
+    /// requires a complete operand, and so does the subject of `try` / `catch`).
     fn retypeExpr(expr: ir.Expr, target: Type) ir.Expr {
         switch (expr) {
             .list => |list| {
@@ -1561,7 +1588,9 @@ pub const Sema = struct {
             },
             .switch_expr => |ptr| {
                 ptr.type = target;
-                ptr.else_case = retypeExpr(ptr.else_case, target);
+
+                if (ptr.else_case) |else_case|
+                    ptr.else_case = retypeExpr(else_case, target);
 
                 var it = ptr.cases.iterator();
                 while (it.next()) |entry| {
@@ -1577,6 +1606,11 @@ pub const Sema = struct {
 
                 ptr.type = items_type;
                 ptr.body = retypeExpr(ptr.body, items_type);
+                return expr;
+            },
+            .catch_expr => |ptr| {
+                ptr.type = target;
+                ptr.expr = retypeExpr(ptr.expr, target);
                 return expr;
             },
             else => return expr,
@@ -1630,6 +1664,8 @@ pub const Sema = struct {
                 };
             } else Error.Incomplete,
             .list => |list| {
+                const alloc = self.arena.allocator();
+
                 var it = list.iter();
 
                 var items: std.ArrayList(ir.Expr.List.Item) = .empty;
@@ -1642,94 +1678,76 @@ pub const Sema = struct {
                 var items_type: Type = .unknown;
 
                 while (it.next()) |item| {
-                    switch (@as(ast.ListItem, item).classify()) {
-                        .spread => |spread| {
-                            const item_expr = spread.expr orelse {
-                                broken = true;
-                                continue;
-                            };
+                    const class = @as(ast.ListItem, item).classify();
+                    const is_spread = class == .spread;
 
-                            var result: ExprResult(ir.Expr) = try skipIncomplete(
-                                self.analyseExpr(item_expr, scope),
-                            ) orelse {
-                                broken = true;
-                                continue;
-                            };
+                    const maybe_node: ?ast.Expr = switch (class) {
+                        .spread => |spread| spread.expr,
+                        .expr => |plain| plain,
+                    };
+                    const item_node = maybe_node orelse {
+                        broken = true;
+                        continue;
+                    };
 
-                            if (try self.rejectNoreturn(item_expr, &result, "a list item", .{})) {
-                                broken = true;
-                                continue;
-                            }
+                    var result: ExprResult(ir.Expr) = try skipIncomplete(
+                        self.analyseExpr(item_node, scope),
+                    ) orelse {
+                        broken = true;
+                        continue;
+                    };
 
-                            if (result.type != .list and result.type != .unknown) {
-                                try self.diagnostics.err(
-                                    item_expr.node.trimmedSpan(),
-                                    "only list can be spread, got '{f}'",
-                                    .{result.type},
-                                );
-                                broken = true;
-                                continue;
-                            }
-
-                            items_type = try Type.unify(self.arena.allocator(), items_type, result.type.list.*) orelse blk: {
-                                try self.diagnostics.err(
-                                    item_expr.node.trimmedSpan(),
-                                    "list items must all have the same type: expected '{f}', got '{f}'",
-                                    .{ items_type, result.type.list.* },
-                                );
-                                break :blk items_type;
-                            };
-
-                            if (result.is_static == false)
-                                is_static = false;
-
-                            try items.append(self.arena.allocator(), .{
-                                .expr = try self.create(ir.Expr, result.expr),
-                                .is_spread = true,
-                            });
-                        },
-                        .expr => |item_expr| {
-                            var result: ExprResult(ir.Expr) = try skipIncomplete(
-                                self.analyseExpr(item_expr, scope),
-                            ) orelse {
-                                broken = true;
-                                continue;
-                            };
-
-                            if (try self.rejectNoreturn(item_expr, &result, "a list item", .{})) {
-                                broken = true;
-                                continue;
-                            }
-
-                            items_type = try Type.unify(self.arena.allocator(), items_type, result.type) orelse blk: {
-                                try self.diagnostics.err(
-                                    item_expr.node.trimmedSpan(),
-                                    "list items must all have the same type: expected '{f}', got '{f}'",
-                                    .{ items_type, result.type },
-                                );
-                                break :blk items_type;
-                            };
-
-                            if (result.is_static == false)
-                                is_static = false;
-
-                            try items.append(self.arena.allocator(), .{
-                                .expr = try self.create(ir.Expr, result.expr),
-                                .is_spread = false,
-                            });
-                        },
+                    if (try self.rejectNoreturn(item_node, &result, "a list item", .{})) {
+                        broken = true;
+                        continue;
                     }
+
+                    // what this item adds to the list: itself, or its elements for a spread
+                    const element_type: Type = if (!is_spread) result.type else switch (result.type) {
+                        .list => |inner| inner.*,
+                        // an `unknown` value may be a list: it fits, and tells nothing about the elements
+                        .unknown => .unknown,
+                        else => |t| {
+                            try self.diagnostics.err(
+                                item_node.node.trimmedSpan(),
+                                "only a list can be spread, got '{f}'",
+                                .{t},
+                            );
+                            broken = true;
+                            continue;
+                        },
+                    };
+
+                    items_type = try Type.unify(alloc, items_type, element_type) orelse blk: {
+                        try self.diagnostics.err(
+                            item_node.node.trimmedSpan(),
+                            "list items must all have the same type: expected '{f}', got '{f}'",
+                            .{ items_type, element_type },
+                        );
+                        break :blk items_type;
+                    };
+
+                    if (result.is_static == false)
+                        is_static = false;
+
+                    try items.append(alloc, .{
+                        .expr = try self.create(ir.Expr, result.expr),
+                        .is_spread = is_spread,
+                    });
                 }
 
                 // an item failed and nothing else is known: do not report the missing type on top
                 if (broken and items_type == .unknown)
                     return unknownResult();
 
-                const final_items = try items.toOwnedSlice(self.arena.allocator());
+                const final_items = try items.toOwnedSlice(alloc);
 
-                // `[[], [1]]`: the first item learns its type from the second one
+                const list_type: Type = .{ .list = try self.create(Type, items_type) };
+
+                // `[[], [1]]`: the first item learns its type from the second one. A spread is
+                // itself a list, so it learns the type of the whole literal.
                 for (final_items) |item| {
-                    item.expr.* = retypeExpr(item.expr.*, items_type);
+                    item.expr.* = retypeExpr(item.expr.*, if (item.is_spread) list_type else items_type);
                 }
 
                 return .{
@@ -1739,7 +1757,7 @@ pub const Sema = struct {
                             .items_type = items_type,
                         },
                     },
-                    .type = .{ .list = try self.create(Type, items_type) },
+                    .type = list_type,
                     .is_static = is_static,
                 };
             },
@@ -1764,44 +1782,31 @@ pub const Sema = struct {
                 };
             },
             .paren => |paren| {
-                const count = blk: {
-                    var count: usize = 0;
-                    var it = paren.iter();
-                    while (it.next()) |_|
-                        count += 1;
+                const alloc = self.arena.allocator();
+                const count = paren.count();
 
-                    break :blk count;
-                };
-                // just paren expr, not tuple
-                if (count == 1) {
-                    var it = paren.iter();
-                    return try self.analyseExprPartial(it.next().?, scope);
-                }
+                // just a parenthesised expression, not a tuple
+                if (count == 1)
+                    return try self.analyseExprPartial(paren.assertOne(), scope);
 
-                const types = try self.arena.allocator().alloc(Type, count);
-                const values = try self.arena.allocator().alloc(ir.Expr, count);
+                const types = try alloc.alloc(Type, count);
+                const values = try alloc.alloc(ir.Expr, count);
 
                 var is_static = true;
-                var broken = false;
-
                 var it = paren.iter();
 
-                for (0..count) |idx| {
+                for (types, values) |*type_out, *value_out| {
                     const item = it.next() orelse unreachable;
-                    var result = try self.analyseExprPartial(
-                        item,
-                        scope,
-                    );
 
-                    if (try self.rejectNoreturn(item, &result, "a tuple element", .{})) {
-                        broken = true;
-                    }
+                    // an element may be incomplete (`([], 1)`), whatever consumes the tuple decides
+                    var result = try self.analyseExprPartial(item, scope);
+                    _ = try self.rejectNoreturn(item, &result, "a tuple element", .{});
 
                     if (result.is_static == false)
                         is_static = false;
 
-                    types[idx] = result.type;
-                    values[idx] = result.expr;
+                    type_out.* = result.type;
+                    value_out.* = result.expr;
                 }
 
                 return .{
@@ -1928,19 +1933,10 @@ pub const Sema = struct {
                     .type = result_type,
                 };
             },
-            .builtin_call => |builtin_call| {
-                const result = try self.analyseBuiltinCall(builtin_call, scope);
-
-                const ptr = try self.create(ir.BuiltinCall, result.expr);
-
-                return .{
-                    .expr = .{
-                        .builtin_call = ptr,
-                    },
-                    .type = result.type,
-                    .is_static = result.is_static,
-                };
-            },
+            .builtin_call => |builtin_call| try self.wrap(
+                .builtin_call,
+                try self.analyseBuiltinCall(builtin_call, scope),
+            ),
             .lambda => |lambda| {
                 std.debug.assert(scope.child(lambda.node) == null);
                 var it = lambda.params.iter();
@@ -2093,95 +2089,46 @@ pub const Sema = struct {
                     .is_static = false,
                 };
             },
-            .@"switch" => |@"switch"| {
-                const result = try self.analyseSwitchExpr(@"switch", scope);
-
-                const ptr = try self.create(ir.SwitchExpr, result.expr);
-                return .{
-                    .expr = .{ .switch_expr = ptr },
-                    .type = result.type,
-                    .is_static = result.is_static,
-                };
-            },
-            .@"if" => |@"if"| {
-                const result = try self.analyseIfExpr(@"if", scope);
-
-                const ptr = try self.create(ir.IfExpr, result.expr);
-                return .{
-                    .expr = .{ .if_expr = ptr },
-                    .type = result.type,
-                    .is_static = result.is_static,
-                };
-            },
-            .@"for" => |@"for"| {
-                const result = try self.analyseForExpr(@"for", scope);
-
-                const ptr = try self.create(ir.ForExpr, result.expr);
-                return .{
-                    .expr = .{ .for_expr = ptr },
-                    .type = result.type,
-                    .is_static = result.is_static,
-                };
-            },
+            .@"switch" => |@"switch"| try self.wrap(
+                .switch_expr,
+                try self.analyseSwitchExpr(@"switch", scope),
+            ),
+            .@"if" => |@"if"| try self.wrap(
+                .if_expr,
+                try self.analyseIfExpr(@"if", scope),
+            ),
+            .@"for" => |@"for"| try self.wrap(
+                .for_expr,
+                try self.analyseForExpr(@"for", scope),
+            ),
             .process => |process| {
                 const attributes = try AttributesResolver.resolveAssertNoPlatform(self, .process_expr, process.attributes);
 
                 const subject_node = process.subject orelse return Error.Incomplete;
 
-                const result = try self.analyseExpr(
-                    subject_node,
-                    scope,
-                );
+                var subject = try self.analyseExpr(subject_node, scope);
+                _ = try self.rejectNoreturn(subject_node, &subject, "a process subject", .{});
 
-                if (result.type != .string and result.type != .unknown) {
+                if (subject.type != .string and subject.type != .unknown) {
                     try self.diagnostics.err(
                         subject_node.node.trimmedSpan(),
                         "process subject must be of 'string' type: got '{f}'",
-                        .{result.type},
+                        .{subject.type},
                     );
                 }
 
-                var result_type: Type = .string;
-
                 const nofail = attributes.contains(.nofail);
-                const script = attributes.contains(.script);
-
-                const fallback: ?ir.Expr = blk: {
-                    const fallback = process.fallback orelse break :blk null;
-
-                    if (nofail) {
-                        try self.diagnostics.err(
-                            fallback.node.trimmedSpan(),
-                            "a process with 'nofail' cannot have a fallback: failures are ignored, so the fallback would never run",
-                            .{},
-                        );
-                    }
-
-                    const fallback_node = fallback.expr orelse return Error.Incomplete;
-                    const fallback_expr = try self.analyseExpr(fallback_node, scope);
-
-                    result_type = try Type.unify(self.arena.allocator(), result_type, fallback_expr.type) orelse rt: {
-                        try self.diagnostics.err(
-                            fallback_node.node.trimmedSpan(),
-                            "invalid fallback type: a process yields 'string', got '{f}'",
-                            .{fallback_expr.type},
-                        );
-                        break :rt result_type;
-                    };
-
-                    break :blk fallback_expr.expr;
-                };
 
                 const ptr = try self.create(ir.ProcessExpr, .{
                     .nofail = nofail,
-                    .script = script,
-                    .command = result.expr,
-                    .fallback = fallback,
+                    .script = attributes.contains(.script),
+                    .command = subject.expr,
                 });
 
                 return .{
                     .expr = .{ .process = ptr },
-                    .type = result_type,
+                    // `nofail` ignores failures, otherwise they are for `try` / `catch` to handle
+                    .type = if (nofail) .string else process_result_type,
                     .is_static = false,
                 };
             },
@@ -2224,33 +2171,14 @@ pub const Sema = struct {
                     .type = result_type,
                 };
             },
-            .with => |with_expr| {
-                const result = try self.analyseWithExpr(
-                    with_expr,
-                    scope,
-                );
-
-                const ptr = try self.create(ir.WithExpr, result.expr);
-
-                return .{
-                    .expr = .{
-                        .with = ptr,
-                    },
-                    .type = result.type,
-                    .is_static = result.is_static,
-                };
-            },
-            .in => |in_expr| {
-                const result = try self.analyseInExpr(in_expr, scope);
-
-                const ptr = try self.create(ir.InExpr, result.expr);
-
-                return .{
-                    .expr = .{ .in = ptr },
-                    .is_static = result.is_static,
-                    .type = result.type,
-                };
-            },
+            .with => |with_expr| try self.wrap(
+                .with,
+                try self.analyseWithExpr(with_expr, scope),
+            ),
+            .in => |in_expr| try self.wrap(
+                .in,
+                try self.analyseInExpr(in_expr, scope),
+            ),
             .@"continue" => |token| {
                 if (self.loop_context.continuable == false) {
                     try self.diagnostics.err(
@@ -2280,6 +2208,153 @@ pub const Sema = struct {
                     .is_static = true,
                 };
             },
+            .try_expr => |subject| try self.wrap(
+                .try_expr,
+                try self.analyseTryExpr(subject, scope),
+            ),
+            .catch_expr => |catch_expr| try self.wrap(
+                .catch_expr,
+                try self.analyseCatchExpr(catch_expr, scope),
+            ),
+        };
+    }
+
+    /// `try expr`: `expr` must be a result, the value of `try` is its payload. A failure is not
+    /// handled here, it leaves the enclosing task (`catch` is the form that handles it).
+    ///
+    /// A subject that is not a result is reported, but the expression still gets a (`unknown`)
+    /// type instead of failing, so that its uses do not cascade.
+    fn analyseTryExpr(self: *Sema, subject: ?ast.Expr, scope: *Scope) Error!ExprResult(ir.TryExpr) {
+        const subject_node = subject orelse return Error.Incomplete;
+
+        // strict: nothing around a `try` could complete the type of what it unwraps
+        var operand = try self.analyseExpr(subject_node, scope);
+        _ = try self.rejectNoreturn(subject_node, &operand, "the operand of 'try'", .{});
+
+        if (operand.type != .result and operand.type != .unknown) {
+            try self.diagnostics.err(
+                subject_node.node.trimmedSpan(),
+                "'try' needs a value that can fail, got '{f}': only results can be unwrapped",
+                .{operand.type},
+            );
+        }
+
+        // `unknown`: inside a template, or already reported, so nothing is known about the payload
+        const payload: Type = switch (operand.type) {
+            .result => |r| r.payload.*,
+            else => .unknown,
+        };
+
+        return .{
+            .expr = .{
+                .subject = operand.expr,
+                .type = payload,
+            },
+            .type = payload,
+            .is_static = operand.is_static,
+        };
+    }
+
+    /// `subject catch expr` / `subject catch |err| expr`.
+    ///
+    /// The subject must be a result `E!T`. The handler runs when it failed, with `err` (an `E`)
+    /// in scope, and has to produce a `T`: the payload and the handler type are unified, so a
+    /// handler may be incomplete (`catch []`) and learns its type from the payload. A diverging
+    /// handler (`catch break`, `catch @error(..)`) fits any payload.
+    fn analyseCatchExpr(self: *Sema, catch_expr: ast.CatchExpr, scope: *Scope) Error!ExprResult(ir.CatchExpr) {
+        const alloc = self.arena.allocator();
+
+        const subject_node = catch_expr.subject orelse return Error.Incomplete;
+        const expr_node = catch_expr.expr orelse return Error.Incomplete;
+
+        var subject = try self.analyseExpr(subject_node, scope);
+        _ = try self.rejectNoreturn(subject_node, &subject, "the subject of 'catch'", .{});
+
+        if (subject.type != .result and subject.type != .unknown) {
+            try self.diagnostics.err(
+                subject_node.node.trimmedSpan(),
+                "'catch' needs a value that can fail, got '{f}': only results can be caught",
+                .{subject.type},
+            );
+        }
+
+        // Anything that is not a result (`unknown`, or already reported) leaves both unknown. The
+        // handler is still analysed with them, so its own mistakes are reported and a capture
+        // does not produce "cannot find value" errors.
+        const payload: Type = switch (subject.type) {
+            .result => |r| r.payload.*,
+            else => .unknown,
+        };
+        const error_type: Type = switch (subject.type) {
+            .result => |r| r.getErrorType(),
+            else => .unknown,
+        };
+
+        const catch_scope = try self.createScope(scope, catch_expr.node);
+
+        var capture: ?*ir.Capture = null;
+
+        if (catch_expr.captures) |captures_node| {
+            const captures = try captures_node.collect(alloc);
+
+            if (captures.len != 1) {
+                try self.diagnostics.err(
+                    captures_node.node.trimmedSpan(),
+                    "'catch' takes exactly one capture, the error: got {}",
+                    .{captures.len},
+                );
+            }
+
+            const target: ?ast.Target = if (captures.len > 0) captures[0].unwrap() else null;
+
+            if (target) |t| {
+                const ptr = try self.create(ir.Capture, .{
+                    .target = undefined,
+                    .type = error_type,
+                });
+
+                ptr.target = try self.destructureType(
+                    ir.Capture,
+                    "capture",
+                    ptr,
+                    t,
+                    error_type,
+                    catch_scope,
+                );
+
+                capture = ptr;
+            }
+        }
+
+        // partial: the payload completes an empty list (`catch []`)
+        var handler = try self.analyseExprPartial(expr_node, catch_scope);
+
+        const result_type: Type = blk: {
+            // a diverging handler never produces a value, so it says nothing about the type
+            if (handler.type == .noreturn) break :blk payload;
+
+            break :blk try Type.unify(alloc, payload, handler.type) orelse {
+                try self.diagnostics.err(
+                    expr_node.node.trimmedSpan(),
+                    "'catch' must produce the same type as the value it guards: expected '{f}', got '{f}'",
+                    .{ payload, handler.type },
+                );
+                break :blk payload;
+            };
+        };
+
+        try coerce(alloc, &handler, result_type);
+
+        return .{
+            .expr = .{
+                .subject = subject.expr,
+                .capture = capture,
+                .scope = catch_scope,
+                .expr = handler.expr,
+                .type = result_type,
+            },
+            .type = result_type,
+            .is_static = subject.is_static and handler.is_static,
         };
     }
 
@@ -2373,7 +2448,7 @@ pub const Sema = struct {
         if (in_subjects.len != in_captures.len) {
             try self.diagnostics.err(
                 with_expr.node.trimmedSpan(),
-                "'with' needs exacly one capture per subject: got {} capture(s) for {} subject(s)",
+                "'with' needs exactly one capture per subject: got {} capture(s) for {} subject(s)",
                 .{ in_captures.len, in_subjects.len },
             );
         }
@@ -2390,7 +2465,9 @@ pub const Sema = struct {
             const capture: ast.Target = cap.unwrap() orelse continue;
             const subject = sub.unwrap() orelse continue;
 
-            const result = try self.analyseExprPartial(subject, scope);
+            // a subject is consumed (its type becomes the type of a capture), so it is strict
+            var result = try self.analyseExpr(subject, scope);
+            _ = try self.rejectNoreturn(subject, &result, "a 'with' subject", .{});
 
             captures[idx] = .{
                 .target = try self.destructureType(
@@ -2538,6 +2615,11 @@ pub const Sema = struct {
     fn analyseSwitchExpr(self: *Sema, switch_expr: ast.SwitchExpr, scope: *Scope) Error!ExprResult(ir.SwitchExpr) {
         const subject = try self.analyseSwitchSubject(switch_expr.subject, scope);
 
+        const exhaust_count = switch (subject.type) {
+            .@"error" => |e| e.names.len,
+            else => null,
+        };
+
         var is_static = subject.is_static;
 
         var cases: ir.SwitchExpr.CasesStorage = .empty;
@@ -2574,23 +2656,42 @@ pub const Sema = struct {
         while (p_it.next()) |case| : (idx += 1) {
             const branch_expr = retypeExpr(branches.items[idx].expr, result_type);
 
-            try self.registerCase(&cases, &else_case, case.pattern, subject.type, branch_expr);
+            try self.registerCase(
+                &cases,
+                &else_case,
+                case.pattern,
+                subject.type,
+                branch_expr,
+            );
         }
 
-        const final_else_case = else_case orelse {
+        const exhausted = cases.count() == exhaust_count;
+        if (exhausted) {
+            if (else_case != null) {
+                const else_case_span: Span = blk: {
+                    var it = switch_expr.body.iter();
+                    break :blk while (it.next()) |el| {
+                        const case = @as(ast.SwitchExprCase, el);
+                        if (case.pattern.classify() == .@"else")
+                            break case.node.trimmedSpan();
+                    } else unreachable;
+                };
+
+                try self.diagnostics.warn(else_case_span, "switch cases exhausted, else unreachable", .{});
+            }
+        } else if (else_case == null) {
             try self.diagnostics.err(
                 switch_expr.body.node.trimmedSpan(),
                 "a switch expression needs an 'else' case: it has to produce a value for every subject",
                 .{},
             );
-            return Error.Incomplete;
-        };
+        }
 
         return .{
             .expr = .{
                 .subject = subject.expr,
                 .cases = cases,
-                .else_case = final_else_case,
+                .else_case = else_case,
                 .type = result_type, //TODO: finish
             },
             .is_static = is_static,
@@ -2598,7 +2699,7 @@ pub const Sema = struct {
         };
     }
 
-    /// "int, string, list<number>": the argument types of a call, for diagnostics.
+    /// "number, string, []number": the argument types of a call, for diagnostics.
     fn describeArgTypes(allocator: std.mem.Allocator, results: []const ExprResult(ir.Expr)) ![]const u8 {
         var w: std.Io.Writer.Allocating = .init(allocator);
 
@@ -2610,6 +2711,8 @@ pub const Sema = struct {
         return try w.toOwnedSlice();
     }
 
+    /// A call to a builtin. One that can fail returns a result (`E!T`), which is handled where
+    /// it is used (`try` / `catch`), so there is nothing special about it here.
     fn analyseBuiltinCall(self: *Sema, builtin_call: ast.BuiltinCall, scope: *Scope) Error!ExprResult(ir.BuiltinCall) {
         const alloc = self.arena.allocator();
 
@@ -2679,7 +2782,7 @@ pub const Sema = struct {
             switch (param) {
                 .value => |target| {
                     // the parameter says what an incomplete argument has to be
-                    try coerce(self.arena.allocator(), result, target);
+                    try coerce(alloc, result, target);
                     try self.requireComplete(node, result);
                     out.* = result.expr;
                 },
@@ -2700,7 +2803,7 @@ pub const Sema = struct {
                             const instance = try self.getLambdaInstance(template, expected.params);
 
                             // TODO: consider if that's enough, or type compare is required too
-                            if (try Type.unify(self.arena.allocator(), instance.return_type, expected.return_type) == null) {
+                            if (try Type.unify(alloc, instance.return_type, expected.return_type) == null) {
                                 try self.diagnostics.err(
                                     template.template.body.?.node.trimmedSpan(),
                                     "invalid lambda result type for '{s}': expected '{f}', got '{f}'",
@@ -2724,55 +2827,12 @@ pub const Sema = struct {
             }
         }
 
-        var result_type = resolved_function.return_type;
-
-        var fallback: ?ir.Expr = null;
-
-        if (builtin_call.fallback) |fb| {
-            const fb_node = fb.expr orelse return Error.Incomplete;
-
-            switch (resolved_function.return_type) {
-                .result => |inner| {
-                    const fb_result = try self.analyseExpr(fb_node, scope);
-
-                    result_type = try Type.unify(self.arena.allocator(), inner.*, fb_result.type) orelse blk: {
-                        try self.diagnostics.err(
-                            fb_node.node.trimmedSpan(),
-                            "invalid fallback type for '{s}': expected '{f}', got '{f}'",
-                            .{ builtin_call_name, inner.*, fb_result.type },
-                        );
-                        break :blk inner.*;
-                    };
-                    fallback = fb_result.expr;
-                },
-                // an overload that could not be told apart: nothing to check the fallback against
-                .unknown => {
-                    const fb_result = try self.analyseExpr(fb_node, scope);
-                    fallback = fb_result.expr;
-                },
-                else => {
-                    try self.diagnostics.err(
-                        fb.node.trimmedSpan(),
-                        "'{s}' cannot fail, so it does not take a fallback expression",
-                        .{builtin_call_name},
-                    );
-                },
-            }
-        } else if (resolved_function.return_type == .result) {
-            try self.diagnostics.err(
-                builtin_call.node.trimmedSpan(),
-                "'{s}' can fail and requires a fallback expression",
-                .{builtin_call_name},
-            );
-        }
-
         return .{
             .expr = .{
                 .function = resolved_function,
                 .args = resolved_args,
-                .fallback = fallback,
             },
-            .type = result_type,
+            .type = resolved_function.return_type,
             .is_static = false,
         };
     }

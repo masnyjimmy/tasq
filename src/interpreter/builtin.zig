@@ -5,7 +5,7 @@ const platform = lib.platform;
 const program = lib.program;
 
 const compiler = @import("compiler");
-const functions = compiler.functions;
+const fns = compiler.functions;
 const Type = compiler.Type;
 const ir = compiler.ir;
 const Value = compiler.Value;
@@ -14,17 +14,18 @@ const Scope = @import("Scope.zig");
 const Runtime = @import("Runtime.zig");
 const globs = @import("glob.zig");
 
-const functions_count = functions.definitions.items.len;
-
 pub const Error = Runtime.Error;
 
 const Context = Runtime.Ctx;
 
+/// `return_type` is the type the call was resolved to. Handlers of functions that can fail get
+/// the whole result type (`E!T`) there and pass it on to `fail` / `ok`; the others ignore it.
 pub fn callFunction(
     runtime: *Runtime,
     ctx: Context,
-    id: functions.definitions.Id,
+    id: fns.definitions.Id,
     args: []const Value,
+    return_type: *const Type,
 ) Error!Value {
     switch (id) {
         inline else => |tag| {
@@ -32,32 +33,9 @@ pub fn callFunction(
 
             const handler: *const handlers.Signature = &@field(handlers, name);
 
-            return handler(runtime, ctx, args);
+            return handler(runtime, ctx, args, return_type);
         },
     }
-}
-
-pub fn makeResult(scope: *Scope, result_type: *const Type, value: ?Value) Error!Value {
-    std.debug.assert(result_type.* != .result);
-
-    if (value) |v| {
-        const ptr = try scope.arena.allocator().create(Value);
-        ptr.* = try v.clone(scope.arena.allocator());
-
-        return .{
-            .result = .{
-                .type = result_type,
-                .value = ptr,
-            },
-        };
-    }
-
-    return .{
-        .result = .{
-            .type = result_type,
-            .value = null,
-        },
-    };
 }
 
 fn callLambda(
@@ -95,20 +73,75 @@ fn callLambda(
     );
 }
 
+/// The failure of `at` / `first` / `last`, for both strings and lists.
+fn outOfBounds(
+    ctx: Context,
+    return_type: *const Type,
+    comptime fmt: []const u8,
+    args: anytype,
+) Error!Value {
+    return fns.PosResult.fail(ctx.arena(), return_type, .out_of_bounds, fmt, args);
+}
+
 const handlers = struct {
-    const Signature = fn (*Runtime, Context, []const Value) Error!Value;
+    const Signature = fn (*Runtime, Context, []const Value, *const Type) Error!Value;
 
-    fn env(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
-        const key = args[0].string;
+    // ---------------------------------------------------------------------------------------
+    // debug
+    // ---------------------------------------------------------------------------------------
 
-        return if (ctx.scope.environ.get(key)) |value| makeResult(
-            ctx.scope,
-            &.string,
-            .{ .string = value },
-        ) else makeResult(ctx.scope, &.string, null);
+    fn @"error"(self: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
+        const message = args[0].string;
+
+        try self.printer.printStyled(
+            self.allocator,
+            .{ .fg = .bright_red },
+            "{s}\n",
+            .{message},
+        );
+
+        return Error.Abort;
     }
 
-    fn exists(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn print(self: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
+        const message = args[0].string;
+
+        try self.printer.print(
+            self.allocator,
+            "{s}\n",
+            .{message},
+        );
+
+        return .void;
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // type casts
+    // ---------------------------------------------------------------------------------------
+
+    fn parse_number(_: *Runtime, ctx: Context, args: []const Value, return_type: *const Type) Error!Value {
+        const str = args[0].string;
+
+        const number = std.fmt.parseFloat(f64, str) catch return fns.ParseNumberResult.fail(
+            ctx.arena(),
+            return_type,
+            .invalid_format,
+            "'{s}' is not a valid number",
+            .{str},
+        );
+
+        return fns.ParseNumberResult.ok(
+            ctx.arena(),
+            return_type,
+            .{ .number = number },
+        );
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // fs
+    // ---------------------------------------------------------------------------------------
+
+    fn exists(self: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const path = args[0].string;
 
         const access_result = ctx.cwd.access(self.io, path, .{ .read = true });
@@ -121,9 +154,7 @@ const handlers = struct {
         return .{ .bool = result };
     }
 
-    fn read(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
-        const RESULT_TYPE = &@unionInit(Type, "string", {});
-
+    fn read(self: *Runtime, ctx: Context, args: []const Value, return_type: *const Type) Error!Value {
         const path = args[0].string;
 
         const content = ctx.cwd.readFileAlloc(
@@ -131,12 +162,22 @@ const handlers = struct {
             path,
             ctx.arena(),
             .limited(1024),
-        ) catch return makeResult(ctx.scope, RESULT_TYPE, null);
+        ) catch |err| return fns.ReadResult.fail(
+            ctx.arena(),
+            return_type,
+            .unable_to_read,
+            "error while trying to read file: {t}",
+            .{err},
+        );
 
-        return makeResult(ctx.scope, RESULT_TYPE, .{ .string = content });
+        return fns.ReadResult.ok(
+            ctx.arena(),
+            return_type,
+            .{ .string = content },
+        );
     }
 
-    fn glob(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn glob(self: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const pattern = args[0].string;
 
         var it = globs.iterate(
@@ -171,12 +212,12 @@ const handlers = struct {
         };
     }
 
-    fn basename(_: *Runtime, _: Context, args: []const Value) Error!Value {
+    fn basename(_: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
         const path = args[0].string;
         return .{ .string = std.fs.path.basename(path) };
     }
 
-    fn join_path(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn join_path(self: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const paths = args[0].list;
 
         const temp_buffer: [][]const u8 = try self.allocator.alloc([]const u8, paths.items.len);
@@ -191,7 +232,7 @@ const handlers = struct {
         };
     }
 
-    fn is_file(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn is_file(self: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const path = args[0].string;
 
         const stat = ctx.cwd.statFile(
@@ -203,7 +244,7 @@ const handlers = struct {
         return .{ .bool = stat.kind == .file };
     }
 
-    fn is_dir(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn is_dir(self: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const path = args[0].string;
 
         const stat = ctx.cwd.statFile(
@@ -215,13 +256,35 @@ const handlers = struct {
         return .{ .bool = stat.kind == .directory };
     }
 
-    fn os(_: *Runtime, _: Context, _: []const Value) Error!Value {
+    // ---------------------------------------------------------------------------------------
+    // misc
+    // ---------------------------------------------------------------------------------------
+
+    fn env(_: *Runtime, ctx: Context, args: []const Value, return_type: *const Type) Error!Value {
+        const key = args[0].string;
+
+        const value = ctx.scope.environ.get(key) orelse return fns.EnvResult.fail(
+            ctx.arena(),
+            return_type,
+            .not_found,
+            "'{s}' key not found",
+            .{key},
+        );
+
+        return fns.EnvResult.ok(
+            ctx.arena(),
+            return_type,
+            .{ .string = value },
+        );
+    }
+
+    fn os(_: *Runtime, _: Context, _: []const Value, _: *const Type) Error!Value {
         return .{
             .string = @tagName(platform.tag),
         };
     }
 
-    fn cwd(self: *Runtime, ctx: Context, _: []const Value) Error!Value {
+    fn cwd(self: *Runtime, ctx: Context, _: []const Value, _: *const Type) Error!Value {
         var buffer: [1024]u8 = undefined;
 
         const size = try ctx.cwd.realPath(self.io, &buffer);
@@ -231,7 +294,7 @@ const handlers = struct {
         };
     }
 
-    fn arch(_: *Runtime, _: Context, _: []const Value) Error!Value {
+    fn arch(_: *Runtime, _: Context, _: []const Value, _: *const Type) Error!Value {
         const builtin = @import("builtin");
 
         const arch_family = builtin.target.cpu.arch.family();
@@ -241,71 +304,82 @@ const handlers = struct {
         };
     }
 
-    fn invokation_dir(self: *Runtime, _: Context, _: []const Value) Error!Value {
+    fn invokation_dir(self: *Runtime, _: Context, _: []const Value, _: *const Type) Error!Value {
         return .{
             .string = self.invokation_dir,
         };
     }
 
-    fn status_code(_: *Runtime, ctx: Context, _: []const Value) Error!Value {
+    fn status_code(_: *Runtime, ctx: Context, _: []const Value, _: *const Type) Error!Value {
         return .{ .number = @floatFromInt(ctx.scope.statusCode()) };
     }
 
-    fn which(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn which(self: *Runtime, ctx: Context, args: []const Value, return_type: *const Type) Error!Value {
         const name = args[0].string;
 
-        const result = try program.which(
+        const path = try program.which(
             self.allocator,
             ctx.cwd,
             self.io,
             &ctx.scope.environ.map,
             name,
+        ) orelse return fns.EnvResult.fail(
+            ctx.arena(),
+            return_type,
+            .not_found,
+            "unable to find '{s}' in PATH",
+            .{name},
         );
+        defer self.allocator.free(path);
 
-        // move path to scope memory,
-        const value: ?Value = blk: {
-            if (result) |path| {
-                defer self.allocator.free(path);
-                break :blk .{
-                    .string = try ctx.arena().dupe(u8, path),
-                };
-            }
-            break :blk null;
-        };
-
-        return makeResult(
-            ctx.scope,
-            &.string,
-            value,
+        // the path is owned by the runtime allocator, the value has to live in scope memory
+        return fns.EnvResult.ok(
+            ctx.arena(),
+            return_type,
+            .{ .string = try ctx.arena().dupe(u8, path) },
         );
     }
 
-    fn @"error"(self: *Runtime, _: Context, args: []const Value) Error!Value {
-        const message = args[0].string;
-
+    fn input(self: *Runtime, ctx: Context, args: []const Value, return_type: *const Type) Error!Value {
+        const text = args[0].string;
         try self.printer.printStyled(
             self.allocator,
-            .{ .fg = .bright_red },
-            "{s}\n",
-            .{message},
+            .{ .fg = .bright_white },
+            "{s}",
+            .{text},
         );
+        var buffer: [512]u8 = undefined;
+        var stdin = std.Io.File.stdin().reader(self.io, &buffer);
+        const reader = &stdin.interface;
 
-        return Error.Abort;
+        var aw: std.Io.Writer.Allocating = .init(ctx.arena());
+        _ = reader.streamDelimiter(&aw.writer, '\n') catch |err| {
+            aw.deinit();
+            return fns.InputResult.fail(
+                ctx.arena(),
+                return_type,
+                .unable_to_read_input,
+                "error while reading input: {t}",
+                .{err},
+            );
+        };
+
+        return fns.InputResult.ok(
+            ctx.arena(),
+            return_type,
+            .{ .string = try aw.toOwnedSlice() },
+        );
     }
 
-    fn print(self: *Runtime, _: Context, args: []const Value) Error!Value {
-        const message = args[0].string;
-
-        try self.printer.print(
-            self.allocator,
-            "{s}\n",
-            .{message},
-        );
-
-        return .void;
+    fn select(_: *Runtime, _: Context, _: []const Value, _: *const Type) Error!Value {
+        lib.debug.todo("select not implemented yet");
     }
 
-    fn any(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    // ---------------------------------------------------------------------------------------
+    // collections
+    // ---------------------------------------------------------------------------------------
+
+    fn any(self: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const list = args[0].list;
 
         const test_fn = args[1].lambda.instance;
@@ -315,9 +389,7 @@ const handlers = struct {
                 self,
                 ctx,
                 test_fn,
-                &.{
-                    item,
-                },
+                &.{item},
             );
 
             if (result.eql(.{ .bool = true }))
@@ -327,7 +399,7 @@ const handlers = struct {
         return .{ .bool = false };
     }
 
-    fn all(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn all(self: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const list = args[0].list;
 
         const test_fn = args[1].lambda.instance;
@@ -347,7 +419,7 @@ const handlers = struct {
         return .{ .bool = true };
     }
 
-    fn reduce(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn reduce(self: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const list = args[0].list;
         var value = args[1];
         const func = args[2].lambda.instance;
@@ -364,22 +436,46 @@ const handlers = struct {
         return value;
     }
 
-    fn @"collections/at"(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn @"collections/at"(_: *Runtime, ctx: Context, args: []const Value, return_type: *const Type) Error!Value {
         const list = args[0].list;
 
-        const pos: i64 = blk: {
-            const number = args[1].number;
-            break :blk Runtime.integerize(number);
-        };
+        const pos: i64 = Runtime.integerize(args[1].number);
 
         if (pos < 0 or list.items.len <= pos) {
-            return makeResult(ctx.scope, list.items_type, null);
+            return outOfBounds(
+                ctx,
+                return_type,
+                "index {} is out of bounds for a list of {} item(s)",
+                .{ pos, list.items.len },
+            );
         }
 
-        return makeResult(ctx.scope, list.items_type, list.items[@intCast(pos)]);
+        return fns.PosResult.ok(
+            ctx.arena(),
+            return_type,
+            list.items[@intCast(pos)],
+        );
     }
 
-    fn unique(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn @"collections/first"(_: *Runtime, ctx: Context, args: []const Value, return_type: *const Type) Error!Value {
+        const list = args[0].list;
+
+        if (list.items.len == 0)
+            return outOfBounds(ctx, return_type, "the list is empty, it has no first item", .{});
+
+        return fns.PosResult.ok(ctx.arena(), return_type, list.items[0]);
+    }
+
+    fn @"collections/last"(_: *Runtime, ctx: Context, args: []const Value, return_type: *const Type) Error!Value {
+        const list = args[0].list;
+
+        if (list.items.len == 0)
+            return outOfBounds(ctx, return_type, "the list is empty, it has no last item", .{});
+
+        return fns.PosResult.ok(ctx.arena(), return_type, list.items[list.items.len - 1]);
+    }
+
+    fn unique(_: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const list = args[0].list;
 
         var set: std.HashMapUnmanaged(Value, bool, Value.MapContext, 80) = .empty;
@@ -398,12 +494,12 @@ const handlers = struct {
         return .{
             .list = .{
                 .items_type = list.items_type,
-                .items = result.items,
+                .items = try result.toOwnedSlice(ctx.arena()),
             },
         };
     }
 
-    fn sort(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn sort(self: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const list = args[0].list;
         const cmp_fn = args[1].lambda.instance;
 
@@ -425,9 +521,7 @@ const handlers = struct {
                         s.i,
                         s.c,
                         s.f,
-                        &.{
-                            a, b,
-                        },
+                        &.{ a, b },
                     ) catch |err| {
                         s.err = err;
                         return false;
@@ -458,15 +552,7 @@ const handlers = struct {
         };
     }
 
-    fn @"strings/len"(_: *Runtime, _: Context, args: []const Value) Error!Value {
-        const string = args[0].string;
-
-        return .{
-            .number = @floatFromInt(string.len),
-        };
-    }
-
-    fn @"collections/len"(_: *Runtime, _: Context, args: []const Value) Error!Value {
+    fn @"collections/len"(_: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
         const list = args[0].list;
 
         return .{
@@ -474,8 +560,41 @@ const handlers = struct {
         };
     }
 
+    fn @"collections/replace"(_: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
+        const list = args[0].list;
+        const old = args[1];
+        const new = args[2];
+
+        const replaced = try ctx.arena().dupe(Value, list.items);
+
+        for (replaced) |*item| {
+            if (item.eql(old)) {
+                item.* = try new.clone(ctx.arena());
+            }
+        }
+
+        return .{
+            .list = .{
+                .items = replaced,
+                .items_type = list.items_type,
+            },
+        };
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // strings
+    // ---------------------------------------------------------------------------------------
+
+    fn @"strings/len"(_: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
+        const string = args[0].string;
+
+        return .{
+            .number = @floatFromInt(string.len),
+        };
+    }
+
     // when sep is "" split on chars
-    fn split(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn split(_: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const str = args[0].string;
         const sep = args[1].string;
 
@@ -519,7 +638,7 @@ const handlers = struct {
         };
     }
 
-    fn join(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn join(_: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const strings = args[0].list;
         const sep = args[1].string;
 
@@ -556,7 +675,7 @@ const handlers = struct {
         };
     }
 
-    fn lower(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn lower(_: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const str = args[0].string;
 
         const out = try std.ascii.allocLowerString(ctx.arena(), str);
@@ -566,7 +685,7 @@ const handlers = struct {
         };
     }
 
-    fn upper(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn upper(_: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const str = args[0].string;
 
         const out = try std.ascii.allocUpperString(ctx.arena(), str);
@@ -576,40 +695,34 @@ const handlers = struct {
         };
     }
 
-    fn contains(_: *Runtime, _: Context, args: []const Value) Error!Value {
+    fn contains(_: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
         const str = args[0].string;
         const sub = args[1].string;
 
-        const result = std.mem.containsAtLeast(u8, str, 1, sub);
-
         return .{
-            .bool = result,
+            .bool = std.mem.containsAtLeast(u8, str, 1, sub),
         };
     }
 
-    fn starts_with(_: *Runtime, _: Context, args: []const Value) Error!Value {
+    fn starts_with(_: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
         const str = args[0].string;
         const sub = args[1].string;
 
-        const result = std.mem.startsWith(u8, str, sub);
-
         return .{
-            .bool = result,
+            .bool = std.mem.startsWith(u8, str, sub),
         };
     }
 
-    fn ends_with(_: *Runtime, _: Context, args: []const Value) Error!Value {
+    fn ends_with(_: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
         const str = args[0].string;
         const sub = args[1].string;
 
-        const result = std.mem.endsWith(u8, str, sub);
-
         return .{
-            .bool = result,
+            .bool = std.mem.endsWith(u8, str, sub),
         };
     }
 
-    fn @"strings/replace"(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn @"strings/replace"(_: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const str = args[0].string;
         const old = args[1].string;
         const new = args[2].string;
@@ -627,24 +740,56 @@ const handlers = struct {
         };
     }
 
-    fn @"strings/at"(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn @"strings/at"(_: *Runtime, ctx: Context, args: []const Value, return_type: *const Type) Error!Value {
         const str = args[0].string;
 
-        const pos: i64 = blk: {
-            const number = args[1].number;
-            break :blk Runtime.integerize(number);
-        };
+        const pos: i64 = Runtime.integerize(args[1].number);
 
         if (pos < 0 or str.len <= pos) {
-            return makeResult(ctx.scope, &.string, null);
+            return outOfBounds(
+                ctx,
+                return_type,
+                "index {} is out of bounds for a string of length {}",
+                .{ pos, str.len },
+            );
         }
 
         const idx: usize = @intCast(pos);
 
-        return makeResult(ctx.scope, &.string, .{ .string = str[idx .. idx + 1] });
+        return fns.PosResult.ok(
+            ctx.arena(),
+            return_type,
+            .{ .string = str[idx .. idx + 1] },
+        );
     }
 
-    fn lines(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
+    fn @"strings/first"(_: *Runtime, ctx: Context, args: []const Value, return_type: *const Type) Error!Value {
+        const string = args[0].string;
+
+        if (string.len == 0)
+            return outOfBounds(ctx, return_type, "the string is empty, it has no first character", .{});
+
+        return fns.PosResult.ok(
+            ctx.arena(),
+            return_type,
+            .{ .string = string[0..1] },
+        );
+    }
+
+    fn @"strings/last"(_: *Runtime, ctx: Context, args: []const Value, return_type: *const Type) Error!Value {
+        const string = args[0].string;
+
+        if (string.len == 0)
+            return outOfBounds(ctx, return_type, "the string is empty, it has no last character", .{});
+
+        return fns.PosResult.ok(
+            ctx.arena(),
+            return_type,
+            .{ .string = string[string.len - 1 .. string.len] },
+        );
+    }
+
+    fn lines(_: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
         const str = args[0].string;
 
         var items: std.ArrayList(Value) = .empty;
@@ -671,98 +816,35 @@ const handlers = struct {
         };
     }
 
-    fn trim(_: *Runtime, _: Context, args: []const Value) Error!Value {
-        const str = args[0].string;
-        const set = args[1].string;
+    fn trim(_: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
+        return .{
+            .string = std.mem.trim(u8, args[0].string, args[1].string),
+        };
+    }
 
-        const result = std.mem.trim(u8, str, set);
+    fn trim_start(_: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
+        return .{
+            .string = std.mem.trimStart(u8, args[0].string, args[1].string),
+        };
+    }
+
+    fn trim_end(_: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
+        return .{
+            .string = std.mem.trimEnd(u8, args[0].string, args[1].string),
+        };
+    }
+
+    fn error_message(_: *Runtime, ctx: Context, args: []const Value, _: *const Type) Error!Value {
+        const err = args[0].@"error";
 
         return .{
-            .string = result,
+            .string = try ctx.arena().print(
+                "{s}: {s}",
+                .{
+                    err.type.names[err.id],
+                    err.message.?,
+                },
+            ),
         };
-    }
-
-    fn trim_end(_: *Runtime, _: Context, args: []const Value) Error!Value {
-        const str = args[0].string;
-        const set = args[1].string;
-
-        const result = std.mem.trimEnd(u8, str, set);
-
-        return .{
-            .string = result,
-        };
-    }
-
-    fn trim_start(_: *Runtime, _: Context, args: []const Value) Error!Value {
-        const str = args[0].string;
-        const set = args[1].string;
-
-        const result = std.mem.trimStart(u8, str, set);
-
-        return .{
-            .string = result,
-        };
-    }
-
-    fn @"collections/replace"(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
-        const list = args[0].list;
-        const old = args[1];
-        const new = args[2];
-
-        const replaced = try ctx.arena().dupe(Value, list.items);
-
-        for (replaced) |*item| {
-            if (item.eql(old)) {
-                item.* = try new.clone(ctx.arena());
-            }
-        }
-
-        return .{
-            .list = .{
-                .items = replaced,
-                .items_type = list.items_type,
-            },
-        };
-    }
-
-    fn parse_number(_: *Runtime, ctx: Context, args: []const Value) Error!Value {
-        const str = args[0].string;
-
-        const number: ?f64 = std.fmt.parseFloat(f64, str) catch null;
-
-        return if (number) |n|
-            makeResult(ctx.scope, &.number, .{ .number = n })
-        else
-            makeResult(ctx.scope, &.number, null);
-    }
-
-    fn input(self: *Runtime, ctx: Context, args: []const Value) Error!Value {
-        const text = args[0].string;
-        try self.printer.printStyled(
-            self.allocator,
-            .{ .fg = .bright_white },
-            "{s}",
-            .{text},
-        );
-        var buffer: [512]u8 = undefined;
-        var stdin = std.Io.File.stdin().reader(self.io, &buffer);
-        const reader = &stdin.interface;
-
-        var aw: std.Io.Writer.Allocating = .init(ctx.arena());
-        const writer = &aw.writer;
-        _ = reader.streamDelimiter(writer, '\n') catch {
-            aw.deinit();
-            return try makeResult(ctx.scope, &.string, null);
-        };
-
-        return try makeResult(
-            ctx.scope,
-            &.string,
-            .{ .string = try aw.toOwnedSlice() },
-        );
-    }
-
-    fn select(_: *Runtime, _: Context, _: []const Value) Error!Value {
-        lib.debug.todo("select not implemented yet");
     }
 };

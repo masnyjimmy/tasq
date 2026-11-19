@@ -183,8 +183,8 @@ fn analyse(arena: std.mem.Allocator, source: []const u8, range: Range) !Want {
         .group,
         .parameter,
         .task_call,
-        .process_stmt,
         .process_expr,
+        .process_stmt,
     }, null) orelse return .nothing;
 
     return switch (owner.kind) {
@@ -521,7 +521,13 @@ const Signature = struct {
             .generic => |generic| generic,
             .list => |list| std.fmt.comptimePrint("[]{s}", .{typeExpr(list.*)}),
             .lambda => |lambda| lambdaExpr(lambda.*),
-            .result => |result| std.fmt.comptimePrint("!{s}", .{typeExpr(result.*)}),
+            .result => |result| std.fmt.comptimePrint(
+                "{f}!{s}",
+                .{
+                    compiler.Type{ .@"error" = result.@"error" },
+                    typeExpr(result.payload),
+                },
+            ), //TODO: handle error
         };
     }
 

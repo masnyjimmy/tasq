@@ -26,7 +26,6 @@ pub const Kind = enum {
     switch_kw,
     continue_kw,
     break_kw,
-    fallback_kw,
     with_kw,
     in_kw,
     parallel_kw,
@@ -34,6 +33,8 @@ pub const Kind = enum {
     string_type,
     flag_type,
     number_type,
+    try_kw,
+    catch_kw,
 
     // Identifiers (anything that is not a keyword)
     ident,

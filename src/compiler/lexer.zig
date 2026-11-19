@@ -31,6 +31,8 @@ const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "with", .with_kw },
     .{ "in", .in_kw },
     .{ "parallel", .parallel_kw },
+    .{ "try", .try_kw },
+    .{ "catch", .catch_kw },
 });
 
 // ── Lexer ─────────────────────────────────────────────────────────────────────

@@ -32,8 +32,8 @@ pub const NodeKind = enum {
 
     stmt_block,
     //TODO: try to prevent this separation
-    process_stmt,
     process_expr,
+    process_stmt,
 
     binding,
     target,
@@ -69,7 +69,8 @@ pub const NodeKind = enum {
 
     builtin_call,
     call_args, // builtin or lambda call args
-    fallback,
+    try_expr,
+    catch_expr,
     parallel,
     parallel_block,
 

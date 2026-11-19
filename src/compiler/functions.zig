@@ -1,5 +1,4 @@
 const std = @import("std");
-const ir = @import("ir.zig");
 
 const lib = @import("lib");
 const enums = lib.enums;
@@ -9,10 +8,110 @@ const @"type" = @import("type.zig");
 const Type = @"type".Type;
 const TypeExpr = @"type".TypeExpr;
 
+const runtime = @import("runtime.zig");
+const Value = runtime.Value;
+
 pub const Error = error{
     UnknownFunction,
     InvalidArguments,
 } || std.mem.Allocator.Error;
+
+/// Describes the results (`E!T`) that share one error set `E`, with the helpers both sides need:
+/// the compiler builds types with `withType` / `withExpr`, the runtime builds values with `ok` /
+/// `fail`.
+///
+/// Two calls with the same `names` give the same type, and with it the same error set (error sets
+/// are compared by identity). Give a result its own names unless it should share the set.
+pub fn ResultType(comptime names: []const []const u8) type {
+    return struct {
+        /// The error set of every result built with this type.
+        pub const error_type: @"type".Error = .{
+            .names = names,
+        };
+        const Enum = lib.enums.AutoEnum(names);
+
+        /// A failed result. `result_type` is the whole result type (`E!T`) the call was resolved to.
+        pub fn fail(
+            arena: std.mem.Allocator,
+            result_type: *const Type,
+            comptime kind: Enum,
+            comptime fmt: []const u8,
+            args: anytype,
+        ) !Value {
+            const err: runtime.Error = .{
+                .id = @backingInt(kind),
+                .message = try std.fmt.allocPrint(arena, fmt, args),
+                .type = &error_type,
+            };
+
+            return .{
+                .result = .{
+                    .type = result_type,
+                    .payload = .{ .fail = err },
+                },
+            };
+        }
+
+        /// A successful result holding a copy of `value`.
+        pub fn ok(arena: std.mem.Allocator, result_type: *const Type, value: Value) !Value {
+            const ptr = try arena.create(Value);
+            ptr.* = try value.clone(arena);
+
+            return .{
+                .result = .{
+                    .type = result_type,
+                    .payload = .{ .value = ptr },
+                },
+            };
+        }
+
+        /// `E!payload`, as a type.
+        pub fn withType(payload: *const Type) Type {
+            return .{
+                .result = .{
+                    .@"error" = &error_type,
+                    .payload = payload,
+                },
+            };
+        }
+
+        /// `E!payload`, as a type expression (the payload may mention generics).
+        pub fn withExpr(comptime payload: TypeExpr) TypeExpr {
+            return .{
+                .result = &.{
+                    .@"error" = &error_type,
+                    .payload = payload,
+                },
+            };
+        }
+    };
+}
+
+/// A process (`$ cmd`) that failed to run or exited unsuccessfully.
+pub const ProcessResult = ResultType(&.{
+    "failed",
+});
+
+pub const ParseNumberResult = ResultType(&.{
+    "invalid_format",
+});
+
+pub const ReadResult = ResultType(&.{
+    "unable_to_read",
+});
+
+pub const PosResult = ResultType(&.{
+    "out_of_bounds",
+});
+
+pub const EnvResult = ResultType(&.{
+    "not_found",
+});
+
+pub const InputResult = ResultType(&.{
+    // not `unable_to_read`: that would make it the very same error set as `ReadResult`
+    "unable_to_read_input",
+});
 
 const debug_functions: []const Spec = &.{
     .{
@@ -47,7 +146,7 @@ const type_cast_functions: []const Spec = &.{
                 .type = .{ .concrete = Type.string },
             },
         },
-        .return_type = .{ .result = &.{ .concrete = Type.number } },
+        .return_type = ParseNumberResult.withExpr(.{ .concrete = Type.number }),
     },
 };
 
@@ -70,7 +169,7 @@ const fs_functions: []const Spec = &.{
                 .type = .{ .concrete = Type.string },
             },
         },
-        .return_type = .{ .result = &.{ .concrete = Type.string } },
+        .return_type = ReadResult.withExpr(.{ .concrete = Type.string }),
     },
     .{
         .name = "glob",
@@ -260,7 +359,29 @@ const string_functions: []const Spec = &.{
                 .type = .{ .concrete = Type.number },
             },
         },
-        .return_type = .{ .result = &.{ .concrete = Type.string } },
+        .return_type = PosResult.withExpr(.{ .concrete = Type.string }),
+    },
+    .{
+        .name = "first",
+        .unique_name = "strings/first",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = PosResult.withExpr(.{ .concrete = Type.string }),
+    },
+    .{
+        .name = "last",
+        .unique_name = "strings/last",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = Type.string },
+            },
+        },
+        .return_type = PosResult.withExpr(.{ .concrete = Type.string }),
     },
     .{
         .name = "lines",
@@ -440,7 +561,29 @@ const collections_functions: []const Spec = &.{
                 .type = .{ .concrete = .number },
             },
         },
-        .return_type = .{ .result = &.{ .generic = "T" } },
+        .return_type = PosResult.withExpr(.{ .generic = "T" }),
+    },
+    .{
+        .name = "first",
+        .unique_name = "collections/first",
+        .args = &.{
+            .{
+                .name = "list",
+                .type = .{ .list = &.{ .generic = "T" } },
+            },
+        },
+        .return_type = PosResult.withExpr(.{ .generic = "T" }),
+    },
+    .{
+        .name = "last",
+        .unique_name = "collections/last",
+        .args = &.{
+            .{
+                .name = "list",
+                .type = .{ .list = &.{ .generic = "T" } },
+            },
+        },
+        .return_type = PosResult.withExpr(.{ .generic = "T" }),
     },
     .{
         .name = "unique",
@@ -483,7 +626,7 @@ const misc_functions: []const Spec = &.{
                 .type = .{ .concrete = Type.string },
             },
         },
-        .return_type = .{ .result = &.{ .concrete = Type.string } },
+        .return_type = EnvResult.withExpr(.{ .concrete = Type.string }),
     },
     .{
         .name = "os",
@@ -518,7 +661,7 @@ const misc_functions: []const Spec = &.{
                 .type = .{ .concrete = Type.string },
             },
         },
-        .return_type = .{ .result = &.{ .concrete = Type.string } },
+        .return_type = EnvResult.withExpr(.{ .concrete = Type.string }),
     },
 };
 
@@ -531,8 +674,9 @@ const input_functions: []const Spec = &.{
                 .type = .{ .concrete = Type.string },
             },
         },
-        .return_type = .{ .result = &.{ .concrete = Type.string } },
+        .return_type = InputResult.withExpr(.{ .concrete = Type.string }),
     },
+    // `select` needs its own result type (e.g. `SelectResult`), then:
     // .{
     //     .name = "select",
     //     .args = &.{
@@ -545,7 +689,7 @@ const input_functions: []const Spec = &.{
     //             .type = .{ .list = &.{ .generic = "T" } },
     //         },
     //     },
-    //     .return_type = .{ .result = &.{ .generic = "T" } },
+    //     .return_type = SelectResult.withExpr(.{ .generic = "T" }),
     // },
 };
 
@@ -560,7 +704,7 @@ pub const definitions = Functions(
 );
 
 fn Functions(comptime specs: []const Spec) type {
-    @setEvalBranchQuota(5_000); // it may need to be adjusted if functions are added
+    @setEvalBranchQuota(6_000); // it may need to be adjusted if functions are added
 
     const EnumTag = enums.FitUnsigned(specs.len);
 
@@ -690,10 +834,18 @@ fn Functions(comptime specs: []const Spec) type {
                 const params = try allocator.alloc(OutArg, args.len);
 
                 for (def.args, params) |in, *out| {
-                    out.* = try resolveType(allocator, &bindings, in.type);
+                    out.* = try resolveType(
+                        allocator,
+                        &bindings,
+                        in.type,
+                    );
                 }
 
-                const return_type = (try resolveType(allocator, &bindings, def.return_type)).value;
+                const return_type = (try resolveType(
+                    allocator,
+                    &bindings,
+                    def.return_type,
+                )).value;
 
                 if (chosen) |*first| {
                     if (!Type.same(first.return_type, return_type))
@@ -793,8 +945,23 @@ fn matchAndBind(arena: std.mem.Allocator, bindings: *Bindings, param: TypeExpr, 
             // an `unknown` value may be a lambda: it fits, and there is nothing to instantiate
             .value => |v| return v.type == .unknown,
         },
-        .result => |inner| switch (arg) {
-            .value => |v| return try matchAndBind(arena, bindings, inner.*, .{ .value = v }),
+        .result => |res| switch (arg) {
+            .value => |v| {
+                const payload_type: Type = switch (v.type) {
+                    .result => |r| blk: {
+                        // error sets are compared by identity, same as `same` / `eq` / `unify`
+                        if (r.@"error" != res.@"error") return false;
+                        break :blk r.payload.*;
+                    },
+                    // may be a result of anything: fits, and tells us nothing about the payload
+                    .unknown, .noreturn => .unknown,
+                    else => return false,
+                };
+
+                return try matchAndBind(arena, bindings, res.payload, .{
+                    .value = .{ .type = payload_type },
+                });
+            },
             .lambda => return false,
         },
     }
@@ -846,13 +1013,15 @@ fn resolveType(allocator: std.mem.Allocator, bindings: *const Bindings, p: TypeE
                 },
             };
         },
-        .result => |result| {
-            const result_type = try allocator.create(Type);
-            const resolved_type = try resolveType(allocator, bindings, result.*);
-            result_type.* = resolved_type.value;
+        .result => |res| {
+            const payload = try allocator.create(Type);
+            payload.* = (try resolveType(allocator, bindings, res.payload)).value;
 
             return .{
-                .value = .{ .result = result_type },
+                .value = .{ .result = .{
+                    .@"error" = res.@"error",
+                    .payload = payload,
+                } },
             };
         },
     };

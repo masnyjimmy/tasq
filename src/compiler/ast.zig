@@ -288,7 +288,8 @@ pub const Expr = struct {
         .@"if",       .@"for",      .@"switch",
         .lambda,      .lambda_call, .process_expr,
         .slice,       .with,        .in,
-        .@"continue", .@"break",
+        .@"continue", .@"break",    .try_expr,
+        .catch_expr,
     };
 
     node: *const cst.Node,
@@ -306,7 +307,7 @@ pub const Expr = struct {
         @"if": IfExpr,
         @"switch": SwitchExpr,
         @"for": ForExpr,
-        process: ProcessExpr,
+        process: Process,
         lambda: Lambda,
         lambda_call: LambdaCall,
         slice: SliceExpr,
@@ -314,6 +315,8 @@ pub const Expr = struct {
         in: InExpr,
         @"continue": cst.Token,
         @"break": cst.Token,
+        try_expr: ?Expr,
+        catch_expr: CatchExpr,
     };
 
     pub fn from(node: *const cst.Node) Expr {
@@ -342,7 +345,36 @@ pub const Expr = struct {
             .in => .{ .in = .from(self.node) },
             .@"continue" => .{ .@"continue" = self.node.childToken(.continue_kw) orelse unreachable },
             .@"break" => .{ .@"break" = self.node.childToken(.break_kw) orelse unreachable },
+            .try_expr => .{
+                .try_expr = if (self.node.childNodeOf(Expr.KINDS)) |n|
+                    .from(n)
+                else
+                    null,
+            },
+            .catch_expr => .{ .catch_expr = .from(self.node) },
             else => unreachable,
+        };
+    }
+};
+
+pub const CatchExpr = struct {
+    node: *const cst.Node,
+    subject: ?Expr,
+    captures: ?Captures,
+    expr: ?Expr,
+
+    pub fn from(node: *const cst.Node) CatchExpr {
+        var it = node.iter();
+
+        const subject = expectAnyNode(&it, Expr, Expr.KINDS);
+        const captures = eatNode(&it, Captures, .captures);
+        const expr = expectAnyNode(&it, Expr, Expr.KINDS);
+
+        return .{
+            .node = node,
+            .subject = subject,
+            .captures = captures,
+            .expr = expr,
         };
     }
 };
@@ -411,45 +443,6 @@ pub const LambdaCall = struct {
             .node = node,
             .name = name,
             .args = args,
-        };
-    }
-};
-
-pub const Fallback = struct {
-    node: *const cst.Node,
-    expr: ?Expr,
-
-    pub fn from(node: *const cst.Node) Fallback {
-        const expr = if (node.childNodeOf(Expr.KINDS)) |expr|
-            Expr.from(expr)
-        else
-            null;
-
-        return .{
-            .node = node,
-            .expr = expr,
-        };
-    }
-};
-
-pub const ProcessExpr = struct {
-    node: *const cst.Node,
-    attributes: ?Attributes,
-    subject: ?Expr,
-    fallback: ?Fallback,
-
-    pub fn from(node: *const cst.Node) ProcessExpr {
-        var it = node.iter();
-
-        const attributes = eatNode(&it, Attributes, .attributes);
-        const subject = expectAnyNode(&it, Expr, Expr.KINDS);
-        const fallback = eatNode(&it, Fallback, .fallback);
-
-        return .{
-            .node = node,
-            .attributes = attributes,
-            .subject = subject,
-            .fallback = fallback,
         };
     }
 };
@@ -557,7 +550,6 @@ pub const BuiltinCall = struct {
     node: *const cst.Node,
     name: ?cst.Token,
     args: CallArgs,
-    fallback: ?Fallback,
 
     pub fn from(node: *const cst.Node) BuiltinCall {
         var it = node.iter();
@@ -566,13 +558,11 @@ pub const BuiltinCall = struct {
 
         const name = it.expectToken(.ident);
         const args = expectNode(&it, CallArgs, .call_args) orelse unreachable;
-        const fallback = eatNode(&it, Fallback, .fallback);
 
         return .{
             .node = node,
             .name = name,
             .args = args,
-            .fallback = fallback,
         };
     }
 };
@@ -676,7 +666,7 @@ pub const SwitchExprCase = struct {
     }
 };
 
-const SwitchPattern = struct {
+pub const SwitchPattern = struct {
     const Kind = union(enum) {
         expr: AnyKindIterable(.loose, Expr, Expr.KINDS),
         @"else": cst.Token,
@@ -1148,7 +1138,7 @@ pub const Statement = struct {
 
     pub const Kind = union(enum) {
         binding: BindingDecl,
-        process: ProcessStmt,
+        process: Process,
         task_call: TaskCall,
         @"for": ForStmt,
         @"if": IfStmt,
@@ -1307,12 +1297,12 @@ pub const ForStmt = struct {
     }
 };
 
-pub const ProcessStmt = struct {
+pub const Process = struct {
     node: *const cst.Node,
     attributes: ?Attributes,
     subject: ?Expr,
 
-    pub fn from(node: *const cst.Node) ProcessStmt {
+    pub fn from(node: *const cst.Node) Process {
         var it = node.iter();
 
         const attributes = eatNode(&it, Attributes, .attributes);

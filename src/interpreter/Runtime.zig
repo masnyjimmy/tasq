@@ -9,6 +9,7 @@ const builtin = @import("builtin.zig");
 const compiler = @import("compiler");
 const ir = compiler.ir;
 const Value = compiler.Value;
+const fns = compiler.functions;
 
 const lib = @import("lib");
 
@@ -761,7 +762,12 @@ pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value 
         .switch_expr => |switch_expr| {
             const target = try self.evaluateExpr(ctx, &switch_expr.subject);
 
-            const value = switch_expr.cases.get(target) orelse switch_expr.else_case;
+            const value = switch_expr.cases.get(target) orelse switch_expr.else_case orelse {
+                std.debug.panic(
+                    \\internal error: no matching case found
+                    \\this should have been catched during ir validation
+                , .{});
+            };
 
             return try self.evaluateExpr(ctx, &value);
         },
@@ -960,15 +966,13 @@ pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value 
                 out.* = try self.evaluateExpr(ctx, &in);
             }
 
-            const value = try builtin.callFunction(self, ctx, call.function.id, args);
-
-            return switch (value) {
-                .result => |r| if (r.value) |v|
-                    v.*
-                else
-                    try self.evaluateExpr(ctx, &call.fallback.?),
-                else => value,
-            };
+            return try builtin.callFunction(
+                self,
+                ctx,
+                call.function.id,
+                args,
+                &call.function.return_type,
+            );
         },
         .lambda => |lambda| .{
             .lambda = if (lambda.resolved) |resolved|
@@ -1025,24 +1029,6 @@ pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value 
 
             ctx.scope.setStatusCode(status_code);
 
-            if (status_code != 0) {
-                if (process_expr.fallback) |*value| {
-                    return try self.evaluateExpr(ctx, value);
-                }
-
-                if (process_expr.nofail == false) {
-                    try self.printer.printStyled(
-                        self.allocator,
-                        style.@"error",
-                        \\tasq: error: command failed with exit code {}
-                        \\  on binding evaluation '{s}'
-                    ,
-                        .{ status_code, process.string },
-                    );
-                    return Error.Abort;
-                }
-            }
-
             const result = blk: {
                 //TODO: consider future 'raw' attribute
                 const result = try aw.toOwnedSlice();
@@ -1054,7 +1040,26 @@ pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value 
                 break :blk result[0..end];
             };
 
-            return .{ .string = result };
+            if (process_expr.nofail)
+                return .{ .string = result };
+
+            const result_type = comptime &fns.ProcessResult.withType(&.string);
+
+            if (status_code != 0) {
+                return try fns.ProcessResult.fail(
+                    ctx.arena(),
+                    result_type,
+                    .failed,
+                    "command failed with exit code {}",
+                    .{status_code},
+                );
+            }
+
+            return try fns.ProcessResult.ok(
+                ctx.arena(),
+                result_type,
+                .{ .string = result },
+            );
         },
         .slice => |slice| {
             const operand = try self.evaluateExpr(ctx, &slice.operand);
@@ -1182,8 +1187,59 @@ pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value 
         },
         .@"continue" => Error.Continue,
         .@"break" => Error.Break,
+        .try_expr => |try_expr| {
+            const value = try self.evaluateExpr(ctx, &try_expr.subject);
+
+            return switch (value.result.payload) {
+                .fail => |e| self.abortWithError(ctx, "{s}: {s}", .{
+                    e.type.names[e.id],
+                    e.message.?,
+                }),
+                .value => |v| v.*,
+            };
+        },
+        .catch_expr => |catch_expr| {
+            const value = try self.evaluateExpr(ctx, &catch_expr.subject);
+
+            const err = switch (value.result.payload) {
+                .fail => |e| e,
+                .value => |v| return v.*,
+            };
+
+            const catch_scope = try Scope.create(
+                ctx.scope,
+                self.allocator,
+                catch_expr.scope,
+            );
+            defer catch_scope.destroy();
+
+            if (catch_expr.capture) |capture| {
+                _ = try self.destructure(
+                    ir.Capture,
+                    ctx.withScope(catch_scope),
+                    capture.target,
+                    .{ .@"error" = err },
+                    null,
+                );
+            }
+
+            return try self.evaluateExpr(ctx.withScope(catch_scope), &catch_expr.expr);
+        },
         .unknown => unreachable,
     };
+}
+
+fn abortWithError(self: *Runtime, _: Ctx, comptime fmt: []const u8, args: anytype) Error {
+    try self.printer.printStyled(
+        self.allocator,
+        style.@"error",
+        "tasq: error: ",
+        .{},
+    );
+    try self.printer.printStyled(self.allocator, style.@"error", fmt, args);
+    try self.printer.print(self.allocator, "\n", .{});
+
+    return Error.Abort;
 }
 
 fn clampRanges(ranges: []const Range) Range {

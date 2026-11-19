@@ -74,20 +74,7 @@ pub fn StaticSet(comptime T: type) type {
 }
 
 pub fn generateEnumNameMap(comptime T: type) std.StaticStringMap(T) {
-    comptime {
-        const ti = switch (@typeInfo(T)) {
-            .@"enum" => |e| e,
-            else => @compileError("T must be enum"),
-        };
-
-        var out: [ti.field_names.len]struct { []const u8, T } = undefined;
-
-        for (ti.field_names, ti.field_values, 0..) |field_name, field_value, idx| {
-            out[idx] = .{ field_name, @as(T, @fromBackingInt(@intCast(field_value))) };
-        }
-
-        return .initComptime(out);
-    }
+    return .initEnum();
 }
 
 pub fn castEnum(value: anytype, comptime T: type) ?T {
@@ -169,4 +156,21 @@ pub fn isValidEnumValue(comptime E: type, value: E) bool {
     const set = comptime std.EnumSet(E).initFull();
 
     return set.contains(value);
+}
+
+pub fn AutoEnum(comptime names: []const []const u8) type {
+    const TagInt = FitUnsigned(names.len);
+
+    var values: [names.len]TagInt = undefined;
+
+    inline for (0..values.len) |idx| {
+        values[idx] = @intCast(idx);
+    }
+
+    return @Enum(
+        TagInt,
+        .exhaustive,
+        names,
+        &values,
+    );
 }
