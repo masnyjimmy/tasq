@@ -27,7 +27,6 @@ const keywords = std.StaticStringMap(TokenKind).initComptime(.{
     .{ "for", .for_kw },
     .{ "continue", .continue_kw },
     .{ "break", .break_kw },
-    .{ "fallback", .fallback_kw },
     .{ "with", .with_kw },
     .{ "in", .in_kw },
     .{ "parallel", .parallel_kw },
