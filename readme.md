@@ -25,12 +25,12 @@
    - [4.4 Switch Expression](#44-switch-expression)
    - [4.5 For Expression](#45-for-expression)
    - [4.6 Break and Continue](#46-break-and-continue)
-   - [4.7 Fallback](#47-fallback)
+   - [4.7 Try and Catch](#47-try-and-catch)
    - [4.8 Lambdas](#48-lambdas)
    - [4.9 Ranges and Slices](#49-ranges-and-slices)
    - [4.10 Tuples and Destructuring](#410-tuples-and-destructuring)
    - [4.11 In Expression](#411-in-expression)
-   - [4.12 With Expression](#412-with-expression)
+   - [4.12 Block Expression](#412-block-expression)
 5. [Built-in Functions](#5-built-in-functions)
 6. [Process Calls](#6-process-calls)
    - [6.1 Statements and Expressions](#61-statements-and-expressions)
@@ -69,8 +69,8 @@
 13. [Parallel Execution](#13-parallel-execution)
     - [13.1 Model and Limits](#131-model-and-limits)
     - [13.2 Parallel For](#132-parallel-for)
-    - [13.3 Parallel With](#133-parallel-with)
-    - [13.4 Parallel Block](#134-parallel-block)
+    - [13.3 Parallel Block](#133-parallel-block)
+    - [13.4 Parallel Block Expression](#134-parallel-block-expression)
     - [13.5 Failure](#135-failure)
     - [13.6 Status Code](#136-status-code)
     - [13.7 Interaction with Other Features](#137-interaction-with-other-features)
@@ -99,8 +99,9 @@ The following words are keywords. They cannot be used as the name of a binding, 
 
 ```
 task  group  set
-if  else  switch  for  in  with  parallel
-break  continue  fallback
+if  else  switch  for  in  parallel
+break  continue
+try  catch
 and  or  not
 true  false
 ```
@@ -111,7 +112,7 @@ The name `_` is also special: it is never defined and only discards a value ([§
 
 - **Comments.** `//` starts a comment that runs to the end of the line. It is the only comment form; there are no block comments.
 - **Trailing commas.** Wherever elements are separated by commas (list and tuple literals, task and group parameter lists, call arguments, `switch` branches, attribute lists, and so on), a trailing comma is allowed.
-- **Multi-line expressions.** An expression may span several lines. The one exception is the opening `[` of a slice, which must be on the same line as the end of the sliced value ([§4.9](#49-ranges-and-slices)).
+- **Multi-line expressions.** An expression may span several lines. There are two exceptions: the opening `[` of a slice ([§4.9](#49-ranges-and-slices)) and the opening `(` of a call must be on the same line as the end of the sliced value or of the callee. Otherwise a `[` would be read as the start of an attribute list ([§12](#12-attributes)) and a `(` as the start of a tuple, which is what lets a block expression end with a tuple ([§4.12](#412-block-expression)).
 
 ### 1.3 Namespaces
 
@@ -121,7 +122,7 @@ tasq has three independent namespaces:
 |-----------|----------|
 | **Groups** | Group names |
 | **Tasks** | Task names |
-| **Values** | Everything that holds a value: bindings, task and group arguments, lambda parameters, `for` and `with` captures, and names introduced by destructuring |
+| **Values** | Everything that holds a value: bindings (block expressions included), task and group arguments, lambda parameters, `for` and `catch` captures, and names introduced by destructuring |
 
 Names in different namespaces never conflict: a binding may share its name with a task, and a task may share its name with a group. Within a namespace, names must be unique within their scope, and the no-shadowing rule of [§3](#3-bindings) applies to the values namespace. Reserved words ([§1.1](#11-reserved-words)) cannot be used in any of them.
 
@@ -151,13 +152,13 @@ tasq uses three distinct type systems, each serving a different context. They ar
 | `(T, U, ...)` | Fixed-size, heterogeneous tuple (see [§4.10](#410-tuples-and-destructuring)) | `("one", 1)`, `("a", 2, false)` |
 | `lambda` | A single-expression function (see [§4.8](#48-lambdas)) | `\|a, b\| a > b` |
 
-The types `void`, `noreturn` and `!T` also exist at runtime but have no literal form; see [§2.2](#22-special-types).
+The types `void`, `noreturn`, results (`E!T`) and error types also exist at runtime but have no literal form; see [§2.2](#22-special-types).
 
 **Rules:**
 
 - There is **no implicit type casting**. Use built-in functions for any conversion.
 - Binding types are **inferred** from the assigned expression. Bindings never carry a type annotation.
-- `[]T` may be **nested** (e.g. `[][]number`). All elements must share the same type.
+- `[]T` may be **nested** (e.g. `[][]number`). All elements must have the same type (result types with the same value type unify, [§2.2](#22-special-types)).
 - An empty list literal `[]` is allowed wherever its element type can be inferred from the surrounding context, for example from the other branches of an `if` or `switch`; where nothing determines the type (such as `x := []`) it is a compile-time error.
 
   ```
@@ -169,32 +170,45 @@ The types `void`, `noreturn` and `!T` also exist at runtime but have no literal 
   }
   ```
 - **Whole-number contexts.** Wherever a `number` is used in a place where a fractional value has no meaning (range bounds and slice bounds ([§4.9](#49-ranges-and-slices)), the position argument of `@at` ([§5](#5-built-in-functions)), the limit of `parallel` ([§13.1](#131-model-and-limits)), and any similar place), it is first **rounded up to the next whole number** (ceiling): `1.2` becomes `2`, `2.0` stays `2`, `-1.5` becomes `-1`. This is not a type conversion and never raises an error; the value is still a `number`.
-- A **tuple** has at least two elements, and each element has its own type. Its type is the ordered list of its element types, so `(string, number)` and `(number, string)` are different types. An element may be a `bool`, `char`, `number`, `string`, list, tuple or `lambda`; it cannot be `void`, `noreturn` or `!T`. Tuples may be nested and may be list elements (all elements of such a list must then have the identical tuple type). A tuple is created with a literal and taken apart by destructuring ([§4.10](#410-tuples-and-destructuring)).
+- A **tuple** has at least two elements, and each element has its own type. Its type is the ordered list of its element types, so `(string, number)` and `(number, string)` are different types. An element may be a `bool`, `char`, `number`, `string`, list, tuple, `lambda` or result; it cannot be `void`, `noreturn` or an error value. Tuples may be nested and may be list elements (all elements of such a list must then have the identical tuple type). A tuple is created with a literal and taken apart by destructuring ([§4.10](#410-tuples-and-destructuring)).
 - A `lambda` is a **template**: its parameter and result types are inferred from each use. Lambdas can be bound, aliased, passed around, stored in a tuple and passed to the built-ins that take a lambda. The full rules and limits are in [§4.8](#48-lambdas).
 
 ### 2.2 Special Types
 
-These types have **no literal** and can only be produced by certain built-ins or keywords.
+These types have **no literal** and can only be produced by certain built-ins, process expressions or keywords.
 
 | Type | Meaning | Produced by |
 |------|---------|-------------|
 | `void` | "No meaningful value" | Built-ins such as `@print` |
 | `noreturn` | The expression never yields a value; it always diverges | `@error(...)`, `break`, `continue` |
-| `!T` | A fallible result: either a `T` or an error | `@env`, `@which`, `@parse_number`, `@at`, `@read` |
+| `E!T` | A **result**: either a `T` or an error of error type `E` | `@env`, `@which`, `@parse_number`, `@at`, `@read`, process expressions |
+| `error{a, b}` | An **error type**: the set of error ids a failure can have | The capture of `catch` |
 
-> **Notation.** The `!` in `!T` is type notation only. It is not an operator and cannot be written in source code. Boolean negation is written `not` ([§4.1](#41-operators)).
+> **Notation.** `E!T` and `error{...}` are type notation only. They cannot be written in source code, and `!` is not an operator. Boolean negation is written `not` ([§4.1](#41-operators)).
 
 **`void`** is a real value that behaves as an ordinary concrete type. It can be assigned to a binding, and two `void` branches unify with each other, but a `void` branch does **not** unify with a differently typed branch (a `void` branch paired with a `string` branch is a type error).
 
 **`noreturn`** can never be assigned to a binding.
 
-**`!T`** can be used in exactly one way: by applying `fallback` ([§4.7](#47-fallback)) directly to the built-in call that produced it, yielding a plain `T`. It cannot be bound, passed to a process call or task call, stored in a list or tuple, used as a `with` subject ([§4.12](#412-with-expression)), or used in any other expression context.
+**Results.** A result `E!T`, for example `error{invalid_format}!number`, holds either a value of type `T` or an error whose type is `E`. `T` is any runtime type except `void`, `noreturn`, an error type or another result.
 
-**Unifying branches.** `if` ([§4.3](#43-if-expression)), `switch` ([§4.4](#44-switch-expression)), `for` ([§4.5](#45-for-expression)), `in` ([§4.11](#411-in-expression)) and `fallback` ([§4.7](#47-fallback)) combine several branches into one result type:
+- A result is an ordinary value. It can be bound, passed to a lambda, returned from a lambda or block, stored in a list or tuple, and used in interpolation, where it shows its value, or the message of its error if it holds one ([§4.2](#42-strings-and-interpolation)).
+- It becomes a plain `T` only through `try` or `catch` ([§4.7](#47-try-and-catch)). There is no implicit conversion in either direction: a result is not accepted where a `T` is expected, and a `T` is not a result.
+- Results cannot be compared with `==` and cannot be the subject of a `switch`.
+
+**Error types.** `error{id, ...}` is a non-empty set of error ids; an id is an identifier. An **error value** has two parts:
+
+- an **id**, one of the ids of its type, which says where a failure comes from (internal, user input, environment, ...). It is what code checks, with `switch` ([§4.4](#44-switch-expression)).
+- a **message** that describes exactly what happened. The same id can come with different messages. Messages are for display, not for checking.
+
+An error value exists only as the capture of a `catch` handler ([§4.7](#47-try-and-catch)); `try` never exposes it. An error type is never a `T`, so an error value cannot appear in a result, a list or a tuple.
+
+**Unifying branches.** `if` ([§4.3](#43-if-expression)), `switch` ([§4.4](#44-switch-expression)), `for` ([§4.5](#45-for-expression)), `in` ([§4.11](#411-in-expression)) and `catch` ([§4.7](#47-try-and-catch)) combine several branches into one result type:
 
 - All branches must produce the same type.
 - A `noreturn` branch is the exception: it never yields a value, so it unifies with whatever type the other branches produce (e.g. `@error(...)`, or `break` / `continue` inside a `for` expression).
 - If **every** branch is `noreturn`, the whole expression is `noreturn`.
+- Result types with the same value type `T` unify, and the error type of the unified result is the union of their error types.
 
 ### 2.3 Meta Types
 
@@ -252,7 +266,7 @@ Argument types are used in task and group parameter declarations. They are a res
 
 - Only positional types may be passed by position; every other type must be identified by name ([§8.3](#83-argument-ordering), [§11.3](#113-task-arguments)).
 - `flag` is the only type with an **implicit default value**, and it takes no value on the command line.
-- Tuples and lambdas are not argument types.
+- Tuples, lambdas and results are not argument types.
 
 ---
 
@@ -274,11 +288,11 @@ label, (x, y) := <nested tuple expression>
 **Rules:**
 
 - A binding cannot be reassigned. Its type is inferred from the right-hand side.
-- Bindings may be declared at file root, in a group body, or in a task body.
-- **Unique names and no shadowing.** Within one scope, binding names must be unique, and a name cannot be declared if the same name is already visible at that point in the values namespace ([§1.3](#13-namespaces)). This *no-shadowing rule* applies equally to lambda parameters ([§4.8](#48-lambdas)), `for` and `with` captures ([§4.5](#45-for-expression), [§4.12](#412-with-expression)) and the names introduced by destructuring patterns ([§4.10](#410-tuples-and-destructuring)). Violations are compile-time errors.
+- Bindings may be declared at file root, in a group body, in a task body, or in a block expression ([§4.12](#412-block-expression)).
+- **Unique names and no shadowing.** Within one scope, binding names must be unique, and a name cannot be declared if the same name is already visible at that point in the values namespace ([§1.3](#13-namespaces)). This *no-shadowing rule* applies equally to lambda parameters ([§4.8](#48-lambdas)), `for` and `catch` captures ([§4.5](#45-for-expression), [§4.7](#47-try-and-catch)) and the names introduced by destructuring patterns ([§4.10](#410-tuples-and-destructuring)). Violations are compile-time errors.
 - Inside a task body, task arguments behave as immutable bindings of their runtime type.
 - A binding named `_` is never defined; it only discards its value ([§8.4](#84-task-body)). Inside a destructuring pattern, `_` discards just that element.
-- A binding is a declaration, not an expression. To name a value **inside** an expression (for example in the body of a lambda, which cannot contain declarations), use `with` ([§4.12](#412-with-expression)).
+- A binding is a declaration, not an expression. To name a value **inside** an expression (for example in the body of a lambda), use a block expression ([§4.12](#412-block-expression)).
 
 **Evaluation:**
 
@@ -294,7 +308,7 @@ The complete picture of which construct sees which environment and working direc
 Consequences:
 
 - A static binding whose expression would diverge (e.g. calls `@error(...)`) only does so if something references it. An unused static binding is never evaluated.
-- A static binding containing a process expression ([§6](#6-process-calls)) runs its command only on first reference, and only once. This makes it a convenient place to store a value such as a tool version that several tasks need. Because every process call updates `@status_code()` ([§5](#5-built-in-functions)), that first reference can change the value `@status_code()` reports in the task that triggered it.
+- A static binding containing a process expression ([§6](#6-process-calls)) runs its command only on first reference, and only once. This makes it a convenient place to store a value such as a tool version that several tasks need. The binding caches the process's result, so unwrap it where it is declared (`catch`, `try`) to cache a plain `string`. Because every process call updates `@status_code()` ([§5](#5-built-in-functions)), that first reference can change the value `@status_code()` reports in the task that triggered it.
 - A **destructuring** static binding is one unit: referencing **any** of its names evaluates the whole right-hand side once, and every name of that binding then has its cached value.
 - "At most once" also holds when several branches of a parallel construct reference the same static binding for the first time at the same moment: one of them evaluates it and the others wait for the result ([§13.7](#137-interaction-with-other-features)).
 
@@ -309,7 +323,7 @@ tags      := ["release", "stable"]
 matrix    := [[1, 2], [3, 4]]
 
 // Evaluated lazily, once, on first use
-zig_version := $`zig --version` fallback "unknown"
+zig_version := $`zig --version` catch "unknown"
 
 // Destructuring at root: evaluated lazily, once, when `major` or `minor` is first referenced
 major, minor := (1, 14)
@@ -334,10 +348,11 @@ Expressions produce a typed value. They are used in bindings, task call argument
 |----------|-----------|----------|--------|
 | Arithmetic | `+` `-` `*` `/` `%` | `number` | `number` |
 | Comparison | `>` `<` `>=` `<=` | two `number`s or two `string`s ([see below](#string-comparison)) | `bool` |
-| Equality | `==` `!=` | any matching type (tuples compare element-wise, [§4.10](#410-tuples-and-destructuring); lambdas compare by template, [§4.8](#48-lambdas)) | `bool` |
+| Equality | `==` `!=` | any matching type (tuples compare element-wise, [§4.10](#410-tuples-and-destructuring); lambdas compare by template, [§4.8](#48-lambdas)); results and error values cannot be compared | `bool` |
 | Boolean | `and` `or` | `bool` | `bool` |
 | Boolean negation | `not <expr>` | `bool` | `bool` |
 | Unary minus | `-<expr>` | `number` | `number` |
+| Unwrap | `try <expr>`, `<expr> catch [\|e\|] <expr>` | result `E!T` | `T` ([§4.7](#47-try-and-catch)) |
 | List spread | `[...list, item, ...]` | list `[]T`, items `T` | `[]T` |
 | Range | `a..b`, `a..` | `number` | not a value; only valid as a `for` subject or a slice index ([§4.9](#49-ranges-and-slices)) |
 | Slice | `value[a..b]` | `[]T` or `string`, and a range | same type as `value` ([§4.9](#49-ranges-and-slices)) |
@@ -347,6 +362,7 @@ Expressions produce a typed value. They are used in bindings, task call argument
 - There is **no implicit type coercion**; operands must match the expected types exactly.
 - **Arithmetic precedence** follows mathematical convention (`*`, `/`, `%` before `+`, `-`). The slice postfix `[...]` binds tighter than every operator. The range operator `..` binds more loosely than every arithmetic operator, so `a + 1..b * 2` means `(a + 1)..(b * 2)`.
 - **Boolean precedence**, from tightest to loosest: comparison and equality, then `not`, then `and`, then `or`. So `not a == b` means `not (a == b)`, `not a and b` means `(not a) and b`, and `a or b and c` means `a or (b and c)`. `not` may be repeated (`not not x`).
+- **Unwrap precedence.** `try` is a prefix operator that binds like unary minus. `catch` is looser than every other operator ([§4.7](#47-try-and-catch)).
 - There is **no `!` operator**. Boolean negation is always written `not`. The `!` of `!=` belongs to that operator only.
 
 ```
@@ -478,10 +494,10 @@ greeting := `Hello, {name}!`
 url      := `http://{host}:{base_port + 1}`
 
 $`echo "Running on {@os()} with {worker_count} workers"`
-$`mkdir -p {output_dir}/{@env("BUILD_ID") fallback "local"}`
+$`mkdir -p {output_dir}/{@env("BUILD_ID") catch "local"}`
 ```
 
-Lists and tuples are converted by converting each element and joining them with `, `; a list is wrapped in `[` `]` and a tuple in `(` `)`, e.g. `[1, 2, 3]` and `(str, 5, false)`. Strings inside them are written without quotes. A lambda (also one inside a tuple) is written as `<lambda>`.
+Lists and tuples are converted by converting each element and joining them with `, `; a list is wrapped in `[` `]` and a tuple in `(` `)`, e.g. `[1, 2, 3]` and `(str, 5, false)`. Strings inside them are written without quotes. A lambda (also one inside a tuple) is written as `<lambda>`. A result is converted like its value if it holds one, and to the message of its error otherwise; an error value (inside a `catch` handler) is converted to its message.
 
 Because `{` starts an interpolation, a literal brace in an interpolated string must be escaped (`\{`, `\}`), or the string written as a raw string, where nothing needs escaping:
 
@@ -534,9 +550,9 @@ switch(<subject>) {
 ```
 
 - `<subject>` is evaluated once.
-- **Patterns are literals.** A pattern may be any literal (`bool`, `char`, `number`, `string`, or a list or tuple literal), and must have the same type as the subject. Expressions are not allowed as patterns, and neither are ranges.
+- **Patterns are literals.** A pattern may be any literal (`bool`, `char`, `number`, `string`, or a list or tuple literal), and must have the same type as the subject. Expressions are not allowed as patterns, and neither are ranges. The one exception is an error subject, below.
 - **Every pattern in a `switch` must be unique**; a duplicate is a compile-time error.
-- The `else` branch is **required** in expression form, since every subject value must produce a result.
+- The `else` branch is **required** in expression form, since every subject value must produce a result. The one exception is an error subject whose ids are all covered, below.
 - Branches are unified as described in [§2.2](#22-special-types). This is how `@error(...)` can serve as an `else` branch when there is no sensible fallback value.
 
 ```
@@ -545,6 +561,20 @@ rgb := switch(color) {
     "green" => "#00ff00",
     "blue"  => "#0000ff",
     else    => @error("Invalid color"),
+}
+```
+
+#### Switching on an error
+
+The subject may be an error value, available inside a `catch` handler ([§4.7](#47-try-and-catch)). The patterns are then string literals naming ids of its error type ([§2.2](#22-special-types)):
+
+- An id that is not in the error type is a compile-time error, and so is a duplicate.
+- When the patterns cover **every** id, the switch is exhaustive: `else` is not required, even in expression form. Writing one anyway is a **warning** (it can never be reached); warnings do not stop compilation ([§11.2](#112-checking-without-running---check)).
+- When some ids are not covered, `else` is required in expression form, as for any other subject.
+
+```
+value := @parse_number(text) catch |err| switch(err) {
+    "invalid_format" => @error(`unable to parse value: {err}`),
 }
 ```
 
@@ -562,7 +592,7 @@ for(<subjects>) [parallel[(<n>)]] |<captures>| <expr>
 - `parallel`, when written, makes the iterations run concurrently; the result is the same list, in the same order ([§13.2](#132-parallel-for)).
 - `<captures>` binds one capture to each subject, in order. A capture is an identifier (the current element of a list subject, or the current index of a range subject), `_` for a value you don't need, or a destructuring pattern `(a, b)` when the elements are tuples ([§4.10](#410-tuples-and-destructuring)). The number of captures **must equal** the number of subjects.
 - `<expr>` is evaluated once per iteration, and its result becomes the corresponding element of the produced list. The result type is `[]T`, where `T` is the type of `<expr>`. If there are no iterations the result is an empty `[]T`.
-- `<expr>` may be an `if`, `switch`, `in` or `with` expression containing `break` or `continue` branches ([§4.6](#46-break-and-continue)); these are `noreturn` and unify with the surviving branches ([§2.2](#22-special-types)).
+- `<expr>` may be an `if`, `switch`, `in`, block ([§4.12](#412-block-expression)) or `catch` ([§4.7](#47-try-and-catch)) expression containing `break` or `continue` branches ([§4.6](#46-break-and-continue)); these are `noreturn` and unify with the surviving branches ([§2.2](#22-special-types)).
 - `<expr>` may itself be a `for` expression (a nested loop). The inner `for` produces a list, so the outer result is a list of lists.
 
 ```
@@ -594,16 +624,16 @@ The statement form is described in [§8.7](#87-for-statement).
 
 `break` and `continue` are bare keywords (no arguments, no parentheses) that control iteration inside a `for`, in statement form ([§8.7](#87-for-statement)) or expression form ([§4.5](#45-for-expression)).
 
-Both have type `noreturn` ([§2.2](#22-special-types)), so they can be used as branches of a nested `if`, `switch`, `in` or `with`.
+Both have type `noreturn` ([§2.2](#22-special-types)), so they can be used as branches of a nested `if`, `switch` or `in`, as the result of a block expression and as the handler of a `catch`.
 
 | Keyword | In a `for` **statement** | In a `for` **expression** |
 |---------|--------------------------|---------------------------|
 | `break` | Stops iteration immediately. | Stops immediately and yields the list produced so far. |
 | `continue` | Skips the rest of the current iteration and proceeds to the next. | Skips the current element (it is **not** added to the list) and proceeds. |
 
-Both always refer to the **nearest enclosing `for`**; a nested `if`, `switch`, `in` or `with` does not change this, and neither does an inner `for`: in nested loops, `break` and `continue` affect only the innermost one. Leaving an `in` block this way restores the previous working directory ([§4.11](#411-in-expression)).
+Both always refer to the **nearest enclosing `for`**; a nested `if`, `switch`, `in`, block expression or `catch` handler does not change this, and neither does an inner `for`: in nested loops, `break` and `continue` affect only the innermost one. Leaving an `in` block this way restores the previous working directory ([§4.11](#411-in-expression)).
 
-In a **parallel** `for`, `break` is a compile-time error and `continue` works as in the table ([§13.2](#132-parallel-for)). Neither keyword can refer to a `for` that encloses a parallel block ([§13.4](#134-parallel-block)).
+In a **parallel** `for`, `break` is a compile-time error and `continue` works as in the table ([§13.2](#132-parallel-for)). Neither keyword can refer to a `for` that encloses a parallel block ([§13.3](#133-parallel-block)) or a branch of a parallel block expression ([§13.4](#134-parallel-block-expression)).
 
 ```
 for(numbers) |n| {
@@ -615,48 +645,68 @@ for(numbers) |n| {
 positives := for(numbers) |n| if (n < 0) continue else n
 ```
 
-### 4.7 Fallback
+### 4.7 Try and Catch
 
-`fallback` supplies a replacement value when a call fails. It is an optional suffix attached **directly to the call**, valid after two kinds of call:
+`try` and `catch` turn a result `E!T` ([§2.2](#22-special-types)) into a plain `T`. They are the only way to read the value of a result.
 
 ```
-<builtin_call>       fallback <expression>
-<process_expression> fallback <expression>
+try <expr>
+<expr> catch [|<capture>|] <expr>
 ```
 
-**After a built-in call.** Built-ins that can fail return `!T` ([§2.2](#22-special-types)), which is unusable until unwrapped, so `fallback` is **mandatory** for `@env`, `@which`, `@parse_number`, `@at` and `@read`. Using `fallback` after a built-in that cannot fail (e.g. `@len`) is a compile-time error.
+**Operand.** The operand of `try`, and the left operand of `catch`, must be a result; any other type is a compile-time error. In particular, a process expression with `nofail` is a plain `string` ([§6.2](#62-failure-handling)) and cannot be unwrapped.
 
-**After a process expression.** A process expression aborts when its command exits non-zero ([§6.2](#62-failure-handling)), so `fallback` is **optional** there. On a non-zero exit, the fallback value replaces the process's output entirely. `fallback` cannot be combined with `nofail` (compile-time error). A process **statement** has no `fallback` form.
+**`try <expr>`** evaluates to the value of the result. If the result holds an error, `try` aborts execution and prints the error's message. The error value is not accessible.
 
-**Rules:**
+**`<expr> catch [|<capture>|] <handler>`** evaluates to the value of the result. If the result holds an error, the handler is evaluated instead, and its value is the value of the whole expression. Otherwise the handler is never evaluated.
 
-- **Short-circuiting:** if the call succeeds, its value is used and the fallback expression is never evaluated.
-- The fallback expression must produce type `T` (for a process expression: `string`), or `noreturn` such as `@error(...)`, which unifies with `T` ([§2.2](#22-special-types)).
-- The whole expression has type `T`, never `!T`, so it can be used anywhere a `T` can.
-- The fallback expression extends **as far right as possible**: `@env("A") fallback "b" + "c"` means `@env("A") fallback ("b" + "c")`. Use parentheses to limit it: `(@env("A") fallback "b") + "c"`.
-- Chains nest to the right: `@env("A") fallback @env("B") fallback "x"` tries `A`, then `B`, then `"x"`.
+- The handler must produce `T`, or `noreturn` (such as `@error(...)`, `break` or `continue`), which unifies with `T` ([§2.2](#22-special-types)). The whole expression has type `T`.
+- The optional **capture** `|err|` binds the error value for the handler only. Its type is the error type of the result, and its name follows the no-shadowing rule ([§3](#3-bindings)). The error value can be interpolated (its message) and used as the subject of a `switch` (its id, [§4.4](#44-switch-expression)). It cannot be bound to another name, passed to a lambda, stored in a list or tuple, or compared. Since an error type is never a `T`, it cannot leave the handler either.
+
+**`try` is shorthand.** `try x` is exactly `x catch |err| @error(`{err}`)`.
+
+**Precedence.**
+
+- `try` is a prefix operator that binds like unary minus: `try @read(f) + "x"` means `(try @read(f)) + "x"`.
+- `catch` is looser than every other operator, and its handler extends **as far right as possible**: `@env("A") catch "b" + "c"` means `@env("A") catch ("b" + "c")`. Use parentheses to limit it: `(@env("A") catch "b") + "c"`.
+- Chains nest to the right: `@env("A") catch @env("B") catch "x"` tries `A`, then `B`, then `"x"`.
+- A result produced by an `if` or `switch` is unwrapped with parentheses, `(if (c) @read(a) else @read(b)) catch ""`, because the last branch would otherwise take the `catch` for itself.
 
 ```
 // Plain default value
-path := @env("PATH") fallback ""
+path := @env("PATH") catch ""
 
-// Abort if PORT is not numeric
-port := @parse_number(@env("PORT") fallback "8080") fallback @error("PORT must be numeric")
+// Abort if PORT is not numeric, with the message of the error
+port := try @parse_number(@env("PORT") catch "8080")
+
+// ...or with a message of your own
+port := @parse_number(@env("PORT") catch "8080") catch @error("PORT must be numeric")
 
 // Require a tool to be installed
-zig := @which("zig") fallback @error("zig is not installed")
+zig := @which("zig") catch @error("zig is not installed")
 
 // Element access with a default
-first := @at(names, 0) fallback "none"
+first := @at(names, 0) catch "none"
 
 // File content with a default
-notes := @read("NOTES.md") fallback ""
+notes := @read("NOTES.md") catch ""
 
 // Process expression with a default
-version := $`git describe --tags` fallback "dev"
+version := $`git describe --tags` catch "dev"
 
 // Process expression that aborts with a custom message
-sha := $`git rev-parse HEAD` fallback @error(`not a git repository (status {@status_code()})`)
+sha := $`git rev-parse HEAD` catch |err| @error(`not a git repository: {err}`)
+
+// React to the error id: the patterns cover every id, so no `else` is needed
+text := @read(path) catch |err| switch(err) {
+    "read_failed"  => "",
+    "invalid_utf8" => @error(`{path} is not valid UTF-8`),
+}
+
+// A result is an ordinary value: keep it and decide later
+parsed  := for(["1", "x", "3"]) |s| @parse_number(s)   // []error{invalid_format}!number
+numbers := for(parsed) |r| r catch continue            // [1, 3]
+@print(`{parsed}`)                                     // the element "x" shows its error message
 ```
 
 ### 4.8 Lambdas
@@ -729,14 +779,13 @@ task demo {
 
 Every lambda literal has its own type, so two different lambdas cannot be mixed where a single type is required (for example as the elements of one list).
 
-**Naming intermediate values.** A lambda body is one expression, so it cannot contain bindings. Use `with` ([§4.12](#412-with-expression)) to compute a value once and use it several times inside the body:
+**Naming intermediate values.** A lambda body is one expression, so it cannot contain bindings directly. Use a block expression ([§4.12](#412-block-expression)) to compute a value once and use it several times:
 
 ```
-parse_repo := |line|
-    with(@split(line, ";")) |parts| (
-        @at(parts, 0) fallback @error("missing repo name"),
-        @at(parts, 1) fallback @error("missing repo url"),
-    )
+average := |xs| {
+    total := @reduce(xs, 0, |acc, x| acc + x)
+    total / @len(xs)
+}
 ```
 
 **Equality and printing.** Lambdas can be compared with `==` and `!=`: two lambda values are equal when they refer to the exact same template. A lambda is converted to the string `<lambda>` in interpolation. The same holds for a tuple that contains a lambda, which is compared element-wise ([§4.10](#410-tuples-and-destructuring)). Neither is useful in practice, but both are allowed.
@@ -745,7 +794,7 @@ parse_repo := |line|
 
 - **No recursion.** A lambda cannot call itself, directly or through other lambdas (compile-time error).
 - **A lambda cannot return a lambda**, nor a tuple that contains a lambda. `|a| |b| a + b` is a compile-time error (`lambda cannot return a lambda`). This is a deliberate part of the language, not a gap.
-- A lambda body is an expression, so it cannot contain task calls or statements. Use a task for actions, and `with` to name intermediate values.
+- A lambda body is an expression, so it cannot contain task calls or statements. Use a task for actions, and a block expression to name intermediate values.
 - A lambda cannot be a task or group argument ([§2.4](#24-argument-types)).
 
 ### 4.9 Ranges and Slices
@@ -827,7 +876,7 @@ list := [0, 1, 2, 3, 4]
 - **A slice never errors.** Out-of-range bounds are clamped, and when nothing is left the result is an empty list or an empty string.
 - For a string, an index is a character, the same unit that `@len` counts.
 - A range is the **only** thing allowed inside the brackets. `list[1]` is a compile-time error; use `@at` ([§5](#5-built-in-functions)) to read a single element.
-- The opening `[` of a slice must be on the **same line** as the end of `value`, otherwise it would be read as the start of an attribute list ([§12](#12-attributes)).
+- The opening `[` of a slice must be on the **same line** as the end of `value` ([§1.2](#12-comments-and-layout)).
 - Slices can be chained: `list[1..][0..2]` slices the result of the first slice.
 
 ```
@@ -868,21 +917,20 @@ Destructuring binds the elements of a tuple to separate names. A **pattern** is 
 pattern := name | '_' | '(' pattern ',' pattern { ',' pattern } ')'
 ```
 
-It is allowed in three places:
+It is allowed in two places:
 
 | Place | Syntax | Notes |
 |-------|--------|-------|
 | Binding | `a, b := <tuple expr>` | The outermost pattern is written **without** parentheses. Nested patterns use parentheses: `label, (x, y) := <tuple expr>`. |
 | `for` capture | `for(<subjects>) \|(a, b)\| ...` | A subject whose elements are tuples is captured with a parenthesized pattern. Plain captures may be mixed in: `\|(a, b), i\|`. |
-| `with` capture | `with(<tuple expr>) \|(a, b)\| ...` | A subject that is a tuple is captured with a parenthesized pattern ([§4.12](#412-with-expression)). |
 
 **Rules:**
 
 - The pattern's shape must match the tuple's type **exactly**: the same number of elements at every level (compile-time error otherwise), and the right-hand side must be a tuple.
 - `_` discards one element. It is never defined and may appear any number of times.
-- The names a pattern introduces are ordinary bindings: they are immutable and follow the uniqueness and no-shadowing rules of [§3](#3-bindings). A name bound by a `for` or `with` capture is visible only in that construct's body.
-- Destructuring bindings are valid at file root, in a group body and in a task body. Evaluation is as in [§3](#3-bindings): task-local bindings run eagerly in statement order, and static bindings run **lazily and once**, when **any** of their names is first referenced.
-- Destructuring is not available for lambda parameters or task and group arguments.
+- The names a pattern introduces are ordinary bindings: they are immutable and follow the uniqueness and no-shadowing rules of [§3](#3-bindings). A name bound by a `for` capture is visible only in that construct's body.
+- Destructuring bindings are valid at file root, in a group body, in a task body and in a block expression. Evaluation is as in [§3](#3-bindings): task-local bindings run eagerly in statement order, and static bindings run **lazily and once**, when **any** of their names is first referenced.
+- Destructuring is not available for lambda parameters, `catch` captures or task and group arguments.
 
 ```
 tuple_list := [
@@ -945,55 +993,59 @@ sources := in("src") @sort(@glob("*.zig"), |a, b| a < b) else @error("src/ is mi
 - **Static bindings** never see the working directory of whatever triggers them ([§3](#3-bindings)).
 - Inside a branch of a parallel construct, `in` changes the working directory of that branch only ([§13.1](#131-model-and-limits)).
 
-### 4.12 With Expression
+### 4.12 Block Expression
 
-`with` names one or more intermediate values **inside a single expression**. It is a building block for expression pipelines: compute a value once, then use it several times in the body. It matters most in lambda bodies ([§4.8](#48-lambdas)), which are a single expression and cannot contain bindings ([§3](#3-bindings)).
-
-```
-with(<subjects>) [parallel[(<n>)]] |<captures>| <expr>
-```
-
-- `<subjects>` are one or more comma-separated expressions. They are evaluated once each, **left to right**, before the body. With `parallel` they are evaluated concurrently instead, in no particular order ([§13.3](#133-parallel-with)).
-- `<captures>` binds one capture to each subject, in order. A capture is an identifier, `_` for a value you don't need, or a destructuring pattern `(a, b)` when the subject is a tuple ([§4.10](#410-tuples-and-destructuring)). The number of captures **must equal** the number of subjects (compile-time error otherwise).
-- `<expr>` is the **body**. It extends as far right as possible, like a lambda body.
-- The value and type of the whole `with` expression are those of the body. If the body is `noreturn`, so is the `with` expression ([§2.2](#22-special-types)).
-- Unlike `for`, `with` does not iterate: the body is evaluated exactly once.
-
-**Subjects.** A subject is an ordinary value, treated as the right-hand side of a binding would be. It may be of any type a binding can hold, but not `noreturn`, not a range ([§4.9](#49-ranges-and-slices)), and not a fallible result `!T`, which must first be unwrapped with `fallback` ([§4.7](#47-fallback), [§2.2](#22-special-types)). Subjects are evaluated each time the `with` expression is evaluated; nothing is cached.
-
-**Scope.**
-
-- Captured names are visible **only in the body**, never in the other subjects of the same `with`. To build a value from an earlier one, nest the expressions: `with(a) |x| with(f(x)) |y| ...`.
-- Captured names follow the uniqueness and no-shadowing rules of [§3](#3-bindings) and must be unique within one `with`. `_` may appear any number of times and is never defined.
-- `with` does not change the working directory or the environment; unlike `in` ([§4.11](#411-in-expression)), the body runs exactly as it would outside the `with`.
-- `break` and `continue` inside the body refer to the nearest enclosing `for`, as in a branch of `if` ([§4.6](#46-break-and-continue)).
-- Inside a lambda, a `with` follows the two-stage checking of [§4.8](#48-lambdas): captured types are known only per instance.
-
-**Expression only.** `with` has no statement form. In a task body, name a value with a binding (`name := ...`, [§8.4](#84-task-body)); a `with` written on its own line is an expression statement and is subject to the discarded-value rule of [§8.4](#84-task-body).
+A **block expression** names intermediate values **inside a single expression**: compute a value once, then use it several times. It matters most in lambda bodies ([§4.8](#48-lambdas)), which are a single expression and cannot contain bindings directly ([§3](#3-bindings)).
 
 ```
-// Compute once, use twice: split the line a single time
-parse_repo := |line|
-    with(@split(line, ";")) |parts| (
-        @at(parts, 0) fallback @error("missing repo name"),
-        @at(parts, 1) fallback @error("missing repo url"),
+{
+    <binding>
+    <binding>
+    ...
+    <result expression>
+}
+```
+
+- **Contents.** Zero or more bindings (plain, destructuring ([§4.10](#410-tuples-and-destructuring)) or `_ :=` ([§8.4](#84-task-body))), then exactly one **result expression**, last. Nothing else may appear: a block expression has no statements, no task calls and no expression lines other than the result. To run something only for its effect, bind and discard it (`_ := @print("x")`).
+- **Value.** The value and type of the block are those of its result expression. If the result expression is `noreturn`, so is the block ([§2.2](#22-special-types)).
+- **Evaluation and scope.** The bindings are evaluated eagerly, in order, every time the block is evaluated; nothing is cached. A name is visible from the line after its binding to the end of the block, and nowhere else. Names follow the uniqueness and no-shadowing rules of [§3](#3-bindings).
+- **Environment and directory.** A block expression does not change the working directory or the environment; unlike `in` ([§4.11](#411-in-expression)), it runs exactly as it would outside the block.
+- **Jumps.** `break` and `continue` inside a block refer to the nearest enclosing `for` ([§4.6](#46-break-and-continue)).
+- **Where it can be written.** Wherever an expression is expected: the right-hand side of a binding, a lambda body, a branch of `if` or `switch`, the body of a `for` expression, a `catch` handler, an argument. Where a *statement* is expected, `{ ... }` is a statement block ([§8.4](#84-task-body)) holding statements; the statement forms of `if`, `switch`, `for` and `in` take statement blocks, and their expression forms take expressions, which may be block expressions.
+
+The parallel counterpart, where every binding is a concurrent branch, is in [§13.4](#134-parallel-block-expression).
+
+```
+// Split the line a single time
+parse_repo := |line| {
+    parts := @split(line, ";")
+    (
+        @at(parts, 0) catch @error("missing repo name"),
+        @at(parts, 1) catch @error("missing repo url"),
     )
+}
 
-// A `with` body can be a `for` expression; `with` and `fallback` compose
-read_repos := |file|
-    with(@read(file) fallback @error(`{file} not found`)) |text|
-        for(@lines(text)) |line|
-            if (line == "") continue
-            else parse_repo(line)
+// A block can hold a `catch` handler and end with a `for` expression
+read_repos := |file| {
+    text := @read(file) catch |err| @error(`cannot read {file}: {err}`)
+    for(@lines(text)) |line|
+        if (line == "") continue
+        else parse_repo(line)
+}
 
-// Several subjects, each taken apart with a destructuring pattern
-describe := |origin, p|
-    with(origin, p) |(ox, oy), (px, py)| `dx={px - ox} dy={py - oy}`
+// Destructuring inside a block
+describe := |origin, p| {
+    ox, oy := origin
+    px, py := p
+    `dx={px - ox} dy={py - oy}`
+}
 
-// Nested `with`: the second subject uses the first capture
-shout := |s|
-    with(@trim(s, " ")) |t|
-        with(@upper(t)) |u| `{u}!`
+// Outside lambdas: a binding with a few steps
+timeout := {
+    base  := 5
+    extra := if (debug) 10 else 0
+    base + extra
+}
 
 task print_repos {
     for(read_repos("repos.txt")) |(name, url)| {
@@ -1012,13 +1064,13 @@ Built-in functions are called with an `@` prefix and may appear in any expressio
 
 | Signature | Returns | Description |
 |-----------|---------|-------------|
-| `@env(key: string)` | `!string` | Value of environment variable `key` as visible in the current scope ([§12.4](#124-environment-attributes)), or an error if unset. There is no default-value overload; use `fallback`, e.g. `@env("PORT") fallback "8080"`. |
-| `@which(name: string)` | `!string` | Path of program `name`, found like the unix `which` command: it is looked up in the `PATH` of the current scope's environment (so a `PATH` set with `[env]` is honored). Errors if not found. |
+| `@env(key: string)` | `error{not_set}!string` | Value of environment variable `key` as visible in the current scope ([§12.4](#124-environment-attributes)), or an error with id `not_set` if it is unset. There is no default-value overload; use `catch`, e.g. `@env("PORT") catch "8080"`. |
+| `@which(name: string)` | `error{not_found}!string` | Path of program `name`, found like the unix `which` command: it is looked up in the `PATH` of the current scope's environment (so a `PATH` set with `[env]` is honored). Fails with `not_found` if it is not found. |
 | `@os()` | `string` | The current platform: `"windows"`, `"linux"` or `"macos"`. |
 | `@arch()` | `string` | The architecture **family** of the current platform. Its values are those of Zig's `builtin.target.cpu.arch.family()`, for example `"x86"` (both 32-bit and 64-bit x86), `"arm"`, `"aarch64"` or `"riscv"`. The exact set of values is that of the Zig version tasq is built with. |
 | `@cwd()` | `string` | The absolute path of the working directory in effect: the task's working directory ([§12.5](#125-working-directory-attribute)), or the directory entered by an enclosing `in` ([§4.11](#411-in-expression)). |
 | `@invocation_dir()` | `string` | The directory from which tasq was called. Unlike `@cwd()` it is not affected by the `working_dir` setting or by `in`. |
-| `@status_code()` | `number` | Exit status of the most recently executed process. Every process call, statement or expression, updates it, including a process expression evaluated as part of a lazily evaluated static binding ([§3](#3-bindings)). After a process that failed without aborting (`nofail`, or a taken `fallback`) it holds that non-zero status. Errors if no process has run yet in the current task. In a parallel construct every branch has its own status ([§13.6](#136-status-code)). |
+| `@status_code()` | `number` | Exit status of the most recently executed process. Every process call, statement or expression, updates it, including a process expression evaluated as part of a lazily evaluated static binding ([§3](#3-bindings)). After a process that failed without aborting (`nofail`, or a process expression that produced an error result) it holds that non-zero status. Errors if no process has run yet in the current task. In a parallel construct every branch has its own status ([§13.6](#136-status-code)). |
 
 **File system**
 
@@ -1029,7 +1081,7 @@ Relative paths given to `@exists`, `@is_file`, `@is_dir`, `@read` and `@glob` ar
 | `@exists(path: string)` | `bool` | `true` if a file or directory exists at `path`. |
 | `@is_file(path: string)` | `bool` | `true` if `path` exists and is a file. `false` if it is missing or is not a file. |
 | `@is_dir(path: string)` | `bool` | `true` if `path` exists and is a directory. `false` if it is missing or is not a directory. |
-| `@read(path: string)` | `!string` | The content of the file at `path`, exactly as stored (nothing is trimmed). Errors if the file cannot be read or is not valid UTF-8. |
+| `@read(path: string)` | `error{read_failed, invalid_utf8}!string` | The content of the file at `path`, exactly as stored (nothing is trimmed). Fails with `read_failed` if the file cannot be read, and with `invalid_utf8` if it is not valid UTF-8. |
 | `@glob(pattern: string)` | `[]string` | Lists, recursively, the files and directories that match the glob `pattern`. The result is **not sorted** and its order is unspecified; use `@sort` for a deterministic order. An invalid pattern currently results in an empty list rather than an error ([§15](#15-planned-features)). |
 | `@basename(path: string)` | `string` | The final component of `path`. Trailing separators are ignored. |
 | `@join_path(parts: []string)` | `string` | Joins `parts` into one path using the **native path separator of the current operating system** (`\` on Windows, `/` elsewhere). |
@@ -1045,14 +1097,14 @@ Relative paths given to `@exists`, `@is_file`, `@is_dir`, `@read` and `@glob` ar
 
 | Signature | Returns | Description |
 |-----------|---------|-------------|
-| `@parse_number(str: string)` | `!number` | Parses `str` as a `number`, or errors if it isn't a valid numeric literal. |
+| `@parse_number(str: string)` | `error{invalid_format}!number` | Parses `str` as a `number`, or fails with `invalid_format` if it isn't a valid numeric literal. |
 
 **Strings**
 
 | Signature | Returns | Description |
 |-----------|---------|-------------|
 | `@len(str: string)` | `number` | Number of characters in `str`. |
-| `@at(str: string, pos: number)` | `!string` | The character at index `pos` of `str`, as a `string`. `pos` is rounded up to a whole number first ([§2.1](#21-runtime-types)); errors if the result is less than `0` or not less than `@len(str)`. |
+| `@at(str: string, pos: number)` | `error{out_of_bounds}!string` | The character at index `pos` of `str`, as a `string`. `pos` is rounded up to a whole number first ([§2.1](#21-runtime-types)); fails with `out_of_bounds` if the result is less than `0` or not less than `@len(str)`. |
 | `@split(str: string, sep: string)` | `[]string` | Splits `str` wherever `sep` occurs. |
 | `@join(strings: []string, sep: string)` | `string` | Joins the elements of `strings`, separated by `sep`. |
 | `@lines(str: string)` | `[]string` | Cuts `str` into lines and returns them as a list. Lines end at `\n` or `\r\n`; the line terminators are not part of the returned lines. A final terminator does not produce an extra empty line, and an empty `str` yields an empty list. |
@@ -1071,7 +1123,7 @@ Relative paths given to `@exists`, `@is_file`, `@is_dir`, `@read` and `@glob` ar
 | Signature | Returns | Description |
 |-----------|---------|-------------|
 | `@len(list: []T)` | `number` | Number of elements in `list`. |
-| `@at(list: []T, pos: number)` | `!T` | The element at index `pos` of `list`. `pos` is rounded up to a whole number first ([§2.1](#21-runtime-types)); errors if the result is less than `0` or not less than `@len(list)`. |
+| `@at(list: []T, pos: number)` | `error{out_of_bounds}!T` | The element at index `pos` of `list`. `pos` is rounded up to a whole number first ([§2.1](#21-runtime-types)); fails with `out_of_bounds` if the result is less than `0` or not less than `@len(list)`. |
 | `@replace(list: []T, old: T, new: T)` | `[]T` | Copy of `list` with every element equal to `old` replaced by `new`. |
 | `@unique(list: []T)` | `[]T` | Copy of `list` without duplicates. Elements are compared with `==`; the first occurrence of each element is kept and the original order is preserved. |
 | `@sort(list: []T, fn: \|T, T\| -> bool)` | `[]T` | Copy of `list` sorted using `fn`. `fn(a, b)` returns `true` when `a` must be ordered before `b` (a "less than" function). `list` itself is unchanged. |
@@ -1084,7 +1136,7 @@ Relative paths given to `@exists`, `@is_file`, `@is_dir`, `@read` and `@glob` ar
 - **Overloads.** `@len`, `@at` and `@replace` each have a string and a list form. The overload is chosen at compile time from the argument types.
 - **Lambda arguments.** `@sort`, `@all`, `@any` and `@reduce` take a lambda ([§4.8](#48-lambdas)), written inline or given by name (`@any(xs, big)` with `big := |n| n > 10`). The notation `|T| -> bool` means "a lambda taking one `T` and returning `bool`". The overload is chosen from the function name, the types of the non-lambda arguments and the lambda's **number of parameters**; the lambda's parameter types then come from that overload, and its body must produce the result type the overload expects (e.g. `bool` for `@any`).
 - **Sort order.** The lambda given to `@sort` is a "less than" function: it should be a strict ordering (`fn(a, a)` is `false`, and `fn(a, b)` and `fn(b, a)` are never both `true`). The order of the result for a lambda that violates this is unspecified.
-- **Fallible built-ins.** `@env`, `@which`, `@parse_number`, `@at` and `@read` return `!T` and can only be used with `fallback` ([§4.7](#47-fallback)).
+- **Fallible built-ins.** `@env`, `@which`, `@parse_number`, `@at` and `@read` return results ([§2.2](#22-special-types)), with the error ids listed above. Unwrap them with `try` or `catch` ([§4.7](#47-try-and-catch)), or keep the result as a value. The message of an error says exactly what happened, for example which variable or file.
 - **Element access.** `@at` reads a single element or character. To take a part of a list or string, use a slice ([§4.9](#49-ranges-and-slices)), which never errors.
 
 **Examples:**
@@ -1095,7 +1147,7 @@ task demo {
     for(@sort(@glob("src/**/*.zig"), |a, b| a < b)) |path| @print(path)
 
     // Process output split into lines, each one trimmed
-    for(@lines($`git status --short`)) |line| @print(@trim(line, " "))
+    for(@lines(try $`git status --short`)) |line| @print(@trim(line, " "))
 
     @print(@trim("--name--", "-"))                    // name
     @print(@trim_start("--name--", "-"))              // name--
@@ -1113,7 +1165,7 @@ task demo {
 
     // File system
     if (@is_file("config.toml"))
-        @print(@read("config.toml") fallback "")
+        @print(@read("config.toml") catch "")
 }
 ```
 
@@ -1137,48 +1189,48 @@ $r"printf 'a\nb'"                    // command, raw string
 $[script]`...multi-line script...`   // script, see 6.4
 ```
 
-- **Command expression.** `EXPR` is a *primary* expression: a string literal of any form ([§4.2](#42-strings-and-interpolation)), a name, a built-in or lambda call, a parenthesized expression or a slice. Anything larger needs parentheses, e.g. `$("make " + target)`. Its type must be `string`; this is checked during semantic analysis.
+- **Command expression.** `EXPR` is a *primary* expression: a string literal of any form ([§4.2](#42-strings-and-interpolation)), a name, a built-in or lambda call, a parenthesized expression or a slice. Anything larger needs parentheses, e.g. `$("make " + target)`, and so does a result that must be unwrapped first, e.g. `$(try @read("cmd.txt"))`. Its type must be `string`; this is checked during semantic analysis.
 - **Literal rules apply.** What the literal does, the process call does: `` $`echo {x}` `` interpolates, `$"echo {x}"` runs the braces as they are, and a raw literal passes backslashes untouched. Any other string value is used as it is.
 - **Escapes reach the shell processed.** To give the shell a literal backslash sequence such as `\n`, use a raw literal (`$r"printf 'a\nb'"`) or double the backslash (`` $`printf 'a\\nb'` ``).
-- **`fallback`** attaches to the whole process expression ([§4.7](#47-fallback)): `` $`cmd` fallback "x" ``.
+- **Result.** As an expression, a process call is a result `error{failed}!string`, unwrapped with `try` or `catch` ([§4.7](#47-try-and-catch)): `` try $`cmd` ``, `` $`cmd` catch "x" ``. With `nofail` it is a plain `string` ([§6.2](#62-failure-handling)).
 - **One invocation.** Each process call is **one invocation** of its interpreter ([§7](#7-settings)): `shell` for commands, `script` for scripts ([§6.4](#64-scripts)). It runs in the working directory and environment in effect ([§12.6](#126-environment-and-working-directory-at-a-glance)).
 - **No `cd` across calls.** Because every process call is its own invocation, a `cd` inside one does not carry over to later process calls or to built-in functions. To change the working directory, use `in` ([§4.11](#411-in-expression), [§8.9](#89-in-statement)).
 
 ### 6.1 Statements and Expressions
 
-A process call is a **statement** when it stands alone as a line of a task body, and an **expression** when it appears where an expression is expected (a binding's right-hand side, an argument, inside an interpolation, a `with` subject, a static binding at file root or in a group body, and so on).
+A process call is a **statement** when it stands alone as a line of a task body, and an **expression** when it appears where an expression is expected (a binding's right-hand side, an argument, inside an interpolation, a static binding at file root or in a group body, and so on).
 
 | Aspect | Process statement | Process expression |
 |--------|-------------------|--------------------|
-| Type | none | `string` |
+| Type | none | `error{failed}!string` (`string` with `nofail`) |
 | Echo | The command (after interpolation) is echoed first; `noecho` disables. Scripts are not echoed by default ([§6.4](#64-scripts)) | None |
 | stdout | Inherited | **Captured**; becomes the value |
 | stderr | Inherited | Inherited |
 | stdin | Inherited | Empty (reads end-of-file immediately; never waits for input) |
-| Non-zero exit | Aborts execution | Aborts execution |
+| Non-zero exit | Aborts execution | The expression is an error result with id `failed`; it does not abort by itself |
 | `@status_code()` | Updated | Updated |
-| `fallback` | None | Optional ([§4.7](#47-fallback)) |
+| Unwrapping | none | `try` / `catch` ([§4.7](#47-try-and-catch)) |
 
-**Captured output.** For a process expression, every newline (`\n` or `\r\n`) at the **end** of the captured output is removed. Nothing else is trimmed: leading whitespace, trailing spaces and tabs, and newlines inside the output are preserved.
+**Captured output.** For a process expression, every newline (`\n` or `\r\n`) at the **end** of the captured output is removed. Nothing else is trimmed: leading whitespace, trailing spaces and tabs, and newlines inside the output are preserved. When the command fails, its output is dropped and only the error remains; to keep the output of a failing command, use `nofail`.
 
-**Static bindings.** A process expression in a static binding runs lazily on first reference, once, and the result is cached, in the environment and working directory of the declaring scope ([§3](#3-bindings)).
+**Static bindings.** A process expression in a static binding runs lazily on first reference, once, and its result (an error result included) is cached, in the environment and working directory of the declaring scope ([§3](#3-bindings)).
 
 ### 6.2 Failure Handling
 
-A process fails when it exits with a non-zero status. By default this **aborts execution** with an error; there is no global switch to change that. Opt out per call:
+A process fails when it exits with a non-zero status. A process statement then aborts execution, and a process expression produces an error result with id `failed`, whose message says what happened. There is no global switch to change this. Opt out per call:
 
 | Form | On failure |
 |------|------------|
-| `` $`cmd` `` | Aborts execution (default) |
-| `` $[nofail]`cmd` `` | Does not abort. A statement simply continues; an expression evaluates to whatever the command wrote to stdout (possibly nothing). The exit status is available via `@status_code()`. |
-| `` $`cmd` fallback <expr> `` | Expression only: evaluates to `<expr>` instead |
+| `` $`cmd` `` (statement) | Aborts execution (default) |
+| `` $`cmd` `` (expression) | An error result `error{failed}!string`: `try` aborts with its message, `catch` replaces it |
+| `` $[nofail]`cmd` `` | Not a failure. A statement simply continues; an expression is a plain `string` holding whatever the command wrote to stdout (possibly nothing). The exit status is available via `@status_code()`. |
 
-`fallback` and `nofail` cannot be combined (compile-time error).
+A `nofail` expression is not a result, so `try` or `catch` on it is a compile-time error.
 
 ```
-greeting := $`echo "Hello"`                       // "Hello"
-branch   := $`git rev-parse --abbrev-ref HEAD`
-version  := $`zig --version` fallback "unknown"
+greeting := try $`echo "Hello"`                   // "Hello"
+branch   := try $`git rev-parse --abbrev-ref HEAD`
+version  := $`zig --version` catch "unknown"
 
 task probe {
     // Keep going on failure and inspect the outcome yourself
@@ -1201,7 +1253,7 @@ Process attributes are written inline, between the `$` and the command, in a sin
 
 | Attribute | Meta type | Description |
 |-----------|-----------|-------------|
-| `[nofail]` | flag | A non-zero exit status does not abort execution ([§6.2](#62-failure-handling)). |
+| `[nofail]` | flag | A non-zero exit status is not a failure: a statement does not abort, and an expression is a plain `string` instead of a result ([§6.2](#62-failure-handling)). |
 | `[noecho]` | `bool` | Do not echo the command before running it. Written without a value it means `true`; `[noecho: false]` forces the echo. The default is `false` for commands and `true` for scripts ([§6.4](#64-scripts)). The command's own output is unaffected. |
 | `[script]` | flag | Run the text as a script instead of a command ([§6.4](#64-scripts)). |
 
@@ -1225,7 +1277,7 @@ task test(num: number) $[script]`
 - **Interpreter defaults.** On Linux the default is `["/bin/sh", "-eu"]`, so an unset variable or a failing command stops the script. Set `script` to use another interpreter, e.g. `set script = ["bash", "-euo", "pipefail"]`.
 - **Stdin.** The script text is not sent through stdin, so stdin stays available to the script exactly as for any other process call ([§6.1](#61-statements-and-expressions)).
 - **Echo.** Scripts are not echoed. `[noecho: false]` echoes the script text like a command. This default may change ([§15](#15-planned-features)).
-- **Everything else is as for any process call.** A script may be a statement or an expression, accepts `nofail` and `fallback`, and updates `@status_code()`.
+- **Everything else is as for any process call.** A script may be a statement or an expression, accepts `nofail`, and as an expression is a result like any process call (`try`, `catch`), and updates `@status_code()`.
 - **Which literal.** The text is any string expression. A multi-line backtick string ([§4.2](#multi-line-strings)) is the usual choice; use a raw backtick string for a script that is full of braces: ``$[script]r`...` ``.
 
 ---
@@ -1404,13 +1456,13 @@ A task body may contain any combination of:
 | Switch statement | `switch(...) { ... }` ([§8.6](#86-switch-statement)) |
 | For statement | `for(...) \|...\| { ... }` ([§8.7](#87-for-statement)) |
 | In statement | `in(path) { ... } else { ... }` ([§8.9](#89-in-statement)) |
-| Parallel block | `parallel[(n)] { ... }` ([§13.4](#134-parallel-block)) |
+| Parallel block | `parallel[(n)] { ... }` ([§13.3](#133-parallel-block)) |
 | Task call | `name(...)` / `::name(...)` / `group::name(...)` ([§9](#9-task-calls)) |
 | Expression statement | Any other expression, e.g. `@print(msg)` |
 
 **Expression statements.** A line that matches none of the other forms is parsed as an expression whose value is discarded. This is what lets `@print(...)` stand alone on a line: its type is `void`, so discarding it is harmless.
 
-**Discarding values.** An expression statement whose value is not `void` (or `noreturn`) is a compile-time error (`discarded value`), because the value would be silently lost. To evaluate an expression and deliberately ignore its result, bind it to `_`:
+**Discarding values.** An expression statement whose value is not `void` (or `noreturn`) is a compile-time error (`discarded value`), because the value would be silently lost. This includes a result: unwrap it with `try` or `catch`. To evaluate an expression and deliberately ignore its result, bind it to `_`:
 
 ```
 _ := double(2)        // evaluated, result discarded
@@ -1418,15 +1470,13 @@ _ := double(2)        // evaluated, result discarded
 
 `_` is never defined as a name, so it cannot be read, and may be used any number of times in one scope.
 
-**No statement form of `with`.** `with` ([§4.12](#412-with-expression)) exists only as an expression. In a task body, name a value with a binding (`name := ...`) instead.
-
 **Statement blocks.** Wherever statements are expected (a task body, the branches of `if`, the body of `for`, the body of `in`, the body of a `switch` branch), the grammar accepts a *statement block*:
 
 ```
 STMT_BLOCK := '{' STATEMENTS '}' | STATEMENT
 ```
 
-A block with exactly one statement may omit its braces. This is one general rule, not a special form of any construct; a brace-less task such as `task build $`cc main.c`` is simply a consequence of it. The parallel block is the exception: it always needs its braces ([§13.4](#134-parallel-block)).
+A block with exactly one statement may omit its braces. This is one general rule, not a special form of any construct; a brace-less task such as `task build $`cc main.c`` is simply a consequence of it. The parallel block is the exception: it always needs its braces ([§13.3](#133-parallel-block)). A statement block is not a block expression ([§4.12](#412-block-expression)): where an expression is expected, `{ ... }` holds bindings and a result expression instead.
 
 ### 8.5 If Statement
 
@@ -1476,7 +1526,7 @@ switch(color) {
 ```
 
 - `<subject>` is evaluated once.
-- Patterns are literals only and must be unique (compile-time errors), as in the expression form ([§4.4](#44-switch-expression)).
+- Patterns are literals only and must be unique (compile-time errors), as in the expression form ([§4.4](#44-switch-expression)). An error subject, available in a `catch` handler, takes its ids as patterns, and an `else` after covering every id is a warning ([§4.4](#switching-on-an-error)).
 - `else` is **optional**. If nothing matches and there is no `else`, execution continues after the `switch`.
 
 ### 8.7 For Statement
@@ -1573,7 +1623,7 @@ A dependency that has already run is not run again. This is what makes a shared 
 **Evaluation order.** A dependency's arguments are evaluated right before that dependency starts, left to right through the list. A later dependency's arguments can therefore observe the effects of the earlier dependencies:
 
 ```
-[generate(), show(@read("version.txt") fallback "none")]   // version.txt is read after generate() has run
+[generate(), show(@read("version.txt") catch "none")]   // version.txt is read after generate() has run
 ```
 
 **Failure.** The first failure aborts the whole run: the remaining dependencies and the body do not run, and tasq exits with a non-zero status.
@@ -1668,7 +1718,7 @@ task package(target: string) [compile(target)]
 **A Justfile-style project:**
 
 ```
-host := $`uname -a`
+host := try $`uname -a`
 
 [desc: "build main"]
 task build
@@ -1911,10 +1961,10 @@ tasq --check
 **What it does not do:**
 
 - It executes nothing. No task body runs, no process call is spawned (statement or expression), and no binding is evaluated.
-- Because nothing runs, it cannot detect **runtime** failures: a command exiting non-zero, an `@error(...)` being reached, a missing environment variable, an unparsable `@parse_number` input, an `@at` position out of bounds, an unreadable `@read` file, and so on.
+- Because nothing runs, it cannot detect **runtime** failures: a `try` that meets an error (a command exiting non-zero, a missing environment variable, an unparsable `@parse_number` input, an `@at` position out of bounds, an unreadable `@read` file), an `@error(...)` being reached, and so on.
 - Lambdas are checked in two stages ([§4.8](#48-lambdas)): at their definition, with parameters of unknown type, and at each use, with the concrete types. Errors that depend on a parameter's type can therefore only be found for lambdas that are used.
 
-**Exit status.** `tasq --check` exits with a non-zero status when at least one error diagnostic is reported, so it can be used in scripts and CI.
+**Exit status.** `tasq --check` exits with a non-zero status when at least one error diagnostic is reported, so it can be used in scripts and CI. Warnings (for example an unreachable `else`, [§4.4](#switching-on-an-error)) are printed too but do not change the exit status.
 
 ### 11.3 Task Arguments
 
@@ -2173,7 +2223,7 @@ Static bindings start at step 2, since no `[env]` is in effect for them.
 [env: ("NODE_ENV", "production")]
 [env: ("LOG_LEVEL", "warn")]
 task deploy {
-    $`echo "Running in {@env("NODE_ENV") fallback "unknown"}"`
+    $`echo "Running in {@env("NODE_ENV") catch "unknown"}"`
     build() // NODE_ENV and LOG_LEVEL are inherited here too
 }
 ```
@@ -2182,12 +2232,12 @@ task deploy {
 
 ```
 // Static: always sees the root environment (a raw string keeps the shell's braces as they are)
-layer := $r`echo "${LAYER:-unset}"`
+layer := try $r`echo "${LAYER:-unset}"`
 
 [env: ("LAYER", "task")]
 task show {
     @print(layer)                              // "unset" (if LAYER isn't set in the OS environment)
-    local := $r`echo "${LAYER:-unset}"`
+    local := try $r`echo "${LAYER:-unset}"`
     @print(local)                              // "task"
 }
 ```
@@ -2264,8 +2314,8 @@ By default tasq runs everything sequentially. Writing the keyword **`parallel`**
 | Construct | Syntax | Concurrent parts (*branches*) | See |
 |-----------|--------|-------------------------------|-----|
 | `for` expression and statement | `for(<subjects>) parallel[(<n>)] \|<captures>\| ...` | the iterations | [§13.2](#132-parallel-for) |
-| `with` expression | `with(<subjects>) parallel[(<n>)] \|<captures>\| <expr>` | the subjects | [§13.3](#133-parallel-with) |
-| Parallel block (statement) | `parallel[(<n>)] { <statements> }` | the statements | [§13.4](#134-parallel-block) |
+| Parallel block (statement) | `parallel[(<n>)] { <statements> }` | the statements | [§13.3](#133-parallel-block) |
+| Parallel block expression | `parallel[(<n>)] { <bindings> <result expression> }` | the bindings | [§13.4](#134-parallel-block-expression) |
 
 The optional `(<n>)` limits how many branches run at the same time. Task dependencies are never parallel ([§8.8](#88-task-dependencies)).
 
@@ -2286,7 +2336,7 @@ task compress {
 
 ### 13.1 Model and Limits
 
-**Branches.** The unit of concurrency is a *branch*: one iteration of a parallel `for`, one subject of a parallel `with`, one statement of a parallel block. Branches are numbered in order: by iteration index, by subject position and by statement position.
+**Branches.** The unit of concurrency is a *branch*: one iteration of a parallel `for`, one statement of a parallel block, one binding of a parallel block expression. Branches are numbered in order: by iteration index, by statement position and by binding position.
 
 **Join.** A parallel construct finishes only when all of its branches have finished. Whatever follows it runs afterwards. Nothing is ever left running in the background.
 
@@ -2332,7 +2382,7 @@ The subjects, the captures and the window of indices work exactly as in a sequen
 
 ```
 // Results keep input order, even if the first iteration finishes last
-sizes := for(["big.iso", "a.txt", "b.txt"]) parallel |f| $`stat -c %s {f}`
+sizes := for(["big.iso", "a.txt", "b.txt"]) parallel |f| try $`stat -c %s {f}`
 
 // `continue` filters in the expression form
 up := for(hosts) parallel(8) |h| if ($[nofail]`ping -c1 {h}` == "") continue else h
@@ -2347,38 +2397,10 @@ for(files, 0..) parallel |f, i| {
 Parallel loops can be nested; the inner loop shares the global budget ([§13.1](#131-model-and-limits)):
 
 ```
-grid := for(["a", "b"]) parallel |x| for([1, 2]) parallel |y| $`echo {x}{y}`   // [[a1, a2], [b1, b2]]
+grid := for(["a", "b"]) parallel |x| for([1, 2]) parallel |y| try $`echo {x}{y}`   // [[a1, a2], [b1, b2]]
 ```
 
-### 13.3 Parallel With
-
-```
-with(<subjects>) parallel[(<n>)] |<captures>| <expr>
-```
-
-All subjects are evaluated concurrently, each in a scope of its own. When **all** of them have finished, their values are bound to the captures and the body is evaluated **once**, exactly as in a sequential `with` ([§4.12](#412-with-expression)); the body itself does not run in parallel. The value of the whole expression is the value of the body.
-
-- The subjects are started in order but may finish in any order. The "left to right" guarantee of a sequential `with` does not hold: subjects must not depend on each other's side effects.
-- The rules for subjects, captures, destructuring and scope are those of [§4.12](#412-with-expression). In particular a subject still cannot be a fallible result `!T`, and captured names are visible only in the body.
-- If a subject fails, the body does not run ([§13.5](#135-failure)).
-- The limit works as everywhere else; it only matters when there are more subjects than `n`.
-
-```
-// Three independent lookups cost as much as the slowest one
-info := with(
-    $`git rev-parse --short HEAD`,
-    $`git branch --show-current`,
-    $`date +%F`
-) parallel |sha, branch, day| `{sha} {branch} {day}`
-
-// Gather concurrently, then continue with ordinary statements
-staging, prod := with(
-    $`curl -fsS https://staging.example.com/version`,
-    $`curl -fsS https://example.com/version`
-) parallel |s, p| (s, p)
-```
-
-### 13.4 Parallel Block
+### 13.3 Parallel Block
 
 ```
 parallel[(<n>)] {
@@ -2391,7 +2413,7 @@ parallel[(<n>)] {
 A parallel block is a statement. **Every statement of the block is one branch**, and all of them run concurrently. A statement that contains blocks of its own (`if`, `switch`, `for`, `in`) is still a single branch as a whole. Any statement is allowed: process statements, task calls, `if`, `switch`, `for` (also a parallel one), `in`, expression statements such as `@print(...)`, and bindings.
 
 - **Braces are required.** A single statement has nothing to run alongside, so the brace-less form of [§8.4](#84-task-body) does not apply to the parallel block.
-- **Every statement runs in a scope of its own.** A binding is allowed, mainly so that a value can be discarded legally with `_ := ...` ([§8.4](#84-task-body)). The names it introduces are visible only inside that statement: other statements of the block and the code after the block can never read them.
+- **Every statement runs in a scope of its own.** A binding is allowed, mainly so that a value can be discarded legally with `_ := ...` ([§8.4](#84-task-body)). The names it introduces are visible only inside that statement: other statements of the block and the code after the block can never read them. To use the values, write a parallel block expression ([§13.4](#134-parallel-block-expression)).
 - **`break` and `continue`** cannot refer to a `for` that encloses the block ([§4.6](#46-break-and-continue)): that is a compile-time error. Inside a `for` that is itself in a branch they work as usual.
 - The block finishes when all of its statements have finished.
 
@@ -2400,7 +2422,7 @@ task build_all {
     parallel(2) {
         in("frontend") $`npm run build`     // `in` affects only this branch
         in("backend")  $`cargo build`
-        _ := $`git describe --tags`         // evaluated for its side effects, result discarded
+        _ := try $`git describe --tags`     // evaluated for its side effects, result discarded
         if (@os() != "windows") docs()
         for(images) parallel |img| $`optimize {img}`
     }
@@ -2408,13 +2430,56 @@ task build_all {
 }
 ```
 
+### 13.4 Parallel Block Expression
+
+```
+parallel[(<n>)] {
+    <binding>
+    <binding>
+    ...
+    <result expression>
+}
+```
+
+A parallel block expression is the parallel form of a block expression ([§4.12](#412-block-expression)): the bindings run concurrently, and a result expression combines their values.
+
+- **Every binding is one branch**, plain, destructuring or `_ :=`. It runs in a scope of its own ([§13.1](#131-model-and-limits)) that sees the names visible where the construct is written, but **not its siblings**: referencing a name bound by another branch is a compile-time error.
+- **The result expression** is evaluated once, when **all** branches have finished, on the thread that reached the construct and in the scope where the construct is written. Only it sees the names bound by the block, all of them. They are visible nowhere else. The value and type of the whole expression are those of the result expression.
+- **Braces are required**, as for the parallel block.
+- **`break` and `continue`** cannot refer to a `for` that encloses the construct from inside a binding (compile-time error). The result expression runs after the join, so there they work as in a sequential block ([§4.12](#412-block-expression)).
+- If a branch fails, the result expression is not evaluated ([§13.5](#135-failure)).
+
+```
+// Three independent lookups cost as much as the slowest one
+info := parallel {
+    sha    := try $`git rev-parse --short HEAD`
+    branch := try $`git branch --show-current`
+    day    := try $`date +%F`
+    `{sha} {branch} {day}`
+}
+
+// Gather concurrently, then continue with ordinary statements
+staging, prod := parallel {
+    s := try $`curl -fsS https://staging.example.com/version`
+    p := try $`curl -fsS https://example.com/version`
+    (s, p)
+}
+
+// Siblings are invisible to each other
+bad := parallel {
+    a := try $`make a`
+    b := `{a}`      // compile-time error: `a` belongs to another branch
+    b
+}
+```
+
 ### 13.5 Failure
 
-A branch fails when it aborts the run in the usual way: a process that exits non-zero without `nofail` or `fallback` ([§6.2](#62-failure-handling)), `@error(...)`, an error raised by a task it called, and so on.
+A branch fails when it aborts the run in the usual way: a process statement that exits non-zero without `nofail`, a `try` that meets an error, `@error(...)`, an error raised by a task it called, and so on.
 
 - Every failing branch reports its error as it would in a sequential run.
 - After the first failure **no further branch is started**. Branches that are already running are **not interrupted**; they finish normally. Branches that never started are skipped silently.
-- When the running branches have finished, the construct aborts the run, and tasq exits with a non-zero status as for any other failure. Nothing after the construct runs, and a failing `with` does not evaluate its body.
+- When the running branches have finished, the construct aborts the run, and tasq exits with a non-zero status as for any other failure. Nothing after the construct runs, and a failing parallel block expression does not evaluate its result expression.
 
 ### 13.6 Status Code
 
@@ -2422,7 +2487,7 @@ A branch fails when it aborts the run in the usual way: a process that exits non
 
 - Inside a branch it holds the status of the last process that branch ran. Before the branch has run one, it holds the value in effect where the construct is written, as in any nested block.
 - A branch never changes the status that other branches see.
-- When the construct has finished, the status is that of the **highest-numbered branch that ran a process**. This is the value a sequential run of the same construct would leave, whatever the order in which the branches finished. If no branch ran a process, the status is unchanged.
+- When the construct has finished, the status is that of the **highest-numbered branch that ran a process**. This is the value a sequential run of the same construct would leave, whatever the order in which the branches finished. If no branch ran a process, the status is unchanged. The result expression of a parallel block expression sees this value.
 
 ### 13.7 Interaction with Other Features
 
@@ -2439,7 +2504,8 @@ A branch fails when it aborts the run in the usual way: a process that exits non
 | Mistake | Example |
 |---------|---------|
 | `break` in a parallel `for` (expression or statement) | `for(xs) parallel \|x\| if (x < 0) break else x` |
-| `break` or `continue` that refers to a `for` outside the parallel block | `for(xs) \|x\| { parallel { break } }` |
+| `break` or `continue` that refers to a `for` outside a parallel block, or outside a branch of a parallel block expression | `for(xs) \|x\| { parallel { break } }` |
+| A sibling's binding used in a parallel block expression | `parallel { a := 1  b := a  b }` |
 | A limit that is not a `number` | `parallel("4")` |
 | A parallel block without braces | `parallel $`make`` |
 | A `jobs` setting that is not a whole number of at least `1` | `set jobs = 0`, `set jobs = 2.5` |
@@ -2459,7 +2525,7 @@ A branch fails when it aborts the run in the usual way: a process that exits non
 | `'c'` | `char` | No | Single character |
 | `("a", 1)` | tuple | No | Two or more elements of any value type, lambdas included ([§4.10](#410-tuples-and-destructuring)) |
 | `\|a, b\| expr` | lambda | No | Single-expression function; types inferred per use ([§4.8](#48-lambdas)) |
-| `` $[attrs] <string expr> `` | process call | By its literal | Statement or expression; e.g. `` $`command {expr}` `` ([§6](#6-process-calls)) |
+| `` $[attrs] <string expr> `` | process call | By its literal | Statement, or expression of type `error{failed}!string` (`string` with `nofail`); e.g. `` $`command {expr}` `` ([§6](#6-process-calls)) |
 
 Escape sequences (valid in every non-raw literal): `\n` `\t` `\r` `\\` `\"` `\'` ``\` `` `\0` `\xNN` `\u{NNNN...}` `\{` `\}`
 
@@ -2469,10 +2535,11 @@ Escape sequences (valid in every non-raw literal): `\n` `\t` `\r` `\\` `\"` `\'`
 |------|---------|-----|
 | `a and b`, `a or b`, `not a` | Boolean operators; there is no `!` operator. Precedence: comparison, then `not`, then `and`, then `or` | [§4.1](#41-operators) |
 | `if (c) a else b` | Conditional expression | [§4.3](#43-if-expression) |
-| `switch(x) { p => a, else => b }` | Multi-way expression | [§4.4](#44-switch-expression) |
+| `switch(x) { p => a, else => b }` | Multi-way expression; on an error value the patterns are its ids | [§4.4](#44-switch-expression) |
 | `for(list) \|x\| expr` | Builds a list: map, filter (`continue`), take-while (`break`), validate (`@error`) | [§4.5](#45-for-expression) |
-| `with(expr) \|x\| expr` | Names a value inside an expression (expression only) | [§4.12](#412-with-expression) |
-| `call() fallback x` | Replacement value when a call fails | [§4.7](#47-fallback) |
+| `{ a := x  a + a }` | Block expression: bindings, then a result expression | [§4.12](#412-block-expression) |
+| `try r` | The value of a result, or abort with the error's message | [§4.7](#47-try-and-catch) |
+| `r catch x`, `r catch \|e\| x` | The value of a result, or the handler's value; the capture is the error value | [§4.7](#47-try-and-catch) |
 | `in(path) a else b` | Evaluate in another directory | [§4.11](#411-in-expression) |
 
 ### Ranges, Slices and Tuples
@@ -2482,10 +2549,9 @@ Escape sequences (valid in every non-raw literal): `\n` `\t` `\r` `\\` `\"` `\'`
 | `for(1..3) \|i\| ...` | Range loop over indices `1, 2` | [§4.9](#49-ranges-and-slices) |
 | `for(list, 0..) \|item, i\| ...` | Loop with the element's index | [§4.9](#49-ranges-and-slices) |
 | `list[1..3]`, `str[1..]` | Slice (never errors) | [§4.9](#49-ranges-and-slices) |
-| `@at(list, 0) fallback x` | Single element or character (errors out of range) | [§5](#5-built-in-functions) |
+| `@at(list, 0) catch x` | Single element or character (fails with `out_of_bounds`) | [§5](#5-built-in-functions) |
 | `a, b := tuple` | Destructuring binding | [§4.10](#410-tuples-and-destructuring) |
 | `for(tuples) \|(a, b)\| ...` | Destructuring capture | [§4.10](#410-tuples-and-destructuring) |
-| `with(tuple) \|(a, b)\| ...` | Destructuring capture in `with` | [§4.12](#412-with-expression) |
 
 ### Working Directory
 
@@ -2501,8 +2567,9 @@ Escape sequences (valid in every non-raw literal): `\n` `\t` `\r` `\\` `\"` `\'`
 
 | Form | Meaning | See |
 |------|---------|-----|
-| `` $`cmd` `` | Run a command with the `shell` interpreter; aborts on failure | [§6](#6-process-calls) |
-| `` $[nofail]`cmd` `` | A non-zero exit does not abort | [§6.2](#62-failure-handling) |
+| `` $`cmd` `` | Run a command with the `shell` interpreter; as a statement it aborts on failure, as an expression it is an `error{failed}!string` | [§6](#6-process-calls) |
+| `` try $`cmd` ``, `` $`cmd` catch x `` | The captured output as a `string`; abort or replacement on failure | [§6.2](#62-failure-handling) |
+| `` $[nofail]`cmd` `` | A non-zero exit is not a failure; as an expression, a plain `string` | [§6.2](#62-failure-handling) |
 | `` $[noecho]`cmd` ``, `` $[noecho: false]`cmd` `` | Suppress or force the echo of the command | [§6.3](#63-process-attributes) |
 | `` $[script]`...` `` | Run the text as a script file with the `script` interpreter | [§6.4](#64-scripts) |
 
@@ -2521,8 +2588,8 @@ Escape sequences (valid in every non-raw literal): `\n` `\t` `\r` `\\` `\"` `\'`
 |------|---------|-----|
 | `for(xs) parallel \|x\| expr` | Iterations run concurrently; the result keeps input order; `continue` drops an element; no `break` | [§13.2](#132-parallel-for) |
 | `for(xs) parallel(4) \|x\| stmt` | Statement form, at most 4 iterations at once; `continue` ends an iteration; no `break` | [§13.2](#132-parallel-for) |
-| `with(a, b) parallel \|x, y\| expr` | Subjects are evaluated concurrently, then the body runs once | [§13.3](#133-parallel-with) |
-| `parallel(n) { s1 s2 }` | Every statement is a concurrent branch; braces required | [§13.4](#134-parallel-block) |
+| `parallel(n) { s1 s2 }` | Statement: every statement is a concurrent branch; braces required | [§13.3](#133-parallel-block) |
+| `parallel(n) { a := x  b := y  expr }` | Expression: every binding is a concurrent branch, siblings invisible; the result expression sees them all | [§13.4](#134-parallel-block-expression) |
 | `set jobs = 8` | Global budget of threads (a whole number, at least 1); default: number of CPUs | [§7](#7-settings), [§13.1](#131-model-and-limits) |
 
 ### Scope Resolution
@@ -2552,6 +2619,5 @@ Reserved for future versions; not currently part of the language:
 - **Cycle detection for task call statements.** Dependency cycles are rejected at compile time, but cycles through task call statements are not detected today ([§8.8](#88-task-dependencies), [§9](#9-task-calls)). A future version may report them.
 - **Parallel dependencies.** An opt-in way to run the dependencies of a task concurrently. Dependencies are always sequential today ([§8.8](#88-task-dependencies)).
 - **Output modes for parallel constructs.** Today the output of concurrent branches is neither ordered nor grouped ([§13.7](#137-interaction-with-other-features)). Grouped output (each branch's output printed together when the branch finishes) and line-prefixed live output are being considered, probably selected by a setting.
-- **Tuple shorthand for parallel `with`.** `with(<subjects>) parallel ...`, which returns the results as a tuple without captures and body, for use with destructuring (`a, b := with(x, y) parallel ...`).
 - **Cancelling running branches on failure.** Today running branches always finish ([§13.5](#135-failure)); stopping them early would require killing their processes.
 - **Task label format.** The exact text printed by `task_label` ([§7](#7-settings)) is not specified yet.
