@@ -844,14 +844,7 @@ pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []cons
         return TaskError.TaskNotFound;
     };
 
-    var runtime: interpreter.Runtime = try .init(
-        ctx.allocator,
-        ctx.invokation_dir,
-        ctx.io,
-        ctx.environ,
-        ctx.printer,
-        &file.options,
-    );
+    var runtime = try buildRuntime(ctx, file);
     defer runtime.deinit();
 
     var parser: TaskArgumentParser = try .init(
@@ -877,4 +870,46 @@ pub fn runCheck(ctx: *const Context, source_filepath: []const u8) !void {
         error.CompilationFailed => return,
         else => return err,
     };
+}
+
+pub fn runEvaluate(ctx: *const Context, bind: []const u8, source_filepath: []const u8) !void {
+    const file = try compileRunfile(ctx, source_filepath);
+
+    var runtime = try buildRuntime(ctx, file);
+    defer runtime.deinit();
+
+    const symbol = file.scope.resolveLocal(bind, .variable) orelse {
+        try ctx.printer.printStyled(
+            ctx.allocator,
+            style.err,
+            "undefined binding: '{s}'\n",
+            .{bind},
+        );
+        return;
+    };
+
+    const decl = symbol.origin.decl.parent;
+
+    const value = try runtime.evaluateExpr(.{
+        .cwd = runtime.cwd,
+        .scope = runtime.root_scope,
+    }, &decl.value);
+
+    try ctx.printer.printStyled(
+        ctx.allocator,
+        style.body,
+        "{s}: {f}\n",
+        .{ bind, value },
+    );
+}
+
+fn buildRuntime(ctx: *const Context, file: *const ir.File) !interpreter.Runtime {
+    return try .init(
+        ctx.allocator,
+        ctx.invokation_dir,
+        ctx.io,
+        ctx.environ,
+        ctx.printer,
+        file,
+    );
 }

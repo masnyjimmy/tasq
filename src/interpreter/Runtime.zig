@@ -76,6 +76,7 @@ printer: *Printer,
 options: *const ir.Options,
 // environment
 cwd: std.Io.Dir,
+root_scope: *Scope,
 original_environ: *const std.process.Environ.Map,
 tmpdir: []const u8,
 // parallel
@@ -87,7 +88,7 @@ pub fn init(
     io: std.Io,
     environ: *const std.process.Environ.Map,
     printer: *Printer,
-    options: *const ir.Options,
+    file: *const ir.File,
 ) !Runtime {
 
     // TODO: read dotenv,
@@ -95,8 +96,24 @@ pub fn init(
     const cwd = blk: {
         const cwd = std.Io.Dir.cwd();
 
-        break :blk try cwd.openDir(io, options.working_dir orelse ".", .{});
+        break :blk try cwd.openDir(io, file.options.working_dir orelse ".", .{});
     };
+
+    const root_scope = try Scope.create(
+        null,
+        allocator,
+        file.scope,
+    );
+
+    try root_scope.environ.map.putAll(environ);
+
+    if (file.options.dotenv) |dotenv| {
+        try lib.dotenv.parse(
+            io,
+            dotenv,
+            &root_scope.environ.map,
+        );
+    }
 
     const tmpdir = try lib.program.tempDir(allocator, environ);
 
@@ -105,16 +122,18 @@ pub fn init(
         .invokation_dir = invokation_dir,
         .io = io,
         .printer = printer,
-        .options = options,
+        .options = &file.options,
         .cwd = cwd,
+        .root_scope = root_scope,
         .original_environ = environ,
         .tmpdir = tmpdir,
-        .worker_budget = .init(options.jobs - 1),
+        .worker_budget = .init(file.options.jobs - 1),
     };
 }
 
 pub fn deinit(self: *Runtime) void {
     self.cwd.close(self.io);
+    self.root_scope.destroy();
 }
 
 pub fn run(
@@ -122,25 +141,8 @@ pub fn run(
     initial_task: *const ir.Task,
     values: std.array_hash_map.String(Value),
 ) !void {
-    const root_scope = try Scope.create(
-        null,
-        self.allocator,
-        initial_task.body.scope.root(),
-    );
-    defer root_scope.destroy();
-
-    try root_scope.environ.map.putAll(self.original_environ);
-
-    if (self.options.dotenv) |dotenv| {
-        try lib.dotenv.parse(
-            self.io,
-            dotenv,
-            &root_scope.environ.map,
-        );
-    }
-
     try self.runTask(
-        root_scope,
+        self.root_scope,
         initial_task,
         values,
         false,
