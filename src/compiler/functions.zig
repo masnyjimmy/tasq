@@ -553,6 +553,32 @@ const collections_functions: []const Spec = &.{
         .return_type = .{ .generic = "T" },
     },
     .{
+        .name = "iterate",
+        .args = &.{
+            .{
+                .name = "init",
+                .type = .{ .generic = "T" },
+            },
+            .{
+                .name = "count",
+                .type = .{ .concrete = .number },
+            },
+            .{
+                .name = "fn",
+                .type = .{
+                    .lambda = &.{
+                        .params = &.{
+                            .{ .generic = "T" },
+                        },
+                        .return_type = .{ .generic = "T" },
+                    },
+                },
+            },
+        },
+        .return_type = .{ .list = &.{ .generic = "T" } },
+    },
+
+    .{
         .name = "at",
         .unique_name = "collections/at",
         .args = &.{

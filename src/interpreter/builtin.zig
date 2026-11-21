@@ -436,6 +436,33 @@ const handlers = struct {
         return value;
     }
 
+    fn iterate(self: *Runtime, ctx: Context, args: []const Value, result_type: *const Type) Error!Value {
+        const init = args[0];
+        const count = Runtime.integerize(args[1].number);
+
+        const lambda = args[2].lambda.instance;
+
+        const result_list = try ctx.arena().alloc(Value, @intCast(count));
+
+        for (result_list, 0..) |*item, idx| {
+            const in_val = if (idx == 0)
+                init
+            else
+                result_list[idx - 1];
+
+            item.* = try callLambda(self, ctx, lambda, &.{
+                in_val,
+            });
+        }
+
+        return .{
+            .list = .{
+                .items = result_list,
+                .items_type = result_type.list,
+            },
+        };
+    }
+
     fn @"collections/at"(_: *Runtime, ctx: Context, args: []const Value, return_type: *const Type) Error!Value {
         const list = args[0].list;
 
