@@ -95,17 +95,19 @@ pub fn init(
 
     // TODO: read dotenv,
 
-    const cwd = blk: {
-        const cwd = std.Io.Dir.cwd();
-
-        break :blk try cwd.openDir(io, file.options.working_dir orelse ".", .{});
-    };
+    const cwd = try std.Io.Dir.cwd().openDir(
+        io,
+        file.options.working_dir orelse ".",
+        .{},
+    );
+    errdefer cwd.close(io);
 
     const root_scope = try Scope.create(
         null,
         allocator,
         file.scope,
     );
+    errdefer root_scope.destroy();
 
     try root_scope.environ.map.putAll(environ);
 
@@ -118,6 +120,7 @@ pub fn init(
     }
 
     const tmpdir = try lib.program.tempDir(allocator, environ);
+    errdefer allocator.free(tmpdir);
 
     return .{
         .allocator = allocator,
@@ -135,6 +138,7 @@ pub fn init(
 }
 
 pub fn deinit(self: *Runtime) void {
+    self.allocator.free(self.tmpdir);
     self.cwd.close(self.io);
     self.root_scope.destroy();
 }
@@ -464,7 +468,13 @@ fn handleTaskCall(self: *Runtime, ctx: Ctx, task_call: *const ir.TaskCall) Error
     while (it.next()) |kv| {
         switch (kv.value_ptr.*) {
             .default => |def| try values.put(self.allocator, kv.key_ptr.*, def),
-            .value => |expr| try values.put(self.allocator, kv.key_ptr.*, try self.evaluateExpr(ctx, &expr)),
+            // capture by pointer: evaluating a copy of the Expr would leave
+            // pointers into this stack frame (e.g. list `items_type`) in the result
+            .value => |*expr| try values.put(
+                self.allocator,
+                kv.key_ptr.*,
+                try self.evaluateExpr(ctx, expr),
+            ),
         }
     }
 
@@ -585,42 +595,7 @@ fn executeScript(self: *Runtime, ctx: Ctx, options: ExecuteOptions) Error!u8 {
     }
 
     //TOOD: consider if echo, stdout, stdin etc
-    var child = try std.process.spawn(self.io, .{
-        .argv = argv,
-        .cwd = .{ .dir = ctx.cwd },
-        .environ_map = &ctx.scope.environ.map,
-        .stdout = if (options.out == null)
-            .inherit
-        else
-            .pipe,
-        .stdin = if (options.allow_input)
-            .inherit
-        else
-            .ignore,
-    });
-
-    if (options.out) |output| {
-        var buffer: [4096]u8 = undefined;
-        var file_reader: std.Io.File.Reader = .initStreaming(
-            child.stdout.?,
-            self.io,
-            &buffer,
-        );
-        _ = try file_reader.interface.streamRemaining(output);
-    }
-
-    const result = try child.wait(self.io);
-
-    return switch (result) {
-        .exited => |code| code,
-        .signal => |signal| std.debug.panic(
-            \\Process killed by signal '{t}',
-            \\  Not sure what to do yet :p
-        ,
-            .{signal},
-        ),
-        else => unreachable,
-    };
+    return self.spawnAndWait(ctx, argv, options);
 }
 
 fn executeProcess(self: *Runtime, ctx: Ctx, options: ExecuteOptions) Error!u8 {
@@ -641,24 +616,34 @@ fn executeProcess(self: *Runtime, ctx: Ctx, options: ExecuteOptions) Error!u8 {
         );
     }
 
-    var child = try std.process.spawn(
-        self.io,
-        .{
-            .argv = argv,
-            .cwd = .{ .dir = ctx.cwd },
-            .environ_map = &ctx.scope.environ.map,
-            .stdout = if (options.out == null)
-                .inherit
-            else
-                .pipe,
-            .stdin = if (options.allow_input)
-                .inherit
-            else
-                .ignore,
-        },
-    );
+    return self.spawnAndWait(ctx, argv, options);
+}
+
+/// Spawns `argv`, optionally streams its stdout into `options.out`, and waits
+/// for it. If streaming fails the child is killed so it is never left unreaped.
+fn spawnAndWait(
+    self: *Runtime,
+    ctx: Ctx,
+    argv: []const []const u8,
+    options: ExecuteOptions,
+) Error!u8 {
+    var child = try std.process.spawn(self.io, .{
+        .argv = argv,
+        .cwd = .{ .dir = ctx.cwd },
+        .environ_map = &ctx.scope.environ.map,
+        .stdout = if (options.out == null)
+            .inherit
+        else
+            .pipe,
+        .stdin = if (options.allow_input)
+            .inherit
+        else
+            .ignore,
+    });
 
     if (options.out) |output| {
+        errdefer child.kill(self.io);
+
         var buffer: [4096]u8 = undefined;
         var file_reader: std.Io.File.Reader = .initStreaming(
             child.stdout.?,
@@ -768,14 +753,17 @@ pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value 
         .switch_expr => |switch_expr| {
             const target = try self.evaluateExpr(ctx, &switch_expr.subject);
 
-            const value = switch_expr.cases.get(target) orelse switch_expr.else_case orelse {
-                std.debug.panic(
-                    \\internal error: no matching case found
-                    \\this should have been catched during ir validation
-                , .{});
-            };
+            // by pointer: evaluating a stack copy of the case Expr would leave
+            // dangling pointers into this frame (e.g. list `items_type`)
+            const value: *const ir.Expr = switch_expr.cases.getPtr(target) orelse
+                if (switch_expr.else_case) |*e| e else {
+                    std.debug.panic(
+                        \\internal error: no matching case found
+                        \\this should have been catched during ir validation
+                    , .{});
+                };
 
-            return try self.evaluateExpr(ctx, &value);
+            return try self.evaluateExpr(ctx, value);
         },
         .for_expr => |for_expr| {
             const ranges = try self.allocator.alloc(Range, for_expr.subjects.len);
@@ -858,6 +846,7 @@ pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value 
                                 Error.Break => unreachable,
                                 else => return err,
                             };
+                            // clone into the parent's arena: iter_scope dies on return
                             it.slots[idx] = try value.clone(it.ctx.arena());
                         }
                     };
@@ -1152,8 +1141,8 @@ pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value 
                     null,
                 );
             }
-
-            return try self.evaluateExpr(ctx.withScope(catch_scope), &catch_expr.expr);
+            const result = try self.evaluateExpr(ctx.withScope(catch_scope), &catch_expr.expr);
+            return try result.clone(ctx.arena());
         },
         .block_expr => |block_expr| {
             const scope = try Scope.create(
@@ -1176,9 +1165,11 @@ pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value 
             return try result.clone(ctx.arena());
         },
         .parallel_block => |block_expr| {
+            // must use the runtime allocator (not the parent's arena), like
+            // every other Scope.create, since destroy() frees through it
             const block_scope = try Scope.create(
                 ctx.scope,
-                ctx.arena(),
+                self.allocator,
                 block_expr.scope,
             );
             defer block_scope.destroy();
@@ -1291,11 +1282,12 @@ fn evaluateRange(self: *Runtime, ctx: Ctx, range: *const ir.Range) Error!Range {
     };
 
     const right: ?i64 = blk: {
-        const right = range.right orelse break :blk null;
+        // by pointer, not by copy, so nothing can point into this stack frame
+        const right_expr = if (range.right) |*r| r else break :blk null;
 
         const value = try self.evaluateExpr(
             ctx,
-            &right,
+            right_expr,
         );
 
         break :blk @max(integerize(value.number), left);

@@ -67,10 +67,12 @@ fn callLambda(
         );
     }
 
-    return try self.evaluateExpr(
+    const value = try self.evaluateExpr(
         lambda_ctx,
         &lambda.body,
     );
+
+    return try value.clone(ctx.arena());
 }
 
 /// The failure of `at` / `first` / `last`, for both strings and lists.
