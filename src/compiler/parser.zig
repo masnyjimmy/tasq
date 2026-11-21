@@ -865,7 +865,7 @@ pub const Parser = struct {
             },
             .dollar => try self.parseProcess(follow, .expr),
             .backtick => try self.parseStringExpr(follow),
-            inline .quote, .raw_quote, .raw_backtick => |kind| try self.parseString(kind, follow),
+            inline .quote, .raw_quote, .raw_backtick, .re_quote => |kind| try self.parseString(kind, follow),
             .lbracket => {
                 try self.open();
 
@@ -1062,14 +1062,14 @@ pub const Parser = struct {
     fn parseString(self: *Parser, comptime open_kind: TokenKind, follow: FollowSet) Error!void {
         try self.open();
 
-        const string_kind: TokenKind = switch (open_kind) {
+        const string_kind: TokenKind = comptime switch (open_kind) {
             .quote => .string,
-            .raw_quote, .raw_backtick => .raw_string,
+            .raw_quote, .raw_backtick, .re_quote => .raw_string,
             else => unreachable,
         };
 
-        const close_kind: TokenKind = switch (open_kind) {
-            .quote, .raw_quote => .quote,
+        const close_kind: TokenKind = comptime switch (open_kind) {
+            .quote, .raw_quote, .re_quote => .quote,
             .raw_backtick => .backtick,
             else => unreachable,
         };
@@ -1078,7 +1078,12 @@ pub const Parser = struct {
         _ = try self.eat(string_kind);
         try self.expect(close_kind, follow);
 
-        try self.close(.string);
+        const result: cst.NodeKind = comptime switch (open_kind) {
+            .re_quote => .regex,
+            else => .string,
+        };
+
+        try self.close(result);
     }
 
     fn parseStringExpr(self: *Parser, follow: FollowSet) Error!void {

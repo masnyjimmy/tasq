@@ -235,6 +235,7 @@ pub const Expr = union(enum) {
     };
 
     string: String,
+    regex: Regex,
     number_lit: f64,
     bool_lit: bool,
     list: List,
@@ -405,6 +406,8 @@ pub const IfExpr = struct {
 };
 
 pub const String = []const StringPart;
+
+pub const Regex = *lib.regex.Compiled;
 
 pub const StringPart = union(enum) {
     lit: []const u8,

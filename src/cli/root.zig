@@ -20,7 +20,10 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
         },
     );
 
-    var workspace: compiler.Workspace = .init(allocator);
+    var regex_cache: lib.regex.Cache = .init(allocator);
+    defer regex_cache.deinit();
+
+    var workspace: compiler.Workspace = .init(allocator, &regex_cache);
     defer workspace.deinit();
 
     var diag: conzole.command.Diagnostic = undefined;
@@ -41,6 +44,7 @@ pub fn run(allocator: std.mem.Allocator, io: std.Io, environ: *const std.process
         .invokation_dir = invokation_dir,
         .environ = environ,
         .printer = &printer,
+        .regex_cache = &regex_cache,
         .workspace = &workspace,
     }) catch |err| return switch (err) {
         conzole.command.CommandError.InvalidArguments,

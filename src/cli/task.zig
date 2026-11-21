@@ -911,6 +911,7 @@ fn buildRuntime(ctx: *const Context, file: *const ir.File) !interpreter.Runtime 
         ctx.io,
         ctx.environ,
         ctx.printer,
+        ctx.regex_cache,
         file,
     );
 }
@@ -947,8 +948,11 @@ fn compileExpression(
         break :blk node.children[0].node;
     };
 
+    var regex_cache: lib.regex.Cache = .init(allocator);
+
     var sema: compiler.Sema = .init(
         arena,
+        &regex_cache,
         diagnostics,
     );
 

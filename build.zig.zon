@@ -14,6 +14,10 @@
             .url = "https://github.com/xcaeser/libglob/archive/v0.3.0.tar.gz",
             .hash = "libglob-0.3.0-mm_32r07AAC56Mo-zfb7GxNMTv3Q-WNyahxrIIVCf9Fv",
         },
+        .regex = .{
+            .url = "https://github.com/zig-utils/zig-regex/archive/main.tar.gz",
+            .hash = "zig_regex-0.5.0-omky0do1JgDNUyv4AfO_o1MwOSl-P0GRd5gbWLXjgbN1",
+        },
     },
     .paths = .{""},
     .fingerprint = 0x8fa97201d2ec7744,

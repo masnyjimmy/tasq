@@ -29,7 +29,7 @@ pub const Error = blk: {
     const RWError = std.Io.Writer.Error || std.Io.Reader.Error;
     const ProcessError = std.process.SpawnError;
 
-    break :blk SignalError || DirError || RWError || ProcessError || binary_mod.Error || std.mem.Allocator.Error;
+    break :blk SignalError || DirError || RWError || ProcessError || binary_mod.Error || std.mem.Allocator.Error || lib.regex.Error;
 };
 
 const style = struct {
@@ -72,6 +72,7 @@ allocator: std.mem.Allocator,
 invokation_dir: []const u8,
 io: std.Io,
 printer: *Printer,
+regex_cache: *lib.regex.Cache,
 // source
 options: *const ir.Options,
 // environment
@@ -88,6 +89,7 @@ pub fn init(
     io: std.Io,
     environ: *const std.process.Environ.Map,
     printer: *Printer,
+    regex_cache: *lib.regex.Cache,
     file: *const ir.File,
 ) !Runtime {
 
@@ -122,6 +124,7 @@ pub fn init(
         .invokation_dir = invokation_dir,
         .io = io,
         .printer = printer,
+        .regex_cache = regex_cache,
         .options = &file.options,
         .cwd = cwd,
         .root_scope = root_scope,
@@ -684,6 +687,7 @@ pub fn evaluateExpr(self: *Runtime, ctx: Ctx, expr: *const ir.Expr) Error!Value 
         .bool_lit => |lit| .{ .bool = lit },
         .number_lit => |lit| .{ .number = lit },
         .string => |str| .{ .string = try self.resolveString(ctx, str) },
+        .regex => |regex| .{ .regex = regex },
         .list => |*list| {
             var result: std.ArrayList(Value) = try .initCapacity(
                 ctx.arena(),

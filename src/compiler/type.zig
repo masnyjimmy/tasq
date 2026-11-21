@@ -5,6 +5,7 @@ const lib = @import("lib");
 
 const Tag = enum {
     string,
+    regex,
     number,
     bool,
     list,
@@ -37,6 +38,7 @@ pub const LambdaTemplate = struct {
 
 pub const Type = union(Tag) {
     string,
+    regex,
     number,
     bool,
     list: *const Type,

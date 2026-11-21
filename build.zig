@@ -171,7 +171,12 @@ fn addTasq(
         .optimize = optimize,
     }).module("libglob");
 
-    //============= modules ===============//
+    const regex_mod = b.dependency("regex", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("regex");
+
+    //============ modules ============//
 
     const lib_mod = createModule(
         b,
@@ -180,9 +185,14 @@ fn addTasq(
         optimize,
         strip,
     );
+    lib_mod.addImport("regex", regex_mod);
+
+    //============ compiler ============//
 
     const compiler_mod = createModule(b, "src/compiler/root.zig", target, optimize, strip);
     compiler_mod.addImport("lib", lib_mod);
+
+    //============ interpreter ============//
 
     const interpreter_mod = createModule(b, "src/interpreter/root.zig", target, optimize, strip);
     interpreter_mod.addImport("conzole", conzole_mod);
@@ -190,11 +200,15 @@ fn addTasq(
     interpreter_mod.addImport("lib", lib_mod);
     interpreter_mod.addImport("libglob", glob_mod);
 
+    //============ lsp ============//
+
     const lsp_mod = createModule(b, "src/lsp/root.zig", target, optimize, strip);
     lsp_mod.addImport("conzole", conzole_mod);
     lsp_mod.addImport("lsp_kit", lsp_kit_mod);
     lsp_mod.addImport("lib", lib_mod);
     lsp_mod.addImport("compiler", compiler_mod);
+
+    //============ cli ===========//
 
     const cli_mod = createModule(b, "src/cli/root.zig", target, optimize, strip);
     cli_mod.addImport("conzole", conzole_mod);
@@ -203,6 +217,8 @@ fn addTasq(
     cli_mod.addImport("interpreter", interpreter_mod);
     cli_mod.addImport("lsp", lsp_mod);
     cli_mod.addOptions("build_options", build_options);
+
+    //=========== exe ============//
 
     const exe_mod = createModule(b, "src/main.zig", target, optimize, strip);
     exe_mod.addOptions("build_options", build_options);

@@ -81,8 +81,18 @@ fn isBuiltIn(t: anytype) bool {
     return false;
 }
 
-fn isIterable(comptime t: type) bool {
-    return @hasDecl(t, "iterator");
+fn isIterable(comptime T: type) bool {
+    if (@hasDecl(T, "iterator") == false)
+        return false;
+
+    const FnT = @TypeOf(T.iterator);
+
+    const fti = @typeInfo(FnT);
+
+    return switch (fti) {
+        .@"fn" => |f| f.param_types.len == 1,
+        else => false,
+    };
 }
 
 pub fn dump(

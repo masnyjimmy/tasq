@@ -49,6 +49,7 @@ pub const NodeKind = enum {
     tuple,
     char,
     string,
+    regex,
     expr,
 
     literal,

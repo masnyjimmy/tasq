@@ -192,8 +192,11 @@ fn Dump(ctx: *const Context) !void {
                 return;
             }
 
+            var regex_cache: lib.regex.Cache = .init(c.app.allocator);
+
             var sema = compiler.Sema.init(
                 &arena,
+                &regex_cache,
                 d,
             );
 

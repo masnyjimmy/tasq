@@ -113,6 +113,10 @@ pub const InputResult = ResultType(&.{
     "unable_to_read_input",
 });
 
+pub const RegexResult = ResultType(&.{
+    "bad_regex",
+});
+
 const debug_functions: []const Spec = &.{
     .{
         .name = "error",
@@ -693,6 +697,48 @@ const input_functions: []const Spec = &.{
     // },
 };
 
+const regex_functions: []const Spec = &.{
+    .{
+        .name = "regex",
+        .args = &.{
+            .{
+                .name = "pattern",
+                .type = .{ .concrete = .string },
+            },
+        },
+        .return_type = RegexResult.withExpr(.{ .concrete = .string }),
+    },
+    .{
+        .name = "contains",
+        .unique_name = "regex/contains",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = .string },
+            },
+            .{
+                .name = "re",
+                .type = .{ .concrete = .regex },
+            },
+        },
+        .return_type = .{ .concrete = .bool },
+    },
+    .{
+        .name = "matches",
+        .args = &.{
+            .{
+                .name = "str",
+                .type = .{ .concrete = .string },
+            },
+            .{
+                .name = "re",
+                .type = .{ .concrete = .regex },
+            },
+        },
+        .return_type = .{ .concrete = .regex },
+    },
+};
+
 pub const definitions = Functions(
     debug_functions ++
         type_cast_functions ++
@@ -700,7 +746,8 @@ pub const definitions = Functions(
         string_functions ++
         collections_functions ++
         misc_functions ++
-        input_functions,
+        input_functions ++
+        regex_functions,
 );
 
 fn Functions(comptime specs: []const Spec) type {
