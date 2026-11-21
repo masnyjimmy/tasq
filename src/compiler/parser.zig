@@ -24,7 +24,7 @@ const EXPR_START: FollowSet = STRING_START.with(&.{
     .true_kw, .false_kw,    .number,   .ident,
     .lparen,  .backtick,    .lbracket, .switch_kw,
     .if_kw,   .at,          .not_kw,   .minus,
-    .dollar,  .continue_kw, .break_kw,
+    .dollar,  .continue_kw, .break_kw, .parallel_kw,
 });
 // A list element is either an expression or a spread (`...expr`).
 // `...` is NOT part of EXPR_START: a spread is only valid directly inside
@@ -761,7 +761,7 @@ pub const Parser = struct {
 
     //================== << Expressions >> ========================//
 
-    fn parseExpr(self: *Parser, follow: FollowSet) Error!void {
+    pub fn parseExpr(self: *Parser, follow: FollowSet) Error!void {
         try self.parseBinaryBp(0, follow);
     }
 
@@ -865,7 +865,7 @@ pub const Parser = struct {
             },
             .dollar => try self.parseProcess(follow, .expr),
             .backtick => try self.parseStringExpr(follow),
-            inline .quote, .raw_quote, .raw_backtick => |kind| try self.parseString(kind, follow),
+            inline .quote, .raw_quote, .raw_backtick, .re_quote => |kind| try self.parseString(kind, follow),
             .lbracket => {
                 try self.open();
 
@@ -1062,14 +1062,14 @@ pub const Parser = struct {
     fn parseString(self: *Parser, comptime open_kind: TokenKind, follow: FollowSet) Error!void {
         try self.open();
 
-        const string_kind: TokenKind = switch (open_kind) {
+        const string_kind: TokenKind = comptime switch (open_kind) {
             .quote => .string,
-            .raw_quote, .raw_backtick => .raw_string,
+            .raw_quote, .raw_backtick, .re_quote => .raw_string,
             else => unreachable,
         };
 
-        const close_kind: TokenKind = switch (open_kind) {
-            .quote, .raw_quote => .quote,
+        const close_kind: TokenKind = comptime switch (open_kind) {
+            .quote, .raw_quote, .re_quote => .quote,
             .raw_backtick => .backtick,
             else => unreachable,
         };
@@ -1078,7 +1078,12 @@ pub const Parser = struct {
         _ = try self.eat(string_kind);
         try self.expect(close_kind, follow);
 
-        try self.close(.string);
+        const result: cst.NodeKind = comptime switch (open_kind) {
+            .re_quote => .regex,
+            else => .string,
+        };
+
+        try self.close(result);
     }
 
     fn parseStringExpr(self: *Parser, follow: FollowSet) Error!void {
@@ -1252,7 +1257,7 @@ pub const Parser = struct {
             try self.open();
     }
 
-    fn open(self: *Parser) Error!void {
+    pub fn open(self: *Parser) Error!void {
         try self.skipTrivia();
         try self.stack.append(self.allocator, .{
             .start = self.cursor.spanAt(self.cursor.pos).start,
@@ -1269,7 +1274,7 @@ pub const Parser = struct {
         );
     }
 
-    fn finish(self: *Parser, kind: cst.NodeKind) Error!*cst.Node {
+    pub fn finish(self: *Parser, kind: cst.NodeKind) Error!*cst.Node {
         var curr_frame = self.stack.pop() orelse unreachable;
         const children = try curr_frame.children.toOwnedSlice(self.allocator);
         const span: Span = blk: {
@@ -1424,7 +1429,6 @@ pub const Parser = struct {
             try self.pending_trivia.append(self.allocator, tok);
         }
     }
-
     const Frame = struct {
         start: u32,
         children: std.ArrayList(cst.Element),
@@ -1438,6 +1442,10 @@ pub const Parser = struct {
 
 const FollowSet = struct {
     data: std.EnumSet(TokenKind),
+
+    pub const empty: FollowSet = .{
+        .data = .empty,
+    };
 
     fn set(comptime tokens: []const TokenKind) FollowSet {
         return .{

@@ -80,10 +80,24 @@ fn RunList(ctx: *const Context) !void {
 }
 
 fn RunLsp(ctx: *const Context) !void {
-    // TODO: uncomment later
     const lsp = @import("lsp");
 
     try lsp.run(ctx.app.allocator, ctx.app.io);
+}
+
+fn RunEvaluate(ctx: *const Context) !void {
+    switch (ctx.args.len) {
+        1 => {},
+        else => std.debug.panic("Invalid number of arguments", .{}),
+    }
+
+    const bind = ctx.args[0];
+
+    try task_mod.runEvaluate(
+        &ctx.app,
+        bind,
+        ctx.getValueT("file", .string) orelse DEFAULT_FILEPATH,
+    );
 }
 
 fn Dump(ctx: *const Context) !void {
@@ -178,8 +192,11 @@ fn Dump(ctx: *const Context) !void {
                 return;
             }
 
+            var regex_cache: lib.regex.Cache = .init(c.app.allocator);
+
             var sema = compiler.Sema.init(
                 &arena,
+                &regex_cache,
                 d,
             );
 
@@ -244,6 +261,12 @@ pub fn buildCommand(allocator: std.mem.Allocator) !*Command {
         .name = "--usage",
         .brief = "Display usage of task",
         .run = .set(ShowUsage),
+    });
+
+    _ = try rootCmd.createSub(.{
+        .name = "--evaluate",
+        .brief = "Print value of a binding",
+        .run = .set(RunEvaluate),
     });
 
     var lspCmd = try rootCmd.createSub(.{

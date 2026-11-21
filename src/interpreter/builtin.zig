@@ -67,10 +67,12 @@ fn callLambda(
         );
     }
 
-    return try self.evaluateExpr(
+    const value = try self.evaluateExpr(
         lambda_ctx,
         &lambda.body,
     );
+
+    return try value.clone(ctx.arena());
 }
 
 /// The failure of `at` / `first` / `last`, for both strings and lists.
@@ -434,6 +436,33 @@ const handlers = struct {
         }
 
         return value;
+    }
+
+    fn iterate(self: *Runtime, ctx: Context, args: []const Value, result_type: *const Type) Error!Value {
+        const init = args[0];
+        const count = Runtime.integerize(args[1].number);
+
+        const lambda = args[2].lambda.instance;
+
+        const result_list = try ctx.arena().alloc(Value, @intCast(count));
+
+        for (result_list, 0..) |*item, idx| {
+            const in_val = if (idx == 0)
+                init
+            else
+                result_list[idx - 1];
+
+            item.* = try callLambda(self, ctx, lambda, &.{
+                in_val,
+            });
+        }
+
+        return .{
+            .list = .{
+                .items = result_list,
+                .items_type = result_type.list,
+            },
+        };
     }
 
     fn @"collections/at"(_: *Runtime, ctx: Context, args: []const Value, return_type: *const Type) Error!Value {
@@ -845,6 +874,48 @@ const handlers = struct {
                     err.message.?,
                 },
             ),
+        };
+    }
+
+    //=========== regex ==========//
+
+    fn regex(self: *Runtime, ctx: Context, args: []const Value, t: *const Type) Error!Value {
+        const str = args[0].string;
+
+        var diagnostic: lib.regex.Diagnostic = undefined;
+
+        const result = try self.regex_cache.get(str, &diagnostic) orelse {
+            return fns.RegexResult.fail(
+                ctx.arena(),
+                t,
+                .bad_regex,
+                "{s}",
+                .{lib.regex.diagnosticMessage(diagnostic)},
+            );
+        };
+
+        return .{
+            .regex = result,
+        };
+    }
+
+    fn @"regex/contains"(_: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
+        const str = args[0].string;
+        const re = args[1].regex;
+
+        const find = re.find(str) catch unreachable;
+
+        return .{
+            .bool = find != null,
+        };
+    }
+
+    fn matches(_: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
+        const str = args[0].string;
+        const re = args[1].regex;
+
+        return .{
+            .bool = re.isMatch(str) catch unreachable,
         };
     }
 };

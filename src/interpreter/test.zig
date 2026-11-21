@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const lib = @import("lib");
+
 const conzole = @import("conzole");
 const Printer = conzole.terminal.Printer;
 
@@ -11,10 +13,22 @@ const Runtime = @import("Runtime.zig");
 const features_source = @embedFile("features.tasq");
 
 test "features" {
-    var workspace: Workspace = .init(std.testing.allocator);
+    var regex_cache: lib.regex.Cache = .init(std.testing.allocator);
+    defer regex_cache.deinit();
+
+    var workspace: Workspace = .init(
+        std.testing.allocator,
+        &regex_cache,
+    );
     defer workspace.deinit();
 
-    const result = try workspace.openFile("embed", features_source, 0);
+    const result = try workspace.openFile(
+        "embed",
+        features_source,
+        0,
+    );
+
+    try std.testing.expect(result.valid);
 
     const file = workspace.getFileState(result.id);
 
@@ -23,11 +37,24 @@ test "features" {
     var printer: Printer = .init(&aw.writer);
     defer printer.deinit();
 
+    var environ = try std.testing.environ.createMap(std.testing.allocator);
+    defer environ.deinit();
+
+    const invokation_dir = try std.Io.Dir.cwd().realPathFileAlloc(
+        std.testing.io,
+        ".",
+        std.testing.allocator,
+    );
+    defer std.testing.allocator.free(invokation_dir);
+
     var runtime: Runtime = try .init(
         std.testing.allocator,
+        invokation_dir,
         std.testing.io,
+        &environ,
         &printer,
-        &compiler.platform.default_options,
+        &regex_cache,
+        &file.ir.?,
     );
     defer runtime.deinit();
 
@@ -40,12 +67,8 @@ test "features" {
 
     const task = symbol.origin.task;
 
-    var environ = try std.testing.environ.createMap(std.testing.allocator);
-    defer environ.deinit();
-
     try runtime.run(
         task,
-        &environ,
         .empty,
     );
 }

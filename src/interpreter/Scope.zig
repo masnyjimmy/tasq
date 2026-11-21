@@ -3,7 +3,7 @@ const std = @import("std");
 const compiler = @import("compiler");
 const ir = compiler.ir;
 const static_symbol = compiler.symbol;
-const static_scope = compiler.scope;
+const StaticScope = compiler.Scope;
 
 const Value = compiler.Value;
 
@@ -20,7 +20,7 @@ const SymbolMap = std.hash_map.AutoHashMapUnmanaged(Identity, Symbol);
 const PendingMap = std.hash_map.AutoHashMapUnmanaged(*const ir.Decl, *std.Io.Event);
 
 parent: ?*Scope,
-static: *static_scope.Scope,
+static: *StaticScope,
 /// Guards `symbols` and `pending`. Never held while evaluating anything.
 mutex: std.Io.Mutex = .init,
 symbols: SymbolMap = .empty,
@@ -31,7 +31,7 @@ environ: Environ,
 
 status_code: std.atomic.Value(u8) = .init(0),
 
-pub fn create(parent: ?*Scope, allocator: std.mem.Allocator, ss: *static_scope.Scope) !*Scope {
+pub fn create(parent: ?*Scope, allocator: std.mem.Allocator, ss: *StaticScope) !*Scope {
     const ptr = try allocator.create(Scope);
     errdefer allocator.destroy(ptr);
 
@@ -138,7 +138,7 @@ pub fn endStatic(self: *Scope, io: std.Io, decl: *const ir.Decl) void {
     if (event) |e| e.set(io);
 }
 
-pub fn findByStatic(self: *Scope, static: *static_scope.Scope) ?*Scope {
+pub fn findByStatic(self: *Scope, static: *StaticScope) ?*Scope {
     var curr: ?*Scope = self;
     while (curr) |c| : (curr = c.parent) {
         if (c.static == static) return c;

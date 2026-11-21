@@ -2,7 +2,7 @@ const std = @import("std");
 
 const compiler = @import("compiler");
 const cst = compiler.cst;
-const Scope = compiler.scope.Scope;
+const Scope = compiler.Scope;
 
 const CursorContext = @This();
 

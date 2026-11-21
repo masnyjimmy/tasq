@@ -7,7 +7,7 @@ const ast = compiler.ast;
 
 const Span = compiler.Span;
 
-const Scope = compiler.scope.Scope;
+const Scope = compiler.Scope;
 
 pub const TokenType = enum(u32) {
     keyword,
@@ -412,7 +412,7 @@ const Context = struct {
     const empty: Context = .{};
 };
 
-const ScopeStack = std.ArrayList(*compiler.scope.Scope);
+const ScopeStack = std.ArrayList(*compiler.Scope);
 
 const TreeStack = struct {
     stack: std.ArrayList(*const cst.Node),

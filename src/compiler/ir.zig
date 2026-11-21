@@ -16,7 +16,7 @@ const attrib = @import("attributes.zig");
 const opt = @import("options.zig");
 
 const Symbol = @import("symbol.zig").Symbol;
-const Scope = @import("scope.zig").Scope;
+const Scope = @import("Scope.zig");
 
 const TaskId = @import("taskId.zig");
 
@@ -235,6 +235,7 @@ pub const Expr = union(enum) {
     };
 
     string: String,
+    regex: Regex,
     number_lit: f64,
     bool_lit: bool,
     list: List,
@@ -405,6 +406,8 @@ pub const IfExpr = struct {
 };
 
 pub const String = []const StringPart;
+
+pub const Regex = *lib.regex.Compiled;
 
 pub const StringPart = union(enum) {
     lit: []const u8,

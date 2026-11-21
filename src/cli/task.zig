@@ -844,14 +844,7 @@ pub fn runTask(ctx: *const Context, source_filepath: []const u8, task_id: []cons
         return TaskError.TaskNotFound;
     };
 
-    var runtime: interpreter.Runtime = try .init(
-        ctx.allocator,
-        ctx.invokation_dir,
-        ctx.io,
-        ctx.environ,
-        ctx.printer,
-        &file.options,
-    );
+    var runtime = try buildRuntime(ctx, file);
     defer runtime.deinit();
 
     var parser: TaskArgumentParser = try .init(
@@ -877,4 +870,96 @@ pub fn runCheck(ctx: *const Context, source_filepath: []const u8) !void {
         error.CompilationFailed => return,
         else => return err,
     };
+}
+
+pub fn runEvaluate(ctx: *const Context, expr: []const u8, source_filepath: []const u8) !void {
+    const file = try compileRunfile(ctx, source_filepath);
+
+    var runtime = try buildRuntime(ctx, file);
+    defer runtime.deinit();
+
+    var diagnostics: compiler.Diagnostics = .init(ctx.allocator);
+    defer diagnostics.deinit();
+
+    var arena: std.heap.ArenaAllocator = .init(ctx.allocator);
+    defer arena.deinit();
+
+    const compiled_expr = try compileExpression(
+        &arena,
+        runtime.root_scope,
+        expr,
+        &diagnostics,
+    );
+
+    const value = try runtime.evaluateExpr(.{
+        .cwd = runtime.cwd,
+        .scope = runtime.root_scope,
+    }, &compiled_expr);
+
+    try ctx.printer.printStyled(
+        ctx.allocator,
+        style.body,
+        "value: {f}\n",
+        .{value},
+    );
+}
+
+fn buildRuntime(ctx: *const Context, file: *const ir.File) !interpreter.Runtime {
+    return try .init(
+        ctx.allocator,
+        ctx.invokation_dir,
+        ctx.io,
+        ctx.environ,
+        ctx.printer,
+        ctx.regex_cache,
+        file,
+    );
+}
+
+fn compileExpression(
+    arena: *std.heap.ArenaAllocator,
+    scope: *interpreter.Scope,
+    expr: []const u8,
+    diagnostics: *compiler.Diagnostics,
+) !ir.Expr {
+    const allocator = arena.allocator();
+
+    var lexer: compiler.Lexer = .init(allocator, expr);
+
+    const events = try compiler.token_tree.TreeReader.read(
+        allocator,
+        &lexer,
+        diagnostics,
+    );
+
+    var cursor: compiler.token_tree.Cursor = .init(events);
+
+    var parser: compiler.Parser = try .init(
+        allocator,
+        &cursor,
+        diagnostics,
+    );
+
+    const node = blk: {
+        try parser.open();
+        try parser.parseExpr(.empty);
+        const node = try parser.finish(.expr);
+
+        break :blk node.children[0].node;
+    };
+
+    var regex_cache: lib.regex.Cache = .init(allocator);
+
+    var sema: compiler.Sema = .init(
+        arena,
+        &regex_cache,
+        diagnostics,
+    );
+
+    const result = try sema.analyseExpr(
+        .from(node),
+        scope.static,
+    );
+
+    return result.expr;
 }

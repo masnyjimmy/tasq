@@ -26,11 +26,16 @@ check := |label, ok|
 // One lambda, instantiated for different argument types.
 show := |v| `<{v}>`
 
-parse_repo := |line|
-    with(@split(line, ";")) |parts| (
-        @at(parts, 0) fallback @error("missing repo name"),
-        @at(parts, 1) fallback @error("missing repo url"),
-    )
+parse_repo := |line| {
+    split := @split(line, ";")
+
+    name := @at(split,0) catch @error("Missing repo name")
+    url := @at(split,1) catch @error("Missing repo url")
+
+    (name, url)
+}
+
+
 
 parse_repos := |src|
     for(@lines(src)) |line|
@@ -96,20 +101,20 @@ task test_slices {
 task test_at {
     @print("@at")
 
-    first := @at(nums, 0) fallback -1
-    last  := @at(nums, 4) fallback -1
+    first := @at(nums, 0) catch -1
+    last  := @at(nums, 4) catch -1
     (check("first and last element", first == 0 and last == 4))
 
-    past := @at(nums, 5) fallback -1
-    neg  := @at(nums, -1) fallback -1
+    past := @at(nums, 5) catch -1
+    neg  := @at(nums, -1) catch -1
     (check("out of range uses the fallback", past == -1 and neg == -1))
 
-    up   := @at(nums, 0.2) fallback -1
-    near := @at(names, -0.5) fallback "none"
+    up   := @at(nums, 0.2) catch -1
+    near := @at(names, -0.5) catch "none"
     (check("position is ceiled first", up == 1 and near == "ann"))
 
-    (check("character at index", (@at("tasq", 2) fallback "?") == "s"))
-    (check("string out of range", (@at("tasq", 4) fallback "?") == "?"))
+    (check("character at index", (@at("tasq", 2) catch "?") == "s"))
+    (check("string out of range", (@at("tasq", 4) catch "?") == "?"))
 }
 
 [desc: "Tuples: equality, destructuring, captures"]
@@ -164,7 +169,7 @@ task test_loops {
     upto := for(nums) |n| if (n > 2) break else n
     (check("break keeps the list so far", `{upto}` == "[0, 1, 2]"))
 
-    port := @parse_number("80x") fallback 8080
+    port := @parse_number("80x") catch 8080
     (check("fallback on a failed built-in", port == 8080))
 }
 

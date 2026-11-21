@@ -3,6 +3,8 @@ const std = @import("std");
 const Dispatcher = @import("Dispatcher.zig");
 const lsp = @import("lsp_kit");
 
+const lib = @import("lib");
+
 const compiler = @import("compiler");
 const Workspace = compiler.Workspace;
 
@@ -17,7 +19,10 @@ pub fn run(
     var stdio_transport: lsp.Transport.Stdio = .init(&read_buffer, .stdin(), .stdout());
     const transport: *lsp.Transport = &stdio_transport.transport;
 
-    var workspace: Workspace = .init(allocator);
+    var regex_cache: lib.regex.Cache = .init(allocator);
+    defer regex_cache.deinit();
+
+    var workspace: Workspace = .init(allocator, &regex_cache);
     defer workspace.deinit();
 
     var dispatcher: Dispatcher = .init(allocator, &workspace);

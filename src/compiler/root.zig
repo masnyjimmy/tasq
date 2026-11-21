@@ -30,7 +30,7 @@ pub const Value = runtime.Value;
 
 pub const symbol = @import("symbol.zig");
 
-pub const scope = @import("scope.zig");
+pub const Scope = @import("Scope.zig");
 
 pub const binary = @import("binary.zig");
 

@@ -1,10 +1,11 @@
 const std = @import("std");
 const ast = @import("ast.zig");
-const Scope = @import("scope.zig").Scope;
+const Scope = @import("Scope.zig");
 const lib = @import("lib");
 
 const Tag = enum {
     string,
+    regex,
     number,
     bool,
     list,
@@ -37,6 +38,7 @@ pub const LambdaTemplate = struct {
 
 pub const Type = union(Tag) {
     string,
+    regex,
     number,
     bool,
     list: *const Type,

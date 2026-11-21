@@ -23,3 +23,5 @@ pub const program = @import("program.zig");
 pub const hash = @import("hash.zig");
 
 pub const math = @import("math.zig");
+
+pub const regex = @import("regex.zig");

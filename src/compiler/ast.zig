@@ -201,6 +201,23 @@ pub const String = struct {
     }
 };
 
+pub const Regex = struct {
+    node: *const cst.Node,
+    lit: ?cst.Token,
+
+    pub fn from(node: *const cst.Node) Regex {
+        var it = node.iter();
+
+        _ = it.expectToken(.re_quote);
+        const lit = it.eatToken(.regex);
+
+        return .{
+            .node = node,
+            .lit = lit,
+        };
+    }
+};
+
 pub const Char = struct {
     node: *const cst.Node,
     lit: ?cst.Token,
@@ -282,14 +299,14 @@ pub const MetaIterated = AnyKindIterable(
 
 pub const Expr = struct {
     const KINDS: []const cst.NodeKind = &.{
-        .literal,     .list,           .name_ref,
-        .paren_expr,  .string,         .string_expr,
-        .binary_expr, .unary_expr,     .builtin_call,
-        .@"if",       .@"for",         .@"switch",
-        .lambda,      .lambda_call,    .process_expr,
-        .slice,       .in,             .@"continue",
-        .@"break",    .try_expr,       .catch_expr,
-        .block_expr,  .parallel_block,
+        .literal,      .list,        .name_ref,
+        .paren_expr,   .string,      .regex,
+        .string_expr,  .binary_expr, .unary_expr,
+        .builtin_call, .@"if",       .@"for",
+        .@"switch",    .lambda,      .lambda_call,
+        .process_expr, .slice,       .in,
+        .@"continue",  .@"break",    .try_expr,
+        .catch_expr,   .block_expr,  .parallel_block,
     };
 
     node: *const cst.Node,
@@ -301,6 +318,7 @@ pub const Expr = struct {
         unary: UnaryExpr,
         paren: ParenExpr,
         string: String,
+        regex: Regex,
         string_expr: StringExpr,
         list: ListExpr,
         builtin_call: BuiltinCall,
@@ -332,6 +350,7 @@ pub const Expr = struct {
             .binary_expr => .{ .binary = .from(self.node) },
             .unary_expr => .{ .unary = .from(self.node) },
             .string => .{ .string = .from(self.node) },
+            .regex => .{ .regex = .from(self.node) },
             .string_expr => .{ .string_expr = .from(self.node) },
             .list => .{ .list = .from(self.node) },
             .builtin_call => .{ .builtin_call = .from(self.node) },
@@ -805,7 +824,7 @@ pub const Captures = KindIterable(.strict, Target, .target);
 pub const File = IterableBase(FileElement, FileElement.next);
 
 pub const FileElement = union(enum) {
-    const KINDS: []const cst.NodeKind = &.{ .set, .task, .group, .binding };
+    const KINDS: []const cst.NodeKind = &.{ .set, .task, .group, .binding, .attributes };
 
     set: Set,
     task: Task,
@@ -824,6 +843,7 @@ pub const FileElement = union(enum) {
                 .task => .{ .task = .from(node) },
                 .group => .{ .group = .from(node) },
                 .binding => .{ .binding = .from(node) },
+                .attributes => continue, // alone attributes cannot be handled,
                 else => unreachable,
             };
         }
@@ -950,7 +970,7 @@ pub const Group = struct {
 pub const GroupBody = IterableBase(GroupBodyElement, GroupBodyElement.next);
 
 pub const GroupBodyElement = union(enum) {
-    const KINDS: []const cst.NodeKind = &.{ .task, .binding };
+    const KINDS: []const cst.NodeKind = &.{ .task, .binding, .attributes };
 
     task: Task,
     binding: BindingDecl,
@@ -965,6 +985,7 @@ pub const GroupBodyElement = union(enum) {
             return switch (node.kind) {
                 .task => .{ .task = .from(node) },
                 .binding => .{ .binding = .from(node) },
+                .attributes => continue,
                 else => unreachable,
             };
         }

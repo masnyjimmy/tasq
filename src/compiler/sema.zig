@@ -19,7 +19,7 @@ const binary = @import("binary.zig");
 const Span = @import("Span.zig");
 
 const Symbol = @import("symbol.zig").Symbol;
-const Scope = @import("scope.zig").Scope;
+const Scope = @import("Scope.zig");
 
 const attrib = @import("attributes.zig");
 const functions = @import("functions.zig");
@@ -30,7 +30,7 @@ const Diagnostics = @import("Diagnostics.zig");
 
 const Error = error{
     Incomplete,
-} || std.mem.Allocator.Error || text.Error || std.Io.Writer.Error;
+} || std.mem.Allocator.Error || text.Error || std.Io.Writer.Error || lib.regex.Error;
 
 /// The type of a process expression. A process can fail, so it is a result and `try` / `catch`
 /// decide what a failure means. Only `nofail` (failures are ignored) makes it a plain `string`.
@@ -60,7 +60,7 @@ const LoopContext = struct {
 pub const Sema = struct {
     arena: *std.heap.ArenaAllocator,
     diagnostics: *Diagnostics,
-
+    regex_cache: *lib.regex.Cache,
     lambda_instances: std.hash_map.HashMapUnmanaged(
         ir.LambdaInstance.Key,
         ir.LambdaInstance.State,
@@ -74,9 +74,10 @@ pub const Sema = struct {
     /// the resulting IR is thrown away.
     in_template: bool = false,
 
-    pub fn init(arena: *std.heap.ArenaAllocator, diagnostics: *Diagnostics) Sema {
+    pub fn init(arena: *std.heap.ArenaAllocator, regex_cache: *lib.regex.Cache, diagnostics: *Diagnostics) Sema {
         return .{
             .arena = arena,
+            .regex_cache = regex_cache,
             .diagnostics = diagnostics,
         };
     }
@@ -1540,7 +1541,7 @@ pub const Sema = struct {
     /// whose element type has to come from somewhere else. Forms that can supply it (list items,
     /// if/switch branches, for bodies, builtin and task call arguments) use `analyseExprPartial`
     /// and complete the type themselves.
-    fn analyseExpr(self: *Sema, expr: ast.Expr, scope: *Scope) Error!ExprResult(ir.Expr) {
+    pub fn analyseExpr(self: *Sema, expr: ast.Expr, scope: *Scope) Error!ExprResult(ir.Expr) {
         var result = try self.analyseExprPartial(expr, scope);
         try self.requireComplete(expr, &result);
         return result;
@@ -1792,6 +1793,13 @@ pub const Sema = struct {
                 .type = .string,
                 .is_static = true,
             },
+            .regex => |regex| .{
+                .expr = .{
+                    .regex = try self.processRegex(regex),
+                },
+                .type = .regex,
+                .is_static = true,
+            }, //TODO: complete
             .string_expr => |string| {
                 const result = try self.analyseStringExpr(string, scope);
 
@@ -2526,6 +2534,31 @@ pub const Sema = struct {
         };
     }
 
+    fn processRegex(self: *Sema, regex_node: ast.Regex) Error!*lib.regex.Compiled {
+        const string = if (regex_node.lit) |lit| switch (try text_block.whole(self.arena.allocator(), lit.lexeme, .single_line_only, .none)) {
+            .ok => |s| s,
+            .bad => |p| {
+                try self.diagnostics.err(
+                    findSubstrSpan(lit.span, lit.lexeme, p.at),
+                    "bad string: {s}",
+                    .{p.message()},
+                );
+                return Error.Incomplete;
+            },
+        } else "";
+
+        var diagnostic: lib.regex.Diagnostic = undefined;
+
+        return try self.regex_cache.get(string, &diagnostic) orelse {
+            try self.diagnostics.err(
+                regex_node.node.trimmedSpan().insertionPoint(),
+                "bad regex: {s}",
+                .{lib.regex.diagnosticMessage(diagnostic)},
+            );
+            return Error.Incomplete;
+        };
+    }
+
     fn processString(self: *Sema, string: ast.String) Error![]const u8 {
         return if (string.lit) |lit| {
             const shape: text_block.Shape = switch (string.open.kind) {
@@ -2542,9 +2575,12 @@ pub const Sema = struct {
             return switch (try text_block.whole(self.arena.allocator(), lit.lexeme, shape, escapes)) {
                 .ok => |s| s,
                 .bad => |p| {
-                    //TODO: report problem
-                    _ = p;
-                    return lit.lexeme;
+                    try self.diagnostics.err(
+                        findSubstrSpan(lit.span, lit.lexeme, p.at),
+                        "bad string: {s}",
+                        .{p.message()},
+                    );
+                    return lit.lexeme; //TODO: consider if its okay to return it here, propably yes cuz it won't be used anyway beacuse of error above
                 },
             };
         } else "";
@@ -3720,3 +3756,15 @@ const OptionsResolver = struct {
         };
     }
 };
+
+fn findSubstrSpan(span: Span, full: []const u8, sub: []const u8) Span {
+    const index: u32 = for (full, 0..) |*ch, idx| {
+        if (ch == &sub[0])
+            break @intCast(idx);
+    } else unreachable;
+
+    return .{
+        .start = span.start + index,
+        .len = @intCast(sub.len),
+    };
+}
