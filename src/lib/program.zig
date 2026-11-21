@@ -76,7 +76,10 @@ pub fn which(
 
 pub fn tempDir(allocator: std.mem.Allocator, environ: *const std.process.Environ.Map) ![]const u8 {
     return switch (platform.tag) {
-        .linux => environ.get("TMPDIR") orelse "/tmp",
+        .linux => {
+            const path = environ.get("TMPDIR") orelse "/tmp";
+            return try allocator.dupe(u8, path);
+        },
         .windows => try os.windows.getTempPath(allocator),
     };
 }
