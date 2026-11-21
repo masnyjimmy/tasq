@@ -19,10 +19,7 @@ pub fn run(
     var stdio_transport: lsp.Transport.Stdio = .init(&read_buffer, .stdin(), .stdout());
     const transport: *lsp.Transport = &stdio_transport.transport;
 
-    var regex_cache: lib.regex.Cache = .init(allocator);
-    defer regex_cache.deinit();
-
-    var workspace: Workspace = .init(allocator, &regex_cache);
+    var workspace: Workspace = .init(allocator);
     defer workspace.deinit();
 
     var dispatcher: Dispatcher = .init(allocator, &workspace);

@@ -876,46 +876,4 @@ const handlers = struct {
             ),
         };
     }
-
-    //=========== regex ==========//
-
-    fn regex(self: *Runtime, ctx: Context, args: []const Value, t: *const Type) Error!Value {
-        const str = args[0].string;
-
-        var diagnostic: lib.regex.Diagnostic = undefined;
-
-        const result = try self.regex_cache.get(str, &diagnostic) orelse {
-            return fns.RegexResult.fail(
-                ctx.arena(),
-                t,
-                .bad_regex,
-                "{s}",
-                .{lib.regex.diagnosticMessage(diagnostic)},
-            );
-        };
-
-        return .{
-            .regex = result,
-        };
-    }
-
-    fn @"regex/contains"(_: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
-        const str = args[0].string;
-        const re = args[1].regex;
-
-        const find = re.find(str) catch unreachable;
-
-        return .{
-            .bool = find != null,
-        };
-    }
-
-    fn matches(_: *Runtime, _: Context, args: []const Value, _: *const Type) Error!Value {
-        const str = args[0].string;
-        const re = args[1].regex;
-
-        return .{
-            .bool = re.isMatch(str) catch unreachable,
-        };
-    }
 };

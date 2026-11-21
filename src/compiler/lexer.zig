@@ -199,21 +199,6 @@ pub const Lexer = struct {
         // mode changing things first
         switch (char) {
             'r' => switch (self.peekAt(1)) {
-                'e' => {
-                    switch (self.peekAt(2)) {
-                        '"' => {
-                            try self.mode_stack.append(self.allocator, .{ .string = .{
-                                .terminator = '"',
-                                .close_kind = .quote,
-                                .raw = true,
-                                .multiline = false,
-                                .interporable = false,
-                            } });
-                            return try self.consumeN(.re_quote, 3);
-                        },
-                        else => {},
-                    }
-                },
                 '"' => {
                     try self.mode_stack.append(self.allocator, .{ .string = .{
                         .terminator = '"',

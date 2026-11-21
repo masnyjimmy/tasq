@@ -8,7 +8,6 @@ pub const Kind = enum {
     char,
     raw_string,
     string,
-    regex,
     number,
     true_kw,
     false_kw,
@@ -57,7 +56,6 @@ pub const Kind = enum {
     apostrophe, // '
     quote, // "
     raw_quote, // r"
-    re_quote, // re""
     backtick, // `,
     raw_backtick, // r`
     eq, // =

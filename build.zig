@@ -171,11 +171,6 @@ fn addTasq(
         .optimize = optimize,
     }).module("libglob");
 
-    const regex_mod = b.dependency("regex", .{
-        .target = target,
-        .optimize = optimize,
-    }).module("regex");
-
     //============ modules ============//
 
     const lib_mod = createModule(
@@ -185,7 +180,6 @@ fn addTasq(
         optimize,
         strip,
     );
-    lib_mod.addImport("regex", regex_mod);
 
     //============ compiler ============//
 

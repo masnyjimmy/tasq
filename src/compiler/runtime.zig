@@ -54,7 +54,6 @@ pub const Result = struct {
 
 const Tag = enum {
     string,
-    regex,
     number,
     bool,
     list,
@@ -79,7 +78,6 @@ pub const Tuple = struct {
 
 pub const Value = union(Tag) {
     string: []const u8,
-    regex: *lib.regex.Compiled,
     number: f64,
     bool: bool,
     list: List,
@@ -117,7 +115,6 @@ pub const Value = union(Tag) {
     pub fn format(self: *const Value, writer: *std.Io.Writer) !void {
         switch (self.*) {
             .string => |s| try writer.writeAll(s),
-            .regex => |r| try writer.writeAll(r.pattern),
             .number => |f| try writer.printFloat(f, .{}),
             .bool => |b| try writer.print("{}", .{b}),
             .list => |l| {

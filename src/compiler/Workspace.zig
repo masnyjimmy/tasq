@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const lib = @import("lib");
-
 const cst = @import("cst.zig");
 const ir = @import("ir.zig");
 const Span = @import("Span.zig");
@@ -34,13 +32,11 @@ pub const FileState = struct {
 allocator: std.mem.Allocator,
 files: std.array_hash_map.Auto(FileId, FileState) = .empty,
 uri_to_id: std.StringHashMapUnmanaged(FileId) = .empty,
-regex_cache: *lib.regex.Cache,
 next_id: u32 = 0,
 
-pub fn init(allocator: std.mem.Allocator, regex_cache: *lib.regex.Cache) Workspace {
+pub fn init(allocator: std.mem.Allocator) Workspace {
     return .{
         .allocator = allocator,
-        .regex_cache = regex_cache,
     };
 }
 
@@ -132,7 +128,6 @@ pub fn reparse(self: *Workspace, id: FileId) !bool {
         const sem = @import("sema.zig");
         var sema: sem.Sema = .init(
             &file.arena,
-            self.regex_cache,
             &file.diagnostics,
         );
 

@@ -5,10 +5,7 @@ const lsp = @import("lsp");
 const lib = @import("lib");
 
 pub fn lsp_test(init: std.process.Init) !void {
-    var regex_cache: lib.regex.Cache = .init(init.gpa);
-    defer regex_cache.deinit();
-
-    var workspace = compiler.Workspace.init(init.gpa, &regex_cache);
+    var workspace = compiler.Workspace.init(init.gpa);
     defer workspace.deinit();
 
     const source = try std.Io.Dir.cwd().readFileAlloc(init.io, "tasq", init.gpa, .unlimited);

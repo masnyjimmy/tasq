@@ -30,7 +30,7 @@ const Diagnostics = @import("Diagnostics.zig");
 
 const Error = error{
     Incomplete,
-} || std.mem.Allocator.Error || text.Error || std.Io.Writer.Error || lib.regex.Error;
+} || std.mem.Allocator.Error || text.Error || std.Io.Writer.Error;
 
 /// The type of a process expression. A process can fail, so it is a result and `try` / `catch`
 /// decide what a failure means. Only `nofail` (failures are ignored) makes it a plain `string`.
@@ -60,7 +60,6 @@ const LoopContext = struct {
 pub const Sema = struct {
     arena: *std.heap.ArenaAllocator,
     diagnostics: *Diagnostics,
-    regex_cache: *lib.regex.Cache,
     lambda_instances: std.hash_map.HashMapUnmanaged(
         ir.LambdaInstance.Key,
         ir.LambdaInstance.State,
@@ -74,10 +73,9 @@ pub const Sema = struct {
     /// the resulting IR is thrown away.
     in_template: bool = false,
 
-    pub fn init(arena: *std.heap.ArenaAllocator, regex_cache: *lib.regex.Cache, diagnostics: *Diagnostics) Sema {
+    pub fn init(arena: *std.heap.ArenaAllocator, diagnostics: *Diagnostics) Sema {
         return .{
             .arena = arena,
-            .regex_cache = regex_cache,
             .diagnostics = diagnostics,
         };
     }
@@ -1793,13 +1791,6 @@ pub const Sema = struct {
                 .type = .string,
                 .is_static = true,
             },
-            .regex => |regex| .{
-                .expr = .{
-                    .regex = try self.processRegex(regex),
-                },
-                .type = .regex,
-                .is_static = true,
-            }, //TODO: complete
             .string_expr => |string| {
                 const result = try self.analyseStringExpr(string, scope);
 
@@ -2531,31 +2522,6 @@ pub const Sema = struct {
             },
             .type = result_type,
             .is_static = subject.is_static and handler.is_static,
-        };
-    }
-
-    fn processRegex(self: *Sema, regex_node: ast.Regex) Error!*lib.regex.Compiled {
-        const string = if (regex_node.lit) |lit| switch (try text_block.whole(self.arena.allocator(), lit.lexeme, .single_line_only, .none)) {
-            .ok => |s| s,
-            .bad => |p| {
-                try self.diagnostics.err(
-                    findSubstrSpan(lit.span, lit.lexeme, p.at),
-                    "bad string: {s}",
-                    .{p.message()},
-                );
-                return Error.Incomplete;
-            },
-        } else "";
-
-        var diagnostic: lib.regex.Diagnostic = undefined;
-
-        return try self.regex_cache.get(string, &diagnostic) orelse {
-            try self.diagnostics.err(
-                regex_node.node.trimmedSpan().insertionPoint(),
-                "bad regex: {s}",
-                .{lib.regex.diagnosticMessage(diagnostic)},
-            );
-            return Error.Incomplete;
         };
     }
 
