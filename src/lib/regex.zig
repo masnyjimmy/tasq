@@ -17,6 +17,11 @@ pub const Cache = struct {
     }
 
     pub fn deinit(self: *Cache) void {
+        var it = self.map.iterator();
+
+        while (it.next()) |kv| {
+            kv.value_ptr.deinit();
+        }
         self.map.deinit(self.allocator);
     }
 
