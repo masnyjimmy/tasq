@@ -805,7 +805,7 @@ pub const Captures = KindIterable(.strict, Target, .target);
 pub const File = IterableBase(FileElement, FileElement.next);
 
 pub const FileElement = union(enum) {
-    const KINDS: []const cst.NodeKind = &.{ .set, .task, .group, .binding };
+    const KINDS: []const cst.NodeKind = &.{ .set, .task, .group, .binding, .attributes };
 
     set: Set,
     task: Task,
@@ -824,6 +824,7 @@ pub const FileElement = union(enum) {
                 .task => .{ .task = .from(node) },
                 .group => .{ .group = .from(node) },
                 .binding => .{ .binding = .from(node) },
+                .attributes => continue, // alone attributes cannot be handled,
                 else => unreachable,
             };
         }
@@ -950,7 +951,7 @@ pub const Group = struct {
 pub const GroupBody = IterableBase(GroupBodyElement, GroupBodyElement.next);
 
 pub const GroupBodyElement = union(enum) {
-    const KINDS: []const cst.NodeKind = &.{ .task, .binding };
+    const KINDS: []const cst.NodeKind = &.{ .task, .binding, .attributes };
 
     task: Task,
     binding: BindingDecl,
@@ -965,6 +966,7 @@ pub const GroupBodyElement = union(enum) {
             return switch (node.kind) {
                 .task => .{ .task = .from(node) },
                 .binding => .{ .binding = .from(node) },
+                .attributes => continue,
                 else => unreachable,
             };
         }

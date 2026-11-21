@@ -6,7 +6,7 @@ const options = compiler.options;
 const cst = compiler.cst;
 const ts = compiler.type;
 const Span = compiler.Span;
-const Scope = compiler.scope.Scope;
+const Scope = compiler.Scope;
 const Workspace = compiler.Workspace;
 const FileState = Workspace.FileState;
 

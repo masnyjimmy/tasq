@@ -872,34 +872,35 @@ pub fn runCheck(ctx: *const Context, source_filepath: []const u8) !void {
     };
 }
 
-pub fn runEvaluate(ctx: *const Context, bind: []const u8, source_filepath: []const u8) !void {
+pub fn runEvaluate(ctx: *const Context, expr: []const u8, source_filepath: []const u8) !void {
     const file = try compileRunfile(ctx, source_filepath);
 
     var runtime = try buildRuntime(ctx, file);
     defer runtime.deinit();
 
-    const symbol = file.scope.resolveLocal(bind, .variable) orelse {
-        try ctx.printer.printStyled(
-            ctx.allocator,
-            style.err,
-            "undefined binding: '{s}'\n",
-            .{bind},
-        );
-        return;
-    };
+    var diagnostics: compiler.Diagnostics = .init(ctx.allocator);
+    defer diagnostics.deinit();
 
-    const decl = symbol.origin.decl.parent;
+    var arena: std.heap.ArenaAllocator = .init(ctx.allocator);
+    defer arena.deinit();
+
+    const compiled_expr = try compileExpression(
+        &arena,
+        runtime.root_scope,
+        expr,
+        &diagnostics,
+    );
 
     const value = try runtime.evaluateExpr(.{
         .cwd = runtime.cwd,
         .scope = runtime.root_scope,
-    }, &decl.value);
+    }, &compiled_expr);
 
     try ctx.printer.printStyled(
         ctx.allocator,
         style.body,
-        "{s}: {f}\n",
-        .{ bind, value },
+        "value: {f}\n",
+        .{value},
     );
 }
 
@@ -912,4 +913,49 @@ fn buildRuntime(ctx: *const Context, file: *const ir.File) !interpreter.Runtime 
         ctx.printer,
         file,
     );
+}
+
+fn compileExpression(
+    arena: *std.heap.ArenaAllocator,
+    scope: *interpreter.Scope,
+    expr: []const u8,
+    diagnostics: *compiler.Diagnostics,
+) !ir.Expr {
+    const allocator = arena.allocator();
+
+    var lexer: compiler.Lexer = .init(allocator, expr);
+
+    const events = try compiler.token_tree.TreeReader.read(
+        allocator,
+        &lexer,
+        diagnostics,
+    );
+
+    var cursor: compiler.token_tree.Cursor = .init(events);
+
+    var parser: compiler.Parser = try .init(
+        allocator,
+        &cursor,
+        diagnostics,
+    );
+
+    const node = blk: {
+        try parser.open();
+        try parser.parseExpr(.empty);
+        const node = try parser.finish(.expr);
+
+        break :blk node.children[0].node;
+    };
+
+    var sema: compiler.Sema = .init(
+        arena,
+        diagnostics,
+    );
+
+    const result = try sema.analyseExpr(
+        .from(node),
+        scope.static,
+    );
+
+    return result.expr;
 }

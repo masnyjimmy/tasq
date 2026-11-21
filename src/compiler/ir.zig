@@ -16,7 +16,7 @@ const attrib = @import("attributes.zig");
 const opt = @import("options.zig");
 
 const Symbol = @import("symbol.zig").Symbol;
-const Scope = @import("scope.zig").Scope;
+const Scope = @import("Scope.zig");
 
 const TaskId = @import("taskId.zig");
 

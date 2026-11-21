@@ -19,7 +19,7 @@ const binary = @import("binary.zig");
 const Span = @import("Span.zig");
 
 const Symbol = @import("symbol.zig").Symbol;
-const Scope = @import("scope.zig").Scope;
+const Scope = @import("Scope.zig");
 
 const attrib = @import("attributes.zig");
 const functions = @import("functions.zig");
@@ -1540,7 +1540,7 @@ pub const Sema = struct {
     /// whose element type has to come from somewhere else. Forms that can supply it (list items,
     /// if/switch branches, for bodies, builtin and task call arguments) use `analyseExprPartial`
     /// and complete the type themselves.
-    fn analyseExpr(self: *Sema, expr: ast.Expr, scope: *Scope) Error!ExprResult(ir.Expr) {
+    pub fn analyseExpr(self: *Sema, expr: ast.Expr, scope: *Scope) Error!ExprResult(ir.Expr) {
         var result = try self.analyseExprPartial(expr, scope);
         try self.requireComplete(expr, &result);
         return result;
